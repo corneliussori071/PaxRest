@@ -1,0 +1,26 @@
+{
+  "name": "paxrest",
+  "private": true,
+  "scripts": {
+    "dev:pos": "turbo run dev --filter=@paxrest/pos",
+    "dev:customer": "turbo run dev --filter=@paxrest/customer",
+    "dev:rider": "turbo run dev --filter=@paxrest/rider",
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean",
+    "db:reset": "cd supabase && supabase db reset",
+    "db:migrate": "cd supabase && supabase migration up",
+    "db:types": "supabase gen types typescript --local > packages/shared-types/src/database.ts",
+    "functions:serve": "cd supabase && supabase functions serve"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

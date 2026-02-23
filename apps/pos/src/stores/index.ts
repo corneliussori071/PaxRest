@@ -1,0 +1,145 @@
+import { create } from 'zustand';
+import type {
+  MenuCategoryWithItems, MenuItemWithDetails, Order, OrderWithDetails,
+} from '@paxrest/shared-types';
+import { api } from '@/lib/supabase';
+
+/* ═══════════════════════════════════════════════════
+   POS Cart Store — manages the active order being built
+   ═══════════════════════════════════════════════════ */
+
+export interface CartItem {
+  menuItemId: string;
+  variantId?: string;
+  name: string;
+  variantName?: string;
+  basePrice: number;
+  quantity: number;
+  modifiers: { id: string; name: string; price: number }[];
+  notes?: string;
+}
+
+interface CartState {
+  items: CartItem[];
+  orderType: 'dine_in' | 'takeaway' | 'delivery' | 'pickup';
+  tableId: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  notes: string;
+  discountPercent: number;
+  redeemPoints: number;
+}
+
+interface CartActions {
+  addItem: (item: Omit<CartItem, 'quantity'>) => void;
+  removeItem: (menuItemId: string, variantId?: string) => void;
+  updateQuantity: (menuItemId: string, qty: number, variantId?: string) => void;
+  updateItemNotes: (menuItemId: string, notes: string, variantId?: string) => void;
+  setOrderType: (t: CartState['orderType']) => void;
+  setTable: (tableId: string | null) => void;
+  setCustomer: (id: string | null, name: string | null, phone: string | null) => void;
+  setNotes: (notes: string) => void;
+  setDiscount: (pct: number) => void;
+  setRedeemPoints: (pts: number) => void;
+  clearCart: () => void;
+  subtotal: () => number;
+  total: () => number;
+  itemCount: () => number;
+}
+
+const initialCart: CartState = {
+  items: [], orderType: 'dine_in', tableId: null,
+  customerId: null, customerName: null, customerPhone: null,
+  notes: '', discountPercent: 0, redeemPoints: 0,
+};
+
+export const useCartStore = create<CartState & CartActions>((set, get) => ({
+  ...initialCart,
+
+  addItem: (item) => set((s) => {
+    const key = `${item.menuItemId}_${item.variantId ?? ''}`;
+    const existing = s.items.find(
+      (i) => `${i.menuItemId}_${i.variantId ?? ''}` === key
+        && JSON.stringify(i.modifiers) === JSON.stringify(item.modifiers),
+    );
+    if (existing) {
+      return { items: s.items.map((i) => i === existing ? { ...i, quantity: i.quantity + 1 } : i) };
+    }
+    return { items: [...s.items, { ...item, quantity: 1 }] };
+  }),
+
+  removeItem: (menuItemId, variantId) => set((s) => ({
+    items: s.items.filter((i) => !(i.menuItemId === menuItemId && (i.variantId ?? '') === (variantId ?? ''))),
+  })),
+
+  updateQuantity: (menuItemId, qty, variantId) => set((s) => ({
+    items: qty <= 0
+      ? s.items.filter((i) => !(i.menuItemId === menuItemId && (i.variantId ?? '') === (variantId ?? '')))
+      : s.items.map((i) =>
+          i.menuItemId === menuItemId && (i.variantId ?? '') === (variantId ?? '')
+            ? { ...i, quantity: qty } : i,
+        ),
+  })),
+
+  updateItemNotes: (menuItemId, notes, variantId) => set((s) => ({
+    items: s.items.map((i) =>
+      i.menuItemId === menuItemId && (i.variantId ?? '') === (variantId ?? '')
+        ? { ...i, notes } : i,
+    ),
+  })),
+
+  setOrderType: (orderType) => set({ orderType, tableId: orderType !== 'dine_in' ? null : get().tableId }),
+  setTable: (tableId) => set({ tableId }),
+  setCustomer: (id, name, phone) => set({ customerId: id, customerName: name, customerPhone: phone }),
+  setNotes: (notes) => set({ notes }),
+  setDiscount: (discountPercent) => set({ discountPercent: Math.max(0, Math.min(100, discountPercent)) }),
+  setRedeemPoints: (redeemPoints) => set({ redeemPoints: Math.max(0, redeemPoints) }),
+  clearCart: () => set(initialCart),
+
+  subtotal: () => get().items.reduce((sum, i) => {
+    const modTotal = i.modifiers.reduce((m, mod) => m + mod.price, 0);
+    return sum + (i.basePrice + modTotal) * i.quantity;
+  }, 0),
+
+  total: () => {
+    const sub = get().subtotal();
+    const disc = sub * (get().discountPercent / 100);
+    return Math.max(0, sub - disc);
+  },
+
+  itemCount: () => get().items.reduce((sum, i) => sum + i.quantity, 0),
+}));
+
+/* ═══════════════════════════════════════════════════
+   Menu Store — caches menu data for POS
+   ═══════════════════════════════════════════════════ */
+
+interface MenuState {
+  categories: MenuCategoryWithItems[];
+  loading: boolean;
+  lastFetched: number | null;
+}
+
+interface MenuActions {
+  fetchMenu: (branchId: string) => Promise<void>;
+}
+
+export const useMenuStore = create<MenuState & MenuActions>((set, get) => ({
+  categories: [],
+  loading: false,
+  lastFetched: null,
+
+  fetchMenu: async (branchId: string) => {
+    // Cache for 5 minutes
+    if (get().lastFetched && Date.now() - get().lastFetched! < 5 * 60_000) return;
+    set({ loading: true });
+    try {
+      const data = await api<{ categories: MenuCategoryWithItems[] }>('menu', 'full-menu', { params: {}, branchId });
+      set({ categories: data.categories, loading: false, lastFetched: Date.now() });
+    } catch (err) {
+      console.error('Failed to load menu:', err);
+      set({ loading: false });
+    }
+  },
+}));

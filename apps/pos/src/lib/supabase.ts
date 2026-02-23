@@ -1,0 +1,43 @@
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? 'http://localhost:54321';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? 'placeholder';
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+/* ─── Edge Function caller ─── */
+export async function api<T = any>(
+  fn: string,
+  action: string,
+  options: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    body?: any;
+    params?: Record<string, string>;
+    branchId?: string;
+  } = {},
+): Promise<T> {
+  const { method = 'GET', body, params, branchId } = options;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not authenticated');
+
+  const url = new URL(`${supabaseUrl}/functions/v1/${fn}/${action}`);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session.access_token}`,
+  };
+  if (branchId) headers['x-branch-id'] = branchId;
+
+  const res = await fetch(url.toString(), {
+    method: body ? 'POST' : method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error ?? `API error ${res.status}`);
+  return json as T;
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@paxrest/shared-types": ["../../packages/shared-types/src"],
+      "@paxrest/shared-utils": ["../../packages/shared-utils/src"],
+      "@paxrest/ui": ["../../packages/ui/src"]
+    }
+  },
+  "include": ["src", "vite-env.d.ts"]
+}
