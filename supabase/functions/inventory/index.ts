@@ -29,6 +29,10 @@ serve(async (req) => {
         if (req.method === 'GET') return await getItem(req, supabase, auth, branchId);
         if (req.method === 'DELETE') return await deactivateItem(req, supabase, auth, branchId);
         return errorResponse('Method not allowed', 405);
+      case 'barcode-lookup':
+        return await barcodeLookup(req, supabase, auth, branchId);
+      case 'csv-import':
+        return await csvImport(req, supabase, auth, branchId);
       case 'adjust':
         return await adjustStock(req, supabase, auth, branchId);
       case 'movements':
@@ -42,7 +46,13 @@ serve(async (req) => {
       case 'transfers':
         return await listTransfers(req, supabase, auth, branchId);
       case 'low-stock':
-        return await getLowStock(supabase, auth, branchId);
+        return await getLowStock(req, supabase, auth, branchId);
+      case 'ingredient-requests':
+        return req.method === 'GET'
+          ? await listIngredientRequests(req, supabase, auth, branchId)
+          : await createIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-respond':
+        return await respondIngredientRequest(req, supabase, auth, branchId);
       default:
         return errorResponse('Unknown inventory action', 404);
     }
@@ -51,6 +61,8 @@ serve(async (req) => {
     return errorResponse(err.message ?? 'Internal server error', 500);
   }
 });
+
+// ─── List Items (paginated) ─────────────────────────────────────────────────
 
 async function listItems(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const url = new URL(req.url);
@@ -61,7 +73,7 @@ async function listItems(req: Request, supabase: any, auth: AuthContext, branchI
       sort_column: url.searchParams.get('sort_column') ?? undefined,
       sort_direction: url.searchParams.get('sort_direction') ?? undefined,
     },
-    ['created_at', 'name', 'quantity', 'cost_per_unit', 'category'],
+    ['created_at', 'name', 'quantity', 'cost_per_unit', 'category', 'barcode'],
   );
 
   let query = supabase
@@ -73,7 +85,7 @@ async function listItems(req: Request, supabase: any, auth: AuthContext, branchI
   if (category) query = query.eq('category', category);
 
   const search = url.searchParams.get('search');
-  if (search) query = query.or(`name.ilike.%${search}%,sku.ilike.%${search}%`);
+  if (search) query = query.or(`name.ilike.%${search}%,sku.ilike.%${search}%,barcode.ilike.%${search}%`);
 
   const activeOnly = url.searchParams.get('active_only');
   if (activeOnly === 'true') query = query.eq('is_active', true);
@@ -91,6 +103,8 @@ async function listItems(req: Request, supabase: any, auth: AuthContext, branchI
   });
 }
 
+// ─── Get Single Item ────────────────────────────────────────────────────────
+
 async function getItem(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const url = new URL(req.url);
   const id = url.searchParams.get('id');
@@ -107,23 +121,58 @@ async function getItem(req: Request, supabase: any, auth: AuthContext, branchId:
   return jsonResponse({ item: data });
 }
 
+// ─── Barcode Lookup ─────────────────────────────────────────────────────────
+
+async function barcodeLookup(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  const url = new URL(req.url);
+  const barcode = url.searchParams.get('barcode');
+  if (!barcode) return errorResponse('Missing barcode');
+
+  const { data, error } = await supabase
+    .from('inventory_items')
+    .select('*')
+    .eq('branch_id', branchId)
+    .eq('barcode', barcode)
+    .maybeSingle();
+
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ item: data }); // null if not found — not an error
+}
+
+// ─── Upsert Item ────────────────────────────────────────────────────────────
+
 async function upsertItem(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
   const body = await req.json();
 
   if (!body.name || !body.unit) return errorResponse('Missing name or unit');
 
-  const record = {
+  const packagingType = body.packaging_type ?? 'single';
+  const itemsPerPack = packagingType === 'pack' ? (body.items_per_pack ?? 1) : 1;
+  const costPerUnit = body.cost_per_unit ?? 0;
+  const costPerItem = packagingType === 'pack' && itemsPerPack > 0
+    ? Number((costPerUnit / itemsPerPack).toFixed(4))
+    : costPerUnit;
+
+  const record: Record<string, any> = {
     company_id: auth.companyId,
     branch_id: branchId,
     name: sanitizeString(body.name),
     sku: body.sku ? sanitizeString(body.sku) : null,
+    barcode: body.barcode ? sanitizeString(body.barcode) : null,
     unit: body.unit,
     quantity: body.quantity ?? 0,
-    min_quantity: body.min_quantity ?? 0,
-    cost_per_unit: body.cost_per_unit ?? 0,
+    min_stock_level: body.min_stock_level ?? 0,
+    cost_per_unit: costPerUnit,
+    selling_price: body.selling_price ?? 0,
+    packaging_type: packagingType,
+    items_per_pack: itemsPerPack,
+    cost_per_item: costPerItem,
+    weight_value: body.weight_value ?? null,
+    weight_unit: body.weight_unit ?? null,
     category: body.category ?? null,
-    supplier_id: body.supplier_id ?? null,
+    storage_location: body.storage_location ?? null,
+    image_url: body.image_url ?? null,
     is_active: body.is_active ?? true,
   };
 
@@ -138,15 +187,148 @@ async function upsertItem(req: Request, supabase: any, auth: AuthContext, branch
     if (error) return errorResponse(error.message);
     return jsonResponse({ item: data });
   } else {
+    // If we're creating, also record an opening stock movement
     const { data, error } = await supabase
       .from('inventory_items')
       .insert(record)
       .select()
       .single();
     if (error) return errorResponse(error.message);
+
+    // Record opening stock movement
+    if (record.quantity > 0) {
+      await supabase.from('stock_movements').insert({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        inventory_item_id: data.id,
+        movement_type: 'opening_stock',
+        quantity_change: record.quantity,
+        quantity_before: 0,
+        quantity_after: record.quantity,
+        unit_cost: costPerUnit,
+        reference_type: 'initial',
+        notes: 'Opening stock',
+        performed_by: auth.userId,
+        performed_by_name: body.performed_by_name ?? auth.email,
+      });
+    }
+
     return jsonResponse({ item: data }, 201);
   }
 }
+
+// ─── CSV Import ─────────────────────────────────────────────────────────────
+
+async function csvImport(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  const rows = body.rows; // Array of parsed CSV rows from frontend
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return errorResponse('No rows provided');
+  }
+
+  if (rows.length > 500) {
+    return errorResponse('Maximum 500 items per CSV import');
+  }
+
+  const results = { created: 0, updated: 0, errors: [] as string[] };
+
+  for (const row of rows) {
+    try {
+      if (!row.name || !row.unit) {
+        results.errors.push(`Skipped row: missing name or unit (${row.name ?? 'unnamed'})`);
+        continue;
+      }
+
+      const packagingType = row.packaging_type ?? 'single';
+      const itemsPerPack = packagingType === 'pack' ? (row.items_per_pack ?? 1) : 1;
+      const costPerUnit = row.cost_per_unit ?? 0;
+
+      const record: Record<string, any> = {
+        company_id: auth.companyId,
+        branch_id: branchId,
+        name: sanitizeString(row.name),
+        barcode: row.barcode ? sanitizeString(row.barcode) : null,
+        unit: row.unit,
+        quantity: row.quantity ?? 0,
+        min_stock_level: row.min_stock_level ?? 0,
+        cost_per_unit: costPerUnit,
+        selling_price: row.selling_price ?? 0,
+        packaging_type: packagingType,
+        items_per_pack: itemsPerPack,
+        cost_per_item: packagingType === 'pack' && itemsPerPack > 0
+          ? Number((costPerUnit / itemsPerPack).toFixed(4))
+          : costPerUnit,
+        category: row.category ?? null,
+        is_active: true,
+      };
+
+      // Check for existing item by barcode
+      let existingItem = null;
+      if (row.barcode) {
+        const { data } = await supabase
+          .from('inventory_items')
+          .select('id, quantity')
+          .eq('branch_id', branchId)
+          .eq('barcode', row.barcode)
+          .maybeSingle();
+        existingItem = data;
+      }
+
+      if (existingItem) {
+        // Update existing item
+        const { error } = await supabase
+          .from('inventory_items')
+          .update(record)
+          .eq('id', existingItem.id);
+        if (error) {
+          results.errors.push(`Error updating ${row.name}: ${error.message}`);
+        } else {
+          results.updated++;
+        }
+      } else {
+        // Insert new item
+        const { data: newItem, error } = await supabase
+          .from('inventory_items')
+          .insert(record)
+          .select('id')
+          .single();
+
+        if (error) {
+          results.errors.push(`Error creating ${row.name}: ${error.message}`);
+        } else {
+          results.created++;
+
+          // Record opening stock
+          if (record.quantity > 0) {
+            await supabase.from('stock_movements').insert({
+              company_id: auth.companyId,
+              branch_id: branchId,
+              inventory_item_id: newItem.id,
+              movement_type: 'opening_stock',
+              quantity_change: record.quantity,
+              quantity_before: 0,
+              quantity_after: record.quantity,
+              unit_cost: costPerUnit,
+              reference_type: 'csv_import',
+              notes: 'CSV import',
+              performed_by: auth.userId,
+              performed_by_name: body.performed_by_name ?? auth.email,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      results.errors.push(`Error processing row: ${e.message}`);
+    }
+  }
+
+  return jsonResponse(results, 201);
+}
+
+// ─── Deactivate Item ────────────────────────────────────────────────────────
 
 async function deactivateItem(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
@@ -164,6 +346,8 @@ async function deactivateItem(req: Request, supabase: any, auth: AuthContext, br
   return jsonResponse({ deactivated: true });
 }
 
+// ─── Adjust Stock ───────────────────────────────────────────────────────────
+
 async function adjustStock(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
@@ -173,7 +357,6 @@ async function adjustStock(req: Request, supabase: any, auth: AuthContext, branc
     return errorResponse('Missing inventory_item_id, quantity_change, or reason');
   }
 
-  // Get current quantity
   const { data: item } = await supabase
     .from('inventory_items')
     .select('quantity, cost_per_unit')
@@ -186,7 +369,6 @@ async function adjustStock(req: Request, supabase: any, auth: AuthContext, branc
   const newQty = item.quantity + body.quantity_change;
   if (newQty < 0) return errorResponse('Adjustment would result in negative stock');
 
-  // Update quantity
   const { error: updateError } = await supabase
     .from('inventory_items')
     .update({ quantity: newQty })
@@ -194,28 +376,28 @@ async function adjustStock(req: Request, supabase: any, auth: AuthContext, branc
 
   if (updateError) return errorResponse(updateError.message);
 
-  // Record movement
-  const movementType = body.quantity_change > 0 ? 'manual_addition' : 'manual_deduction';
   const { error: movError } = await supabase
     .from('stock_movements')
     .insert({
       company_id: auth.companyId,
       branch_id: branchId,
       inventory_item_id: body.inventory_item_id,
-      movement_type: movementType,
+      movement_type: 'adjustment',
       quantity_change: body.quantity_change,
       quantity_before: item.quantity,
       quantity_after: newQty,
       unit_cost: item.cost_per_unit,
+      reference_type: 'adjustment',
       notes: sanitizeString(body.reason),
       performed_by: auth.userId,
       performed_by_name: body.performed_by_name ?? auth.email,
     });
 
   if (movError) return errorResponse(movError.message);
-
   return jsonResponse({ new_quantity: newQty });
 }
+
+// ─── List Movements (paginated) ─────────────────────────────────────────────
 
 async function listMovements(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const url = new URL(req.url);
@@ -226,11 +408,14 @@ async function listMovements(req: Request, supabase: any, auth: AuthContext, bra
 
   let query = supabase
     .from('stock_movements')
-    .select('*, inventory_items(name, sku)', { count: 'exact' })
+    .select('*, inventory_items(name, sku, barcode)', { count: 'exact' })
     .eq('branch_id', branchId);
 
   const itemId = url.searchParams.get('inventory_item_id');
   if (itemId) query = query.eq('inventory_item_id', itemId);
+
+  const movementType = url.searchParams.get('movement_type');
+  if (movementType) query = query.eq('movement_type', movementType);
 
   query = applyPagination(query, page, pageSize, 'created_at', false);
   const { data, count, error } = await query;
@@ -244,6 +429,8 @@ async function listMovements(req: Request, supabase: any, auth: AuthContext, bra
     total_pages: Math.ceil((count ?? 0) / pageSize),
   });
 }
+
+// ─── List Wastage (paginated) ───────────────────────────────────────────────
 
 async function listWastage(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const url = new URL(req.url);
@@ -270,6 +457,8 @@ async function listWastage(req: Request, supabase: any, auth: AuthContext, branc
   });
 }
 
+// ─── Record Wastage ─────────────────────────────────────────────────────────
+
 async function recordWastage(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (!hasPermission(auth, 'manage_wastage')) return errorResponse('Forbidden', 403);
   const body = await req.json();
@@ -295,6 +484,8 @@ async function recordWastage(req: Request, supabase: any, auth: AuthContext, bra
   return jsonResponse(data, 201);
 }
 
+// ─── Create Transfer ────────────────────────────────────────────────────────
+
 async function createTransfer(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
@@ -309,7 +500,9 @@ async function createTransfer(req: Request, supabase: any, auth: AuthContext, br
     .insert({
       company_id: auth.companyId,
       from_branch_id: branchId,
+      from_branch_name: body.from_branch_name ?? '',
       to_branch_id: body.to_branch_id,
+      to_branch_name: body.to_branch_name ?? '',
       status: 'pending',
       notes: body.notes ?? null,
       initiated_by: auth.userId,
@@ -320,18 +513,20 @@ async function createTransfer(req: Request, supabase: any, auth: AuthContext, br
 
   if (error) return errorResponse(error.message);
 
-  // Insert transfer items
   const transferItems = body.items.map((item: any) => ({
     transfer_id: transfer.id,
     inventory_item_id: item.inventory_item_id,
+    inventory_item_name: item.inventory_item_name ?? '',
     quantity: item.quantity,
-    unit: item.unit ?? 'piece',
+    unit: item.unit ?? 'pcs',
+    unit_cost: item.unit_cost ?? 0,
   }));
 
   await supabase.from('inventory_transfer_items').insert(transferItems);
-
   return jsonResponse({ transfer }, 201);
 }
+
+// ─── List Transfers (paginated) ─────────────────────────────────────────────
 
 async function listTransfers(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const url = new URL(req.url);
@@ -358,18 +553,166 @@ async function listTransfers(req: Request, supabase: any, auth: AuthContext, bra
   });
 }
 
-async function getLowStock(supabase: any, auth: AuthContext, branchId: string) {
-  const { data, error } = await supabase
+// ─── Low Stock (SQL-level filtering) ────────────────────────────────────────
+
+async function getLowStock(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  const url = new URL(req.url);
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+
+  // Use raw SQL via RPC or filter properly
+  const { data, count, error } = await supabase
     .from('inventory_items')
-    .select('*')
+    .select('*', { count: 'exact' })
     .eq('branch_id', branchId)
     .eq('is_active', true)
-    .lte('quantity', supabase.rpc ? 0 : 0); // Fallback: we filter in JS
+    .or('quantity.lte.min_stock_level')
+    .order('quantity', { ascending: true })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+
+  if (error) {
+    // Fallback: fetch all and filter in JS
+    const { data: all, error: allErr } = await supabase
+      .from('inventory_items')
+      .select('*')
+      .eq('branch_id', branchId)
+      .eq('is_active', true)
+      .order('quantity', { ascending: true });
+
+    if (allErr) return errorResponse(allErr.message);
+
+    const lowStock = (all ?? []).filter((item: any) => item.quantity <= item.min_stock_level);
+    const paginated = lowStock.slice((page - 1) * pageSize, page * pageSize);
+
+    return jsonResponse({
+      items: paginated,
+      total: lowStock.length,
+      page,
+      page_size: pageSize,
+      total_pages: Math.ceil(lowStock.length / pageSize),
+    });
+  }
+
+  return jsonResponse({
+    items: data,
+    total: count,
+    page,
+    page_size: pageSize,
+    total_pages: Math.ceil((count ?? 0) / pageSize),
+  });
+}
+
+// ─── List Ingredient Requests ───────────────────────────────────────────────
+
+async function listIngredientRequests(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  const url = new URL(req.url);
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+
+  const status = url.searchParams.get('status');
+
+  let query = supabase
+    .from('ingredient_requests')
+    .select('*, ingredient_request_items(*)', { count: 'exact' })
+    .eq('branch_id', branchId);
+
+  if (status) query = query.eq('status', status);
+
+  query = applyPagination(query, page, pageSize, 'created_at', false);
+  const { data, count, error } = await query;
+  if (error) return errorResponse(error.message);
+
+  return jsonResponse({
+    items: data,
+    total: count,
+    page,
+    page_size: pageSize,
+    total_pages: Math.ceil((count ?? 0) / pageSize),
+  });
+}
+
+// ─── Create Ingredient Request ──────────────────────────────────────────────
+
+async function createIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (!hasPermission(auth, 'view_kitchen')) return errorResponse('Forbidden', 403);
+  const body = await req.json();
+
+  if (!body.items || body.items.length === 0) {
+    return errorResponse('No items in request');
+  }
+
+  const { data: request, error } = await supabase
+    .from('ingredient_requests')
+    .insert({
+      company_id: auth.companyId,
+      branch_id: branchId,
+      requested_by: auth.userId,
+      requested_by_name: body.requested_by_name ?? auth.email,
+      status: 'pending',
+      notes: body.notes ? sanitizeString(body.notes) : null,
+      station: body.station ?? 'kitchen',
+    })
+    .select()
+    .single();
 
   if (error) return errorResponse(error.message);
 
-  // Filter where quantity <= min_quantity
-  const lowStock = (data ?? []).filter((item: any) => item.quantity <= item.min_quantity);
+  const items = body.items.map((item: any) => ({
+    request_id: request.id,
+    inventory_item_id: item.inventory_item_id,
+    inventory_item_name: item.inventory_item_name ?? '',
+    quantity_requested: item.quantity_requested,
+    unit: item.unit ?? 'pcs',
+  }));
 
-  return jsonResponse({ items: lowStock });
+  const { error: itemsError } = await supabase
+    .from('ingredient_request_items')
+    .insert(items);
+
+  if (itemsError) return errorResponse(itemsError.message);
+  return jsonResponse({ request }, 201);
+}
+
+// ─── Respond to Ingredient Request ──────────────────────────────────────────
+
+async function respondIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  if (!body.request_id || !body.status) {
+    return errorResponse('Missing request_id or status');
+  }
+
+  if (!['approved', 'rejected', 'fulfilled', 'cancelled'].includes(body.status)) {
+    return errorResponse('Invalid status');
+  }
+
+  const { error } = await supabase
+    .from('ingredient_requests')
+    .update({
+      status: body.status,
+      approved_by: auth.userId,
+      approved_by_name: body.approved_by_name ?? auth.email,
+    })
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId);
+
+  if (error) return errorResponse(error.message);
+
+  // If approved with quantities, update the request items
+  if (body.status === 'approved' && body.items) {
+    for (const item of body.items) {
+      await supabase
+        .from('ingredient_request_items')
+        .update({ quantity_approved: item.quantity_approved })
+        .eq('id', item.id);
+    }
+  }
+
+  return jsonResponse({ updated: true });
 }

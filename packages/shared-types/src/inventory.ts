@@ -4,6 +4,9 @@ import type {
   TransferStatus,
   PurchaseOrderStatus,
   InventoryUnit,
+  PackagingType,
+  WeightUnit,
+  IngredientRequestStatus,
 } from './enums';
 
 // ─── Inventory Item (raw ingredient / stock) ────────────────────────────────
@@ -14,10 +17,17 @@ export interface InventoryItem {
   branch_id: string;
   name: string;
   sku: string | null;
+  barcode: string | null;
   unit: InventoryUnit;
   quantity: number;
   min_stock_level: number;
   cost_per_unit: number;
+  selling_price: number;
+  packaging_type: PackagingType;
+  items_per_pack: number;
+  cost_per_item: number;
+  weight_value: number | null;
+  weight_unit: WeightUnit | null;
   image_url: string | null;
   category: string | null;
   storage_location: string | null;
@@ -25,6 +35,49 @@ export interface InventoryItem {
   last_restock_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ─── CSV Upload Row ─────────────────────────────────────────────────────────
+
+export interface CSVStockRow {
+  name: string;
+  barcode?: string;
+  unit: InventoryUnit;
+  quantity: number;
+  cost_per_unit: number;
+  selling_price?: number;
+  category?: string;
+  min_stock_level?: number;
+  packaging_type?: PackagingType;
+  items_per_pack?: number;
+}
+
+// ─── Ingredient Request ─────────────────────────────────────────────────────
+
+export interface IngredientRequest {
+  id: string;
+  company_id: string;
+  branch_id: string;
+  requested_by: string;
+  requested_by_name: string;
+  approved_by: string | null;
+  approved_by_name: string | null;
+  status: IngredientRequestStatus;
+  notes: string | null;
+  station: string;
+  created_at: string;
+  updated_at: string;
+  items?: IngredientRequestItem[];
+}
+
+export interface IngredientRequestItem {
+  id: string;
+  request_id: string;
+  inventory_item_id: string;
+  inventory_item_name: string;
+  quantity_requested: number;
+  quantity_approved: number | null;
+  unit: InventoryUnit;
 }
 
 // ─── Stock Movement (immutable ledger) ──────────────────────────────────────

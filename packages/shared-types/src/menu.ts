@@ -1,4 +1,4 @@
-import type { KitchenStation } from './enums';
+import type { KitchenStation, MealAvailability } from './enums';
 
 // ─── Menu Category ──────────────────────────────────────────────────────────
 
@@ -28,6 +28,9 @@ export interface MenuItem {
   base_price: number;
   image_url: string | null;
   is_available: boolean;
+  availability_status: MealAvailability;
+  media_url: string | null;
+  media_type: 'image' | 'video' | null;
   preparation_time_min: number;
   station: KitchenStation;
   sort_order: number;
@@ -42,6 +45,7 @@ export interface MenuItem {
   variants?: MenuVariant[];
   modifier_groups?: ModifierGroup[];
   ingredients?: MenuItemIngredient[];
+  extras?: MenuItemExtra[];
 }
 
 // ─── Menu Variant ───────────────────────────────────────────────────────────
@@ -102,11 +106,25 @@ export interface MenuItemIngredient {
   menu_item_id: string;
   ingredient_id: string; // FK → inventory_items
   variant_id: string | null; // If null, applies to all variants
+  name: string | null; // Display name of ingredient
   quantity_used: number; // Amount of ingredient used per 1 item
   unit: string; // Must match inventory_items.unit
+  cost_contribution: number; // Price deducted when customer removes this ingredient
   created_at: string;
   // Joined
   ingredient_name?: string;
+}
+
+// ─── Menu Item Extra ────────────────────────────────────────────────────────
+
+export interface MenuItemExtra {
+  id: string;
+  menu_item_id: string;
+  name: string;
+  price: number;
+  is_available: boolean;
+  sort_order: number;
+  created_at: string;
 }
 
 // ─── Computed types for display ─────────────────────────────────────────────
@@ -115,6 +133,8 @@ export interface MenuItemWithDetails extends MenuItem {
   category: MenuCategory;
   variants: MenuVariant[];
   modifier_groups: (ModifierGroup & { modifiers: Modifier[] })[];
+  extras: MenuItemExtra[];
+  ingredients: MenuItemIngredient[];
 }
 
 export interface MenuCategoryWithItems extends MenuCategory {

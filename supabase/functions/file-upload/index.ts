@@ -6,8 +6,8 @@ import {
 } from '../_shared/index.ts';
 import type { AuthContext } from '../_shared/index.ts';
 
-const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'application/pdf'];
+const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
 
 const BUCKETS: Record<string, string> = {
   'menu': 'menu-images',
@@ -58,15 +58,20 @@ async function uploadFile(req: Request, supabase: any, auth: AuthContext, branch
   const referenceType = formData.get('reference_type') as string | null;
 
   if (!file) return errorResponse('No file provided');
+
+  // Sanitize filename: strip path traversal and non-safe characters
+  const rawName = file.name ?? 'upload';
+  const safeName = rawName.replace(/\.\./g, '').replace(/[^a-zA-Z0-9._-]/g, '_');
+
   if (!ALLOWED_TYPES.includes(file.type)) {
     return errorResponse(`File type ${file.type} not allowed. Allowed: ${ALLOWED_TYPES.join(', ')}`);
   }
   if (file.size > MAX_FILE_SIZE) {
-    return errorResponse(`File too large. Max: ${MAX_FILE_SIZE / (1024 * 1024)}MB`);
+    return errorResponse(`File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max: ${MAX_FILE_SIZE / (1024 * 1024)}MB`);
   }
 
   const bucket = BUCKETS[category] ?? 'documents';
-  const ext = file.name.split('.').pop() ?? 'bin';
+  const ext = safeName.split('.').pop() ?? 'bin';
   const timestamp = Date.now();
   const path = branchId
     ? `${auth.companyId}/${branchId}/${timestamp}_${crypto.randomUUID().slice(0, 8)}.${ext}`
@@ -90,7 +95,7 @@ async function uploadFile(req: Request, supabase: any, auth: AuthContext, branch
       branch_id: branchId,
       bucket,
       path: data.path,
-      filename: file.name,
+      filename: safeName,
       content_type: file.type,
       size_bytes: file.size,
       reference_type: referenceType ?? category,

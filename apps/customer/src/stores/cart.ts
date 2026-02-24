@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+export interface CartItemRemovedIngredient { ingredient_id: string; name: string; cost_contribution: number }
+export interface CartItemExtra { id: string; name: string; price: number }
+
 export interface CartItem {
   menuItemId: string;
   variantId?: string;
@@ -12,6 +15,8 @@ export interface CartItem {
   modifiers: { id: string; name: string; price: number; groupName?: string }[];
   notes?: string;
   imageUrl?: string;
+  removedIngredients?: CartItemRemovedIngredient[];
+  selectedExtras?: CartItemExtra[];
 }
 
 interface DeliveryAddr {
@@ -55,7 +60,9 @@ interface CartActions {
 function computeDerived(items: CartItem[], orderType: string, deliveryFee: number) {
   const subtotal = items.reduce((sum, i) => {
     const modTotal = i.modifiers.reduce((m, mod) => m + mod.price, 0);
-    return sum + (i.basePrice + (i.variantPriceAdjustment ?? 0) + modTotal) * i.quantity;
+    const extrasTotal = (i.selectedExtras ?? []).reduce((s, e) => s + e.price, 0);
+    const ingredientsDiscount = (i.removedIngredients ?? []).reduce((s, r) => s + r.cost_contribution, 0);
+    return sum + (i.basePrice + (i.variantPriceAdjustment ?? 0) + modTotal + extrasTotal - ingredientsDiscount) * i.quantity;
   }, 0);
   const total = subtotal + (orderType === 'delivery' ? deliveryFee : 0);
   const itemCount = items.reduce((sum, i) => sum + i.quantity, 0);

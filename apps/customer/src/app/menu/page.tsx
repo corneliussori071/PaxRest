@@ -5,15 +5,16 @@ import {
   Chip, Stack, TextField, InputAdornment, Skeleton, Button,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton,
   FormControl, FormLabel, RadioGroup, FormControlLabel, Radio,
-  Checkbox, Divider,
+  Checkbox, Divider, Alert,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import CloseIcon from '@mui/icons-material/Close';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
+import BlockIcon from '@mui/icons-material/Block';
 import { publicApi } from '@/lib/supabase';
-import { useCartStore } from '@/stores/cart';
+import { useCartStore, type CartItemRemovedIngredient, type CartItemExtra } from '@/stores/cart';
 import { formatCurrency } from '@paxrest/shared-utils';
 import toast from 'react-hot-toast';
 
@@ -23,10 +24,17 @@ import toast from 'react-hot-toast';
 interface MenuVariant { id: string; label: string; price_adjustment: number; is_default: boolean; }
 interface Modifier { id: string; name: string; price: number; is_default: boolean; }
 interface ModifierGroup { id: string; name: string; min_select: number; max_select: number; modifiers: Modifier[]; }
+interface Ingredient { id: string; name: string; cost_contribution: number; inventory_item_name?: string; }
+interface Extra { id: string; name: string; price: number; }
 interface MenuItem {
   id: string; name: string; description: string | null; base_price: number;
-  image_url: string | null; tags: string[]; is_available: boolean; sort_order: number;
+  image_url: string | null; media_url: string | null; media_type: string | null;
+  tags: string[]; is_available: boolean; sort_order: number;
+  availability_status: 'available' | 'sold_out' | 'limited' | 'preorder';
+  calories?: number;
   variants: MenuVariant[]; modifier_groups: ModifierGroup[];
+  ingredients: Ingredient[]; extras: Extra[];
+  available_count?: number;
 }
 interface MenuCategory { id: string; name: string; description: string | null; sort_order: number; items: MenuItem[]; }
 
@@ -43,16 +51,18 @@ export default function MenuPage() {
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
+  const [removedIngredientIds, setRemovedIngredientIds] = useState<Set<string>>(new Set());
+  const [selectedExtraIds, setSelectedExtraIds] = useState<Set<string>>(new Set());
   const [qty, setQty] = useState(1);
 
   const addItem = useCartStore((s) => s.addItem);
 
-  // Fetch full menu via public API (using the demo company slug)
+  // Fetch full menu via public API
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const res = await publicApi<{ categories: MenuCategory[] }>('/menu/full-menu');
+        const res = await publicApi<{ categories: MenuCategory[] }>('/menu/public-menu');
         if (res.data?.categories) {
           setCategories(res.data.categories);
           if (res.data.categories.length > 0) setActiveCategory(res.data.categories[0].id);
@@ -79,6 +89,10 @@ export default function MenuPage() {
 
   // ---------- Dialog helpers ----------
   const openCustomize = (item: MenuItem) => {
+    if (item.availability_status === 'sold_out') {
+      toast.error('This item is currently sold out');
+      return;
+    }
     setSelectedItem(item);
     const defaultVariant = item.variants.find((v) => v.is_default) || item.variants[0];
     setSelectedVariant(defaultVariant?.id ?? null);
@@ -87,6 +101,8 @@ export default function MenuPage() {
       mods[g.id] = g.modifiers.filter((m) => m.is_default).map((m) => m.id);
     });
     setSelectedModifiers(mods);
+    setRemovedIngredientIds(new Set());
+    setSelectedExtraIds(new Set());
     setQty(1);
   };
 
@@ -95,6 +111,7 @@ export default function MenuPage() {
     let price = selectedItem.base_price;
     const variant = selectedItem.variants.find((v) => v.id === selectedVariant);
     if (variant) price += variant.price_adjustment;
+    // Modifiers
     Object.entries(selectedModifiers).forEach(([gId, mIds]) => {
       const group = selectedItem.modifier_groups.find((g) => g.id === gId);
       mIds.forEach((mId) => {
@@ -102,7 +119,15 @@ export default function MenuPage() {
         if (mod) price += mod.price;
       });
     });
-    return price;
+    // Extras
+    selectedItem.extras?.forEach((ext) => {
+      if (selectedExtraIds.has(ext.id)) price += ext.price;
+    });
+    // Ingredient discount
+    selectedItem.ingredients?.forEach((ing) => {
+      if (removedIngredientIds.has(ing.id)) price -= ing.cost_contribution ?? 0;
+    });
+    return Math.max(0, price);
   };
 
   const handleAddToCart = () => {
@@ -116,6 +141,14 @@ export default function MenuPage() {
       });
     });
 
+    const removedIngredients: CartItemRemovedIngredient[] = (selectedItem.ingredients ?? [])
+      .filter((i) => removedIngredientIds.has(i.id))
+      .map((i) => ({ ingredient_id: i.id, name: i.name || i.inventory_item_name || '', cost_contribution: i.cost_contribution ?? 0 }));
+
+    const selectedExtras: CartItemExtra[] = (selectedItem.extras ?? [])
+      .filter((e) => selectedExtraIds.has(e.id))
+      .map((e) => ({ id: e.id, name: e.name, price: e.price }));
+
     addItem({
       menuItemId: selectedItem.id,
       name: selectedItem.name,
@@ -126,6 +159,8 @@ export default function MenuPage() {
       modifiers,
       quantity: qty,
       notes: '',
+      removedIngredients: removedIngredients.length > 0 ? removedIngredients : undefined,
+      selectedExtras: selectedExtras.length > 0 ? selectedExtras : undefined,
     });
     toast.success(`${selectedItem.name} added to cart`);
     setSelectedItem(null);
@@ -140,6 +175,22 @@ export default function MenuPage() {
       if (maxSelect === 1) return { ...prev, [groupId]: [modId] };
       if (current.length >= maxSelect) return prev;
       return { ...prev, [groupId]: [...current, modId] };
+    });
+  };
+
+  const toggleIngredient = (id: string) => {
+    setRemovedIngredientIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleExtra = (id: string) => {
+    setSelectedExtraIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
     });
   };
 
@@ -189,42 +240,92 @@ export default function MenuPage() {
           {cat.description && <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{cat.description}</Typography>}
 
           <Grid container spacing={2}>
-            {cat.items.filter((i) => i.is_available).map((item) => (
-              <Grid key={item.id} size={{ xs: 12, sm: 6, md: 3 }}>
-                <Card
-                  sx={{ cursor: 'pointer', height: '100%', display: 'flex', flexDirection: 'column', '&:hover': { boxShadow: 4 }, transition: 'box-shadow 0.2s' }}
-                  onClick={() => openCustomize(item)}
-                >
-                  <Box sx={{ height: 140, bgcolor: 'grey.200', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                    {item.image_url ? (
-                      <CardMedia component="img" image={item.image_url} alt={item.name} sx={{ height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <Typography sx={{ fontSize: 48 }}>🍽️</Typography>
+            {cat.items.map((item) => {
+              const isSoldOut = item.availability_status === 'sold_out';
+              const isLimited = item.availability_status === 'limited';
+              const mediaUrl = item.media_url || item.image_url;
+              const isVideo = item.media_type === 'video';
+
+              return (
+                <Grid key={item.id} size={{ xs: 12, sm: 6, md: 3 }}>
+                  <Card
+                    sx={{
+                      cursor: isSoldOut ? 'not-allowed' : 'pointer',
+                      height: '100%', display: 'flex', flexDirection: 'column',
+                      '&:hover': isSoldOut ? {} : { boxShadow: 4 },
+                      transition: 'box-shadow 0.2s',
+                      opacity: isSoldOut ? 0.5 : 1,
+                      position: 'relative',
+                    }}
+                    onClick={() => openCustomize(item)}
+                  >
+                    {/* Availability badge */}
+                    {isSoldOut && (
+                      <Chip
+                        icon={<BlockIcon />} label="Sold Out" color="error" size="small"
+                        sx={{ position: 'absolute', top: 8, right: 8, zIndex: 1, fontWeight: 700 }}
+                      />
                     )}
-                  </Box>
-                  <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <Typography variant="subtitle1" fontWeight={600}>{item.name}</Typography>
-                    {item.description && (
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1, WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', display: '-webkit-box', overflow: 'hidden' }}>
-                        {item.description}
-                      </Typography>
+                    {isLimited && (
+                      <Chip
+                        label="Limited" color="warning" size="small"
+                        sx={{ position: 'absolute', top: 8, right: 8, zIndex: 1, fontWeight: 700 }}
+                      />
                     )}
-                    <Box sx={{ mt: 'auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Typography variant="subtitle1" fontWeight={700} color="primary">
-                        {formatCurrency(item.base_price)}
-                        {item.variants.length > 1 && '+'}
-                      </Typography>
-                      <Chip label="Add" size="small" color="primary" icon={<AddIcon />} />
+                    {(item.available_count ?? 0) > 0 && !isSoldOut && (
+                      <Chip
+                        label={`${item.available_count} left`} color="success" size="small"
+                        sx={{ position: 'absolute', top: 8, left: 8, zIndex: 1, fontWeight: 700 }}
+                      />
+                    )}
+
+                    <Box sx={{ height: 160, bgcolor: 'grey.200', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                      {mediaUrl ? (
+                        isVideo ? (
+                          <Box
+                            component="video" src={mediaUrl} muted loop autoPlay playsInline
+                            sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <CardMedia component="img" image={mediaUrl} alt={item.name} sx={{ height: '100%', objectFit: 'cover' }} />
+                        )
+                      ) : (
+                        <Typography sx={{ fontSize: 48 }}>🍽️</Typography>
+                      )}
                     </Box>
-                    {item.tags?.length > 0 && (
-                      <Stack direction="row" spacing={0.5} mt={1} flexWrap="wrap">
-                        {item.tags.map((t) => <Chip key={t} label={t} size="small" variant="outlined" />)}
-                      </Stack>
-                    )}
-                  </CardContent>
-                </Card>
-              </Grid>
-            ))}
+                    <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                      <Typography variant="subtitle1" fontWeight={600}>{item.name}</Typography>
+                      {item.description && (
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5, WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', display: '-webkit-box', overflow: 'hidden' }}>
+                          {item.description}
+                        </Typography>
+                      )}
+                      {item.calories && (
+                        <Typography variant="caption" color="text.secondary">{item.calories} cal</Typography>
+                      )}
+                      {/* Ingredients preview */}
+                      {item.ingredients?.length > 0 && (
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                          {item.ingredients.map((i) => i.name || i.inventory_item_name).join(', ')}
+                        </Typography>
+                      )}
+                      <Box sx={{ mt: 'auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 1 }}>
+                        <Typography variant="subtitle1" fontWeight={700} color="primary">
+                          {formatCurrency(item.base_price)}
+                          {item.variants.length > 1 && '+'}
+                        </Typography>
+                        {!isSoldOut && <Chip label="Add" size="small" color="primary" icon={<AddIcon />} />}
+                      </Box>
+                      {item.tags?.length > 0 && (
+                        <Stack direction="row" spacing={0.5} mt={1} flexWrap="wrap">
+                          {item.tags.map((t) => <Chip key={t} label={t} size="small" variant="outlined" />)}
+                        </Stack>
+                      )}
+                    </CardContent>
+                  </Card>
+                </Grid>
+              );
+            })}
           </Grid>
         </Box>
       ))}
@@ -242,8 +343,25 @@ export default function MenuPage() {
           <IconButton onClick={() => setSelectedItem(null)}><CloseIcon /></IconButton>
         </DialogTitle>
         <DialogContent dividers>
+          {/* Media */}
+          {selectedItem?.media_url && (
+            <Box sx={{ mb: 2, borderRadius: 2, overflow: 'hidden', maxHeight: 200 }}>
+              {selectedItem.media_type === 'video' ? (
+                <Box component="video" src={selectedItem.media_url} controls muted autoPlay sx={{ width: '100%', maxHeight: 200, objectFit: 'cover' }} />
+              ) : (
+                <Box component="img" src={selectedItem.media_url} alt={selectedItem.name} sx={{ width: '100%', maxHeight: 200, objectFit: 'cover' }} />
+              )}
+            </Box>
+          )}
+
           {selectedItem?.description && (
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{selectedItem.description}</Typography>
+          )}
+
+          {selectedItem?.calories && (
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+              {selectedItem.calories} calories
+            </Typography>
           )}
 
           {/* Variants */}
@@ -304,6 +422,74 @@ export default function MenuPage() {
               )}
             </Box>
           ))}
+
+          {/* Ingredients — remove to get discount */}
+          {selectedItem?.ingredients && selectedItem.ingredients.length > 0 && (
+            <Box sx={{ mb: 3 }}>
+              <Divider sx={{ my: 1 }} />
+              <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+                Ingredients
+                <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                  Uncheck to remove — price adjusts accordingly
+                </Typography>
+              </Typography>
+              {selectedItem.ingredients.map((ing) => (
+                <FormControlLabel
+                  key={ing.id}
+                  control={
+                    <Checkbox
+                      checked={!removedIngredientIds.has(ing.id)}
+                      onChange={() => toggleIngredient(ing.id)}
+                    />
+                  }
+                  label={
+                    <Typography variant="body2">
+                      {ing.name || ing.inventory_item_name}
+                      {(ing.cost_contribution ?? 0) > 0 && (
+                        <Typography component="span" variant="caption" color="error.main">
+                          {' '}(−{formatCurrency(ing.cost_contribution)} if removed)
+                        </Typography>
+                      )}
+                    </Typography>
+                  }
+                  sx={{ display: 'block' }}
+                />
+              ))}
+            </Box>
+          )}
+
+          {/* Extras — add for extra cost */}
+          {selectedItem?.extras && selectedItem.extras.length > 0 && (
+            <Box sx={{ mb: 3 }}>
+              <Divider sx={{ my: 1 }} />
+              <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+                Extras
+                <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                  Add extras to your order
+                </Typography>
+              </Typography>
+              {selectedItem.extras.map((ext) => (
+                <FormControlLabel
+                  key={ext.id}
+                  control={
+                    <Checkbox
+                      checked={selectedExtraIds.has(ext.id)}
+                      onChange={() => toggleExtra(ext.id)}
+                    />
+                  }
+                  label={
+                    <Typography variant="body2">
+                      {ext.name}
+                      <Typography component="span" variant="caption" color="success.main">
+                        {' '}+{formatCurrency(ext.price)}
+                      </Typography>
+                    </Typography>
+                  }
+                  sx={{ display: 'block' }}
+                />
+              ))}
+            </Box>
+          )}
 
           <Divider sx={{ my: 2 }} />
 

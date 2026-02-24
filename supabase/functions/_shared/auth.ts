@@ -1,5 +1,6 @@
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { errorResponse } from './cors.ts';
+import { createServiceClient } from './db.ts';
 
 export interface AuthContext {
   userId: string;
@@ -13,11 +14,12 @@ export interface AuthContext {
 
 /**
  * Extract and validate auth context from the request.
+ * Queries the profiles table for reliable role/permissions data.
  * Returns the AuthContext or a Response (error) you should return immediately.
  */
 export async function requireAuth(
   supabase: SupabaseClient,
-  req: Request,
+  _req: Request,
 ): Promise<AuthContext | Response> {
   const {
     data: { user },
@@ -28,16 +30,22 @@ export async function requireAuth(
     return errorResponse('Unauthorized', 401, 'UNAUTHORIZED');
   }
 
-  const meta = user.app_metadata ?? {};
+  // Query profile from database for reliable role/permissions
+  const service = createServiceClient();
+  const { data: profile } = await service
+    .from('profiles')
+    .select('company_id, branch_ids, active_branch_id, role, permissions')
+    .eq('id', user.id)
+    .maybeSingle();
 
   return {
     userId: user.id,
     email: user.email ?? '',
-    companyId: meta.company_id ?? null,
-    branchIds: meta.branch_ids ?? [],
-    activeBranchId: meta.active_branch_id ?? null,
-    role: meta.role ?? null,
-    permissions: meta.permissions ?? [],
+    companyId: profile?.company_id ?? null,
+    branchIds: profile?.branch_ids ?? [],
+    activeBranchId: profile?.active_branch_id ?? null,
+    role: profile?.role ?? null,
+    permissions: profile?.permissions ?? [],
   };
 }
 

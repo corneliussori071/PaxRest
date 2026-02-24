@@ -78,7 +78,11 @@ export interface OrderItem {
   unit_price: number; // base_price + variant adjustment
   modifiers: OrderItemModifier[];
   modifiers_total: number; // Sum of modifier prices × quantity
-  item_total: number; // (unit_price + modifiers_total) × quantity
+  removed_ingredients: OrderItemRemovedIngredient[];
+  selected_extras: OrderItemExtra[];
+  extras_total: number; // Sum of extras prices
+  ingredients_discount: number; // Deduction for removed ingredients
+  item_total: number; // (unit_price + modifiers_total + extras_total - ingredients_discount) × quantity
   special_instructions: string | null;
   station: KitchenStation;
   status: OrderItemStatus;
@@ -91,6 +95,18 @@ export interface OrderItemModifier {
   modifier_id: string;
   modifier_name: string;
   modifier_group_name: string;
+  price: number;
+}
+
+export interface OrderItemRemovedIngredient {
+  ingredient_id: string;
+  name: string;
+  cost_contribution: number; // Price deducted
+}
+
+export interface OrderItemExtra {
+  extra_id: string;
+  name: string;
   price: number;
 }
 

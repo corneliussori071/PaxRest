@@ -8,6 +8,8 @@ interface KDSItem {
   name: string;
   quantity: number;
   modifiers?: string[];
+  removedIngredients?: string[];
+  selectedExtras?: string[];
   notes?: string;
   status: string;
 }
@@ -82,6 +84,16 @@ export function KDSOrderCard({
               {item.modifiers && item.modifiers.length > 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                   {item.modifiers.join(', ')}
+                </Typography>
+              )}
+              {item.removedIngredients && item.removedIngredients.length > 0 && (
+                <Typography variant="caption" color="error.main" sx={{ display: 'block' }}>
+                  ✕ {item.removedIngredients.join(', ')}
+                </Typography>
+              )}
+              {item.selectedExtras && item.selectedExtras.length > 0 && (
+                <Typography variant="caption" color="success.main" sx={{ display: 'block' }}>
+                  + {item.selectedExtras.join(', ')}
                 </Typography>
               )}
               {item.notes && (

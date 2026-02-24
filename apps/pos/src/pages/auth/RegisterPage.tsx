@@ -15,7 +15,7 @@ export default function RegisterPage() {
 
   const [form, setForm] = useState({
     email: '', password: '', confirmPassword: '',
-    fullName: '', companyName: '', branchName: '', phone: '',
+    fullName: '', companyName: '', phone: '',
   });
 
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -24,7 +24,7 @@ export default function RegisterPage() {
   const handleNext = () => {
     if (step === 0) {
       if (!form.email || !form.password) return setError('Please fill all fields');
-      if (form.password.length < 6) return setError('Password must be at least 6 characters');
+      if (form.password.length < 8) return setError('Password must be at least 8 characters');
       if (form.password !== form.confirmPassword) return setError('Passwords do not match');
       setError('');
       setStep(1);
@@ -33,7 +33,7 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.fullName || !form.companyName || !form.branchName) {
+    if (!form.fullName || !form.companyName) {
       return setError('Please fill all fields');
     }
     setError('');
@@ -44,7 +44,6 @@ export default function RegisterPage() {
         password: form.password,
         fullName: form.fullName,
         companyName: form.companyName,
-        branchName: form.branchName,
         phone: form.phone || undefined,
       });
     } catch (err: any) {
@@ -87,8 +86,8 @@ export default function RegisterPage() {
               <>
                 <TextField fullWidth label="Full Name" required value={form.fullName} onChange={set('fullName')} sx={{ mb: 2 }} />
                 <TextField fullWidth label="Company / Restaurant Name" required value={form.companyName} onChange={set('companyName')} sx={{ mb: 2 }} />
-                <TextField fullWidth label="First Branch Name" required value={form.branchName} onChange={set('branchName')} helperText='e.g. "Main Branch", "Downtown"' sx={{ mb: 2 }} />
-                <TextField fullWidth label="Phone (optional)" value={form.phone} onChange={set('phone')} sx={{ mb: 3 }} />
+                <TextField fullWidth label="Phone (optional)" value={form.phone} onChange={set('phone')} sx={{ mb: 2 }} />
+                <Alert severity="info" sx={{ mb: 3 }}>You can add branches after registration from the Branches page.</Alert>
                 <Box sx={{ display: 'flex', gap: 2 }}>
                   <Button variant="outlined" onClick={() => setStep(0)} sx={{ flex: 1 }}>Back</Button>
                   <Button type="submit" variant="contained" disabled={loading} sx={{ flex: 2 }}>

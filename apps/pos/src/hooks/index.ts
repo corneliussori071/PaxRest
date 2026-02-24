@@ -54,8 +54,8 @@ export function usePaginated<T>(
       const params: Record<string, string> = {
         page: String(page + 1),
         page_size: String(pageSize),
-        sort_by: sortBy,
-        sort_dir: sortDir,
+        sort_column: sortBy,
+        sort_direction: sortDir.toUpperCase(),
         ...(search ? { search } : {}),
         ...extraParams,
       };

@@ -56,6 +56,10 @@ serve(async (req) => {
       case 'full':
         return await getFullMenu(supabase, auth, branchId);
 
+      // Public menu (unauthenticated, for customer app)
+      case 'public-menu':
+        return await getPublicMenu(req, supabase);
+
       default:
         return errorResponse('Unknown menu action', 404);
     }
@@ -180,7 +184,7 @@ async function getItem(req: Request, supabase: any, auth: AuthContext, branchId:
 
   const { data, error } = await supabase
     .from('menu_items')
-    .select('*, menu_variants(*), menu_item_modifier_groups(*, modifier_groups(*, modifiers(*))), menu_item_ingredients(*)')
+    .select('*, menu_variants(*), menu_item_modifier_groups(*, modifier_groups(*, modifiers(*))), menu_item_ingredients(*), menu_item_extras(*)')
     .eq('id', id)
     .eq('branch_id', branchId)
     .single();
@@ -208,12 +212,16 @@ async function upsertItem(req: Request, supabase: any, auth: AuthContext, branch
     base_price: body.base_price,
     station: body.station ?? 'kitchen',
     is_available: body.is_available ?? true,
+    availability_status: body.availability_status ?? 'available',
     is_active: body.is_active ?? true,
     sort_order: body.sort_order ?? 0,
     prep_time_minutes: body.prep_time_minutes ?? null,
     image_url: body.image_url ?? null,
+    media_url: body.media_url ?? null,
+    media_type: body.media_type ?? null,
     tags: body.tags ?? [],
     allergens: body.allergens ?? [],
+    calories: body.calories ?? null,
   };
 
   if (body.id) {
@@ -226,9 +234,11 @@ async function upsertItem(req: Request, supabase: any, auth: AuthContext, branch
       .single();
     if (error) return errorResponse(error.message);
 
-    // Handle ingredient links if provided
     if (body.ingredients) {
       await syncIngredients(supabase, body.id, body.ingredients);
+    }
+    if (body.extras) {
+      await syncExtras(supabase, body.id, body.extras);
     }
 
     return jsonResponse({ item: data });
@@ -242,6 +252,9 @@ async function upsertItem(req: Request, supabase: any, auth: AuthContext, branch
 
     if (body.ingredients) {
       await syncIngredients(supabase, data.id, body.ingredients);
+    }
+    if (body.extras) {
+      await syncExtras(supabase, data.id, body.extras);
     }
 
     return jsonResponse({ item: data }, 201);
@@ -392,18 +405,112 @@ async function getFullMenu(supabase: any, auth: AuthContext, branchId: string) {
 
   const { data: items, error: itemError } = await supabase
     .from('menu_items')
-    .select('*, menu_variants(*), menu_item_modifier_groups(*, modifier_groups(*, modifiers(*)))')
+    .select('*, menu_variants(*), menu_item_modifier_groups(*, modifier_groups(*, modifiers(*))), menu_item_ingredients(*), menu_item_extras(*)')
     .eq('branch_id', branchId)
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+
+  if (itemError) return errorResponse(itemError.message);
+
+  // Get available meals for availability badges
+  const { data: availableMeals } = await supabase
+    .from('available_meals')
+    .select('menu_item_id, quantity_available')
+    .eq('branch_id', branchId)
+    .gt('quantity_available', 0);
+
+  const mealsMap = new Map((availableMeals ?? []).map((m: any) => [m.menu_item_id, m.quantity_available]));
+
+  // Group items by category
+  const menu = (categories ?? []).map((cat: any) => ({
+    ...cat,
+    items: (items ?? [])
+      .filter((item: any) => item.category_id === cat.id)
+      .map((item: any) => ({
+        ...item,
+        available_quantity: mealsMap.get(item.id) ?? 0,
+      })),
+  }));
+
+  return jsonResponse({ menu });
+}
+
+// ─── Public Menu (unauthenticated, for customer app) ───────────────────
+
+async function getPublicMenu(req: Request, supabase: any) {
+  const url = new URL(req.url);
+  const branchId = url.searchParams.get('branch_id');
+  const companySlug = url.searchParams.get('company_slug');
+
+  if (!branchId && !companySlug) {
+    return errorResponse('Missing branch_id or company_slug');
+  }
+
+  // Resolve branch_id from company slug if needed
+  let resolvedBranchId = branchId;
+  if (!resolvedBranchId && companySlug) {
+    const { data: company } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('slug', companySlug)
+      .single();
+    if (!company) return errorResponse('Company not found', 404);
+
+    const { data: branch } = await supabase
+      .from('branches')
+      .select('id')
+      .eq('company_id', company.id)
+      .eq('is_active', true)
+      .limit(1)
+      .single();
+    if (!branch) return errorResponse('No active branch found', 404);
+    resolvedBranchId = branch.id;
+  }
+
+  const { data: categories, error: catError } = await supabase
+    .from('menu_categories')
+    .select('id, name, description, image_url, sort_order')
+    .eq('branch_id', resolvedBranchId)
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+
+  if (catError) return errorResponse(catError.message);
+
+  const { data: items, error: itemError } = await supabase
+    .from('menu_items')
+    .select(`
+      id, name, description, base_price, image_url, media_url, media_type,
+      availability_status, preparation_time_min, station, tags, allergens, calories,
+      category_id,
+      menu_variants(id, name, price_adjustment, is_active),
+      menu_item_modifier_groups(modifier_groups(id, name, min_selections, max_selections, is_required, modifiers(id, name, price, is_active))),
+      menu_item_ingredients(id, ingredient_id, name, cost_contribution, quantity_used, unit),
+      menu_item_extras(id, name, price, is_available, sort_order)
+    `)
+    .eq('branch_id', resolvedBranchId)
     .eq('is_active', true)
     .eq('is_available', true)
     .order('sort_order', { ascending: true });
 
   if (itemError) return errorResponse(itemError.message);
 
-  // Group items by category
+  // Get available meals
+  const { data: availableMeals } = await supabase
+    .from('available_meals')
+    .select('menu_item_id, quantity_available')
+    .eq('branch_id', resolvedBranchId)
+    .gt('quantity_available', 0);
+
+  const mealsMap = new Map((availableMeals ?? []).map((m: any) => [m.menu_item_id, m.quantity_available]));
+
   const menu = (categories ?? []).map((cat: any) => ({
     ...cat,
-    items: (items ?? []).filter((item: any) => item.category_id === cat.id),
+    items: (items ?? [])
+      .filter((item: any) => item.category_id === cat.id)
+      .map((item: any) => ({
+        ...item,
+        available_quantity: mealsMap.get(item.id) ?? 0,
+      })),
   }));
 
   return jsonResponse({ menu });
@@ -412,31 +519,46 @@ async function getFullMenu(supabase: any, auth: AuthContext, branchId: string) {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 async function syncIngredients(supabase: any, menuItemId: string, ingredients: any[]) {
-  // Delete existing
   await supabase.from('menu_item_ingredients').delete().eq('menu_item_id', menuItemId);
 
   if (ingredients.length === 0) return;
 
-  // Insert new
   const records = ingredients.map((ing: any) => ({
     menu_item_id: menuItemId,
     ingredient_id: ing.ingredient_id,
     variant_id: ing.variant_id ?? null,
+    name: ing.name ?? null,
     quantity_used: ing.quantity_used,
     unit: ing.unit,
+    cost_contribution: ing.cost_contribution ?? 0,
   }));
 
   await supabase.from('menu_item_ingredients').insert(records);
 }
 
+async function syncExtras(supabase: any, menuItemId: string, extras: any[]) {
+  await supabase.from('menu_item_extras').delete().eq('menu_item_id', menuItemId);
+
+  if (extras.length === 0) return;
+
+  const records = extras.map((ext: any, i: number) => ({
+    menu_item_id: menuItemId,
+    name: sanitizeString(ext.name),
+    price: ext.price ?? 0,
+    is_available: ext.is_available ?? true,
+    sort_order: ext.sort_order ?? i,
+  }));
+
+  await supabase.from('menu_item_extras').insert(records);
+}
+
 async function syncModifiers(supabase: any, groupId: string, modifiers: any[]) {
-  // Delete existing modifiers for this group
-  await supabase.from('modifiers').delete().eq('group_id', groupId);
+  await supabase.from('modifiers').delete().eq('modifier_group_id', groupId);
 
   if (modifiers.length === 0) return;
 
   const records = modifiers.map((mod: any, i: number) => ({
-    group_id: groupId,
+    modifier_group_id: groupId,
     name: sanitizeString(mod.name),
     price: mod.price ?? 0,
     is_available: mod.is_available ?? true,

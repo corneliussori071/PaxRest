@@ -1,11 +1,17 @@
-import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
+﻿import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import {
   corsResponse, jsonResponse, errorResponse,
   createUserClient, createServiceClient,
-  requireAuth, hasPermission, resolveBranchId,
-  sanitizeString, isValidEmail, validatePagination, applyPagination,
+  requireAuth, hasPermission, sanitizeString,
+  isValidEmail, validatePagination, applyPagination,
 } from '../_shared/index.ts';
 import type { AuthContext } from '../_shared/index.ts';
+
+const ROLE_HIERARCHY: Record<string, number> = {
+  owner: 100, general_manager: 80, branch_manager: 60,
+  cashier: 40, chef: 40, bartender: 40, shisha_attendant: 40,
+  waiter: 40, rider: 30, inventory_clerk: 40, custom: 20,
+};
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return corsResponse();
@@ -23,19 +29,21 @@ serve(async (req) => {
 
     switch (action) {
       case 'list':
-        return await listStaff(req, supabase, auth);
+        return await listStaff(req, auth);
       case 'get':
-        return await getStaffMember(req, supabase, auth);
+        return await getStaffMember(req, auth);
       case 'update':
-        return await updateStaffMember(req, supabase, auth);
+        return await updateStaffMember(req, auth);
       case 'deactivate':
-        return await deactivateStaff(req, supabase, auth);
+        return await deactivateStaff(req, auth);
       case 'invite':
-        return await inviteStaff(req, supabase, auth);
+        return await inviteStaff(req, auth);
+      case 'create-direct':
+        return await createStaffDirect(req, auth);
       case 'invitations':
-        return await listInvitations(req, supabase, auth);
+        return await listInvitations(req, auth);
       case 'cancel-invitation':
-        return await cancelInvitation(req, supabase, auth);
+        return await cancelInvitation(req, auth);
       default:
         return errorResponse('Unknown staff action', 404);
     }
@@ -45,7 +53,7 @@ serve(async (req) => {
   }
 });
 
-async function listStaff(req: Request, supabase: any, auth: AuthContext) {
+async function listStaff(req: Request, auth: AuthContext) {
   const url = new URL(req.url);
   const { page, pageSize, sortColumn, sortDirection } = validatePagination(
     {
@@ -54,10 +62,11 @@ async function listStaff(req: Request, supabase: any, auth: AuthContext) {
       sort_column: url.searchParams.get('sort_column') ?? undefined,
       sort_direction: url.searchParams.get('sort_direction') ?? undefined,
     },
-    ['created_at', 'full_name', 'role', 'email'],
+    ['created_at', 'name', 'role', 'email'],
   );
 
-  let query = supabase
+  const service = createServiceClient();
+  let query = service
     .from('profiles')
     .select('*', { count: 'exact' })
     .eq('company_id', auth.companyId);
@@ -66,7 +75,7 @@ async function listStaff(req: Request, supabase: any, auth: AuthContext) {
   if (role) query = query.eq('role', role);
 
   const search = url.searchParams.get('search');
-  if (search) query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%`);
+  if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
 
   const branchId = url.searchParams.get('branch_id');
   if (branchId) query = query.contains('branch_ids', [branchId]);
@@ -81,12 +90,13 @@ async function listStaff(req: Request, supabase: any, auth: AuthContext) {
   });
 }
 
-async function getStaffMember(req: Request, supabase: any, auth: AuthContext) {
+async function getStaffMember(req: Request, auth: AuthContext) {
   const url = new URL(req.url);
   const id = url.searchParams.get('id');
   if (!id) return errorResponse('Missing staff id');
 
-  const { data, error } = await supabase
+  const service = createServiceClient();
+  const { data, error } = await service
     .from('profiles')
     .select('*')
     .eq('id', id)
@@ -97,20 +107,28 @@ async function getStaffMember(req: Request, supabase: any, auth: AuthContext) {
   return jsonResponse({ staff: data });
 }
 
-async function updateStaffMember(req: Request, supabase: any, auth: AuthContext) {
+async function updateStaffMember(req: Request, auth: AuthContext) {
   if (req.method !== 'PUT') return errorResponse('Method not allowed', 405);
   const body = await req.json();
   if (!body.id) return errorResponse('Missing staff id');
 
-  // Cannot modify yourself through this endpoint for role changes
   if (body.id === auth.userId && body.role) {
     return errorResponse('Cannot change your own role');
+  }
+
+  // Enforce role hierarchy
+  if (body.role) {
+    const callerLevel = ROLE_HIERARCHY[auth.role ?? ''] ?? 0;
+    const targetLevel = ROLE_HIERARCHY[body.role] ?? 0;
+    if (callerLevel <= targetLevel) {
+      return errorResponse('Cannot assign a role equal to or higher than yours', 403);
+    }
   }
 
   const service = createServiceClient();
   const updates: Record<string, unknown> = {};
 
-  if (body.full_name) updates.full_name = sanitizeString(body.full_name);
+  if (body.name) updates.name = sanitizeString(body.name);
   if (body.phone !== undefined) updates.phone = body.phone;
   if (body.role) updates.role = body.role;
   if (body.permissions) updates.permissions = body.permissions;
@@ -130,7 +148,7 @@ async function updateStaffMember(req: Request, supabase: any, auth: AuthContext)
   return jsonResponse({ staff: data });
 }
 
-async function deactivateStaff(req: Request, supabase: any, auth: AuthContext) {
+async function deactivateStaff(req: Request, auth: AuthContext) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const body = await req.json();
   if (!body.id) return errorResponse('Missing staff id');
@@ -139,23 +157,32 @@ async function deactivateStaff(req: Request, supabase: any, auth: AuthContext) {
   const service = createServiceClient();
   const { error } = await service
     .from('profiles')
-    .update({ is_active: false })
+    .update({ is_active: body.activate ? true : false })
     .eq('id', body.id)
     .eq('company_id', auth.companyId);
 
   if (error) return errorResponse(error.message);
-  return jsonResponse({ deactivated: true });
+  return jsonResponse({ success: true });
 }
 
-async function inviteStaff(req: Request, supabase: any, auth: AuthContext) {
+async function inviteStaff(req: Request, auth: AuthContext) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const body = await req.json();
 
   if (!body.email || !body.role) return errorResponse('Missing email or role');
   if (!isValidEmail(body.email)) return errorResponse('Invalid email format');
 
+  // Enforce role hierarchy
+  const callerLevel = ROLE_HIERARCHY[auth.role ?? ''] ?? 0;
+  const targetLevel = ROLE_HIERARCHY[body.role] ?? 0;
+  if (callerLevel <= targetLevel) {
+    return errorResponse('Cannot invite a user with same or higher role', 403);
+  }
+
+  const service = createServiceClient();
+
   // Check not already a member
-  const { data: existing } = await supabase
+  const { data: existing } = await service
     .from('profiles')
     .select('id')
     .eq('email', body.email)
@@ -164,18 +191,32 @@ async function inviteStaff(req: Request, supabase: any, auth: AuthContext) {
 
   if (existing) return errorResponse('User is already a member', 409);
 
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+  // Get company name for invitation
+  const { data: companyData } = await service
+    .from('companies')
+    .select('name')
+    .eq('id', auth.companyId)
+    .single();
 
-  const { data: invitation, error } = await supabase
+  const { data: callerProfile } = await service
+    .from('profiles')
+    .select('name')
+    .eq('id', auth.userId)
+    .single();
+
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: invitation, error } = await service
     .from('invitations')
     .insert({
       company_id: auth.companyId,
+      branch_id: body.branch_id ?? null,
       email: body.email,
       role: body.role,
       permissions: body.permissions ?? [],
-      branch_ids: body.branch_ids ?? auth.branchIds,
       invited_by: auth.userId,
-      invited_by_name: body.invited_by_name ?? auth.email,
+      invited_by_name: callerProfile?.name ?? auth.email,
+      company_name: companyData?.name ?? 'Unknown',
       status: 'pending',
       expires_at: expiresAt,
     })
@@ -183,14 +224,75 @@ async function inviteStaff(req: Request, supabase: any, auth: AuthContext) {
     .single();
 
   if (error) return errorResponse(error.message);
-
-  // TODO: Send invitation email via SendGrid
-
   return jsonResponse({ invitation }, 201);
 }
 
-async function listInvitations(req: Request, supabase: any, auth: AuthContext) {
-  const { data, error } = await supabase
+async function createStaffDirect(req: Request, auth: AuthContext) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+
+  const { email, password, name, phone, role, permissions, branch_id } = body;
+  if (!email || !password || !name || !role) {
+    return errorResponse('Missing required fields: email, password, name, role');
+  }
+  if (!isValidEmail(email)) return errorResponse('Invalid email format');
+  if (password.length < 8) return errorResponse('Password must be at least 8 characters');
+
+  // Enforce role hierarchy
+  const callerLevel = ROLE_HIERARCHY[auth.role ?? ''] ?? 0;
+  const targetLevel = ROLE_HIERARCHY[role] ?? 0;
+  if (callerLevel <= targetLevel) {
+    return errorResponse('Cannot create a user with same or higher role', 403);
+  }
+
+  const service = createServiceClient();
+
+  // Check not already a member
+  const { data: existing } = await service
+    .from('profiles')
+    .select('id')
+    .eq('email', email)
+    .eq('company_id', auth.companyId)
+    .maybeSingle();
+
+  if (existing) return errorResponse('User is already a member', 409);
+
+  // Create auth user
+  const { data: authData, error: authError } = await service.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: name },
+  });
+
+  if (authError) return errorResponse(authError.message, 400);
+  const userId = authData.user.id;
+  const branchIds = branch_id ? [branch_id] : [];
+
+  const { data: profile, error: profileError } = await service.from('profiles').insert({
+    id: userId,
+    company_id: auth.companyId,
+    email,
+    name: sanitizeString(name),
+    phone: phone ?? null,
+    role,
+    permissions: permissions ?? [],
+    branch_ids: branchIds,
+    active_branch_id: branch_id ?? null,
+    is_active: true,
+  }).select().single();
+
+  if (profileError) {
+    await service.auth.admin.deleteUser(userId);
+    return errorResponse('Failed to create staff profile: ' + profileError.message);
+  }
+
+  return jsonResponse({ staff: profile }, 201);
+}
+
+async function listInvitations(req: Request, auth: AuthContext) {
+  const service = createServiceClient();
+  const { data, error } = await service
     .from('invitations')
     .select('*')
     .eq('company_id', auth.companyId)
@@ -200,12 +302,13 @@ async function listInvitations(req: Request, supabase: any, auth: AuthContext) {
   return jsonResponse({ invitations: data });
 }
 
-async function cancelInvitation(req: Request, supabase: any, auth: AuthContext) {
+async function cancelInvitation(req: Request, auth: AuthContext) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const body = await req.json();
   if (!body.id) return errorResponse('Missing invitation id');
 
-  const { error } = await supabase
+  const service = createServiceClient();
+  const { error } = await service
     .from('invitations')
     .update({ status: 'cancelled' })
     .eq('id', body.id)

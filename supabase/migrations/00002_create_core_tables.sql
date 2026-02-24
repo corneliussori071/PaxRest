@@ -4,6 +4,16 @@
 --              subscriptions, coupons, platform config
 -- ============================================================================
 
+-- Ensure required extensions
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+-- Make extensions schema functions available without qualification
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'gen_random_bytes' AND pronamespace = 'public'::regnamespace) THEN
+    CREATE OR REPLACE FUNCTION public.gen_random_bytes(int) RETURNS bytea
+      LANGUAGE sql AS 'SELECT extensions.gen_random_bytes($1)';
+  END IF;
+END $$;
+
 -- ─── Companies ──────────────────────────────────────────────────────────────
 
 CREATE TABLE companies (

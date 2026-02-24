@@ -38,6 +38,45 @@ export async function api<T = any>(
   });
 
   const json = await res.json();
-  if (!res.ok) throw new Error(json.error ?? `API error ${res.status}`);
+  if (!res.ok) {
+    const msg = typeof json.error === 'string' ? json.error : json.error?.message ?? `API error ${res.status}`;
+    throw new Error(msg);
+  }
+  return json as T;
+}
+
+/* ─── Public (unauthenticated) Edge Function caller ─── */
+export async function publicApi<T = any>(
+  fn: string,
+  action: string,
+  options: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    body?: any;
+    params?: Record<string, string>;
+  } = {},
+): Promise<T> {
+  const { method = 'GET', body, params } = options;
+
+  const url = new URL(`${supabaseUrl}/functions/v1/${fn}/${action}`);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    apikey: supabaseAnonKey,
+  };
+
+  const res = await fetch(url.toString(), {
+    method: body ? 'POST' : method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    const msg = typeof json.error === 'string' ? json.error : json.error?.message ?? `API error ${res.status}`;
+    throw new Error(msg);
+  }
   return json as T;
 }

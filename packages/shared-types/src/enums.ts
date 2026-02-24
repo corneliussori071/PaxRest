@@ -74,7 +74,7 @@ export type OrderItemStatus =
 
 export type KitchenStation = 'kitchen' | 'bar' | 'shisha';
 
-export type OrderSource = 'pos' | 'online' | 'phone';
+export type OrderSource = 'pos' | 'online' | 'phone' | 'kitchen';
 
 // ─── Payment Enums ──────────────────────────────────────────────────────────
 
@@ -210,3 +210,27 @@ export type InventoryUnit =
   | 'bottle'
   | 'can'
   | 'pack';
+
+// ─── Packaging & Weight Enums ───────────────────────────────────────────────
+
+export type PackagingType = 'single' | 'pack';
+
+export type WeightUnit = 'kg' | 'g' | 'lb' | 'oz';
+
+// ─── Kitchen / Meal Enums ───────────────────────────────────────────────────
+
+export type MealAvailability = 'available' | 'low' | 'sold_out';
+
+export type MealAssignmentStatus =
+  | 'pending'
+  | 'accepted'
+  | 'in_progress'
+  | 'completed'
+  | 'rejected';
+
+export type IngredientRequestStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'fulfilled'
+  | 'cancelled';

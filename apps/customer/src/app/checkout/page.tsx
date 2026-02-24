@@ -26,14 +26,22 @@ export default function CheckoutPage() {
     if (items.length === 0) return;
     setLoading(true);
     try {
-      const orderItems = items.map((item) => ({
-        menu_item_id: item.menuItemId,
-        variant_id: item.variantId ?? null,
-        quantity: item.quantity,
-        unit_price: item.basePrice + (item.variantPriceAdjustment ?? 0),
-        modifiers: item.modifiers.map((m) => ({ modifier_id: m.id, name: m.name, price: m.price })),
-        notes: item.notes || null,
-      }));
+      const orderItems = items.map((item) => {
+        const extrasTotal = item.selectedExtras?.reduce((s, e) => s + e.price, 0) ?? 0;
+        const ingredientsDiscount = item.removedIngredients?.reduce((s, r) => s + r.cost_contribution, 0) ?? 0;
+        return {
+          menu_item_id: item.menuItemId,
+          variant_id: item.variantId ?? null,
+          quantity: item.quantity,
+          unit_price: item.basePrice + (item.variantPriceAdjustment ?? 0),
+          modifiers: item.modifiers.map((m) => ({ modifier_id: m.id, name: m.name, price: m.price })),
+          removed_ingredients: item.removedIngredients?.map((r) => ({ ingredient_id: r.ingredient_id, name: r.name, cost_contribution: r.cost_contribution })) ?? [],
+          selected_extras: item.selectedExtras?.map((e) => ({ extra_id: e.id, name: e.name, price: e.price })) ?? [],
+          extras_total: extrasTotal,
+          ingredients_discount: ingredientsDiscount,
+          notes: item.notes || null,
+        };
+      });
 
       const res = await publicApi<{ id: string; order_number: number }>('/orders/create', {
         method: 'POST',
@@ -98,19 +106,33 @@ export default function CheckoutPage() {
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" fontWeight={600} gutterBottom>Order Review</Typography>
-          {items.map((item, idx) => (
-            <Stack key={idx} direction="row" justifyContent="space-between" sx={{ py: 0.5 }}>
-              <Typography variant="body2">
-                {item.quantity}× {item.name}
-                {item.variantLabel ? ` (${item.variantLabel})` : ''}
-              </Typography>
-              <Typography variant="body2" fontWeight={600}>
-                {formatCurrency(
-                  (item.basePrice + (item.variantPriceAdjustment ?? 0) + item.modifiers.reduce((s, m) => s + m.price, 0)) * item.quantity,
+          {items.map((item, idx) => {
+            const extrasTotal = item.selectedExtras?.reduce((s, e) => s + e.price, 0) ?? 0;
+            const ingredientsDiscount = item.removedIngredients?.reduce((s, r) => s + r.cost_contribution, 0) ?? 0;
+            const lineTotal = (item.basePrice + (item.variantPriceAdjustment ?? 0) + item.modifiers.reduce((s, m) => s + m.price, 0) + extrasTotal - ingredientsDiscount) * item.quantity;
+            return (
+              <Box key={idx} sx={{ py: 0.5 }}>
+                <Stack direction="row" justifyContent="space-between">
+                  <Typography variant="body2">
+                    {item.quantity}× {item.name}
+                    {item.variantLabel ? ` (${item.variantLabel})` : ''}
+                  </Typography>
+                  <Typography variant="body2" fontWeight={600}>{formatCurrency(lineTotal)}</Typography>
+                </Stack>
+                {item.removedIngredients && item.removedIngredients.length > 0 && (
+                  <Typography variant="caption" color="error.main" sx={{ pl: 2 }}>
+                    Remove: {item.removedIngredients.map((r) => r.name).join(', ')}
+                    {ingredientsDiscount > 0 && ` (-${formatCurrency(ingredientsDiscount)})`}
+                  </Typography>
                 )}
-              </Typography>
-            </Stack>
-          ))}
+                {item.selectedExtras && item.selectedExtras.length > 0 && (
+                  <Typography variant="caption" color="success.main" sx={{ pl: 2 }}>
+                    Extras: {item.selectedExtras.map((e) => `${e.name} +${formatCurrency(e.price)}`).join(', ')}
+                  </Typography>
+                )}
+              </Box>
+            );
+          })}
           <Divider sx={{ my: 1.5 }} />
           <Stack direction="row" justifyContent="space-between">
             <Typography>Subtotal</Typography>

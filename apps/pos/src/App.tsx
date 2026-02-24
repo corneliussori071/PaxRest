@@ -18,6 +18,7 @@ import TablesPage from '@/pages/tables/TablesPage';
 import DeliveryPage from '@/pages/delivery/DeliveryPage';
 import ShiftsPage from '@/pages/shifts/ShiftsPage';
 import StaffPage from '@/pages/staff/StaffPage';
+import BranchesPage from '@/pages/branches/BranchesPage';
 import CustomersPage from '@/pages/customers/CustomersPage';
 import SuppliersPage from '@/pages/suppliers/SuppliersPage';
 import ReportsPage from '@/pages/reports/ReportsPage';
@@ -62,6 +63,7 @@ export default function App() {
               <Route path="/delivery" element={<DeliveryPage />} />
               <Route path="/shifts" element={<ShiftsPage />} />
               <Route path="/staff" element={<StaffPage />} />
+              <Route path="/branches" element={<BranchesPage />} />
               <Route path="/customers" element={<CustomersPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

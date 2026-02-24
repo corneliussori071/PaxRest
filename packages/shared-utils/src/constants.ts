@@ -1,4 +1,4 @@
-import type { CompanyRole, Permission, OrderStatus, DeliveryStatus, KitchenStation } from '@paxrest/shared-types';
+import type { CompanyRole, Permission, OrderStatus, DeliveryStatus, KitchenStation, MealAssignmentStatus, MealAvailability, IngredientRequestStatus } from '@paxrest/shared-types';
 
 // ─── Default Pagination ─────────────────────────────────────────────────────
 
@@ -105,12 +105,67 @@ export const STATION_LABELS: Record<KitchenStation, string> = {
   shisha: 'Shisha Lounge',
 };
 
+// ─── Meal Availability Labels ───────────────────────────────────────────────
+
+export const MEAL_AVAILABILITY_LABELS: Record<MealAvailability, string> = {
+  available: 'Available',
+  low: 'Low Stock',
+  sold_out: 'Sold Out',
+};
+
+export const MEAL_AVAILABILITY_COLORS: Record<MealAvailability, string> = {
+  available: 'success',
+  low: 'warning',
+  sold_out: 'error',
+};
+
+// ─── Meal Assignment Status Labels ──────────────────────────────────────────
+
+export const MEAL_ASSIGNMENT_STATUS_LABELS: Record<MealAssignmentStatus, string> = {
+  pending: 'Pending',
+  accepted: 'Accepted',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+  rejected: 'Rejected',
+};
+
+// ─── Ingredient Request Status Labels ───────────────────────────────────────
+
+export const INGREDIENT_REQUEST_STATUS_LABELS: Record<IngredientRequestStatus, string> = {
+  pending: 'Pending',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  fulfilled: 'Fulfilled',
+  cancelled: 'Cancelled',
+};
+
+// ─── Packaging Type Labels ──────────────────────────────────────────────────
+
+export const PACKAGING_TYPE_LABELS = {
+  single: 'Single Item',
+  pack: 'Pack / Bundle',
+} as const;
+
+// ─── Inventory Categories ───────────────────────────────────────────────────
+
+export const INVENTORY_CATEGORIES = [
+  'Proteins', 'Vegetables', 'Fruits', 'Dairy', 'Grains',
+  'Spices & Seasonings', 'Oils & Fats', 'Beverages', 'Frozen',
+  'Canned Goods', 'Bakery', 'Condiments', 'Cleaning Supplies',
+  'Packaging', 'Other',
+] as const;
+
 // ─── File Upload Limits ─────────────────────────────────────────────────────
 
 export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+export const MAX_MEDIA_SIZE = 15 * 1024 * 1024; // 15 MB (for menu media)
+export const MAX_CSV_SIZE = 10 * 1024 * 1024; // 10 MB
 export const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+export const ALLOWED_VIDEO_TYPES = ['video/mp4', 'video/webm'];
+export const ALLOWED_MEDIA_TYPES = [...ALLOWED_IMAGE_TYPES, 'image/gif', ...ALLOWED_VIDEO_TYPES];
 export const ALLOWED_DOCUMENT_TYPES = ['application/pdf', 'text/csv'];
 export const ALLOWED_FILE_TYPES = [...ALLOWED_IMAGE_TYPES, ...ALLOWED_DOCUMENT_TYPES];
+export const ALLOWED_CSV_TYPES = ['text/csv', 'application/vnd.ms-excel'];
 
 // ─── Subscription Tier Hierarchy ────────────────────────────────────────────
 

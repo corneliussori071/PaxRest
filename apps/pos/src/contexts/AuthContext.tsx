@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import type { Profile, Company, Branch } from '@paxrest/shared-types';
-import { supabase, api } from '@/lib/supabase';
+import { supabase, api, publicApi } from '@/lib/supabase';
 
 interface AuthState {
   session: Session | null;
@@ -19,7 +19,7 @@ interface AuthContextValue extends AuthState {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (data: {
     email: string; password: string; fullName: string;
-    companyName: string; branchName: string; phone?: string;
+    companyName: string; phone?: string;
   }) => Promise<void>;
   signOut: () => Promise<void>;
   switchBranch: (branchId: string) => void;
@@ -86,24 +86,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signUp = async (data: {
     email: string; password: string; fullName: string;
-    companyName: string; branchName: string; phone?: string;
+    companyName: string; phone?: string;
   }) => {
-    // Create auth user first
-    const { data: authData, error: authErr } = await supabase.auth.signUp({
-      email: data.email,
-      password: data.password,
-    });
-    if (authErr) throw authErr;
-
-    // Call register edge function
-    await api('auth', 'register', {
+    // Call register edge function (handles user creation server-side)
+    await publicApi('auth', 'register', {
       body: {
+        email: data.email,
+        password: data.password,
         company_name: data.companyName,
-        branch_name: data.branchName,
         full_name: data.fullName,
         phone: data.phone,
       },
     });
+
+    // Sign in the newly created user
+    const { error: signInErr } = await supabase.auth.signInWithPassword({
+      email: data.email,
+      password: data.password,
+    });
+    if (signInErr) throw signInErr;
 
     await fetchProfile();
   };

@@ -1,4 +1,4 @@
-import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
+﻿import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import {
   corsResponse,
   jsonResponse,
@@ -38,7 +38,15 @@ serve(async (req) => {
   }
 });
 
-// ─── Register: Create company + owner profile ───────────────────────────────
+const OWNER_PERMISSIONS = [
+  'manage_menu', 'manage_orders', 'manage_inventory', 'manage_staff',
+  'manage_tables', 'manage_delivery', 'manage_settings', 'manage_shifts',
+  'manage_loyalty', 'view_reports', 'export_reports', 'view_audit',
+  'manage_wastage', 'manage_suppliers', 'manage_purchases',
+  'manage_branches', 'process_pos', 'admin_panel', 'view_kitchen',
+];
+
+// --- Register: Create company + owner profile (no branch) ---
 
 async function handleRegister(req: Request) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
@@ -53,7 +61,6 @@ async function handleRegister(req: Request) {
 
   const service = createServiceClient();
 
-  // Check if already registered
   const { data: existing } = await service
     .from('profiles')
     .select('id')
@@ -62,7 +69,6 @@ async function handleRegister(req: Request) {
 
   if (existing) return errorResponse('Email already registered', 409);
 
-  // Create auth user
   const { data: authData, error: authError } = await service.auth.admin.createUser({
     email,
     password,
@@ -73,15 +79,14 @@ async function handleRegister(req: Request) {
   if (authError) return errorResponse(authError.message, 400);
   const userId = authData.user.id;
 
-  // Create company
   const slug = sanitizeString(company_name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   const { data: company, error: companyError } = await service
     .from('companies')
     .insert({
       name: sanitizeString(company_name),
       slug,
+      owner_id: userId,
       subscription_tier: 'starter',
-      subscription_status: 'active',
     })
     .select()
     .single();
@@ -91,44 +96,20 @@ async function handleRegister(req: Request) {
     return errorResponse('Failed to create company: ' + companyError.message);
   }
 
-  // Create default branch
-  const { data: branch, error: branchError } = await service
-    .from('branches')
-    .insert({
-      company_id: company.id,
-      name: 'Main Branch',
-      slug: 'main',
-    })
-    .select()
-    .single();
-
-  if (branchError) {
-    await service.from('companies').delete().eq('id', company.id);
-    await service.auth.admin.deleteUser(userId);
-    return errorResponse('Failed to create branch: ' + branchError.message);
-  }
-
-  // Create owner profile
   const { error: profileError } = await service.from('profiles').insert({
     id: userId,
     company_id: company.id,
     email,
-    full_name: sanitizeString(full_name),
+    name: sanitizeString(full_name),
     phone: phone ?? null,
     role: 'owner',
-    permissions: [
-      'manage_menu', 'manage_orders', 'manage_inventory', 'manage_staff',
-      'manage_tables', 'manage_delivery', 'manage_settings', 'manage_shifts',
-      'manage_loyalty', 'manage_reports', 'view_audit', 'manage_wastage',
-      'manage_suppliers', 'manage_purchases',
-    ],
-    branch_ids: [branch.id],
-    active_branch_id: branch.id,
+    permissions: OWNER_PERMISSIONS,
+    branch_ids: [],
+    active_branch_id: null,
     is_active: true,
   });
 
   if (profileError) {
-    await service.from('branches').delete().eq('id', branch.id);
     await service.from('companies').delete().eq('id', company.id);
     await service.auth.admin.deleteUser(userId);
     return errorResponse('Failed to create profile: ' + profileError.message);
@@ -137,11 +118,10 @@ async function handleRegister(req: Request) {
   return jsonResponse({
     user: { id: userId, email, full_name },
     company: { id: company.id, name: company.name, slug: company.slug },
-    branch: { id: branch.id, name: branch.name },
   }, 201);
 }
 
-// ─── Complete Registration (from pending) ───────────────────────────────────
+// --- Complete Registration (from pending) ---
 
 async function handleCompleteRegistration(req: Request) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
@@ -150,7 +130,7 @@ async function handleCompleteRegistration(req: Request) {
   if (!registration_id || !password) return errorResponse('Missing registration_id or password');
 
   const service = createServiceClient();
-  const { data: pending, error } = await service
+  const { data: pending } = await service
     .from('pending_registrations')
     .select('*')
     .eq('id', registration_id)
@@ -159,13 +139,11 @@ async function handleCompleteRegistration(req: Request) {
 
   if (!pending) return errorResponse('Registration not found or expired', 404);
 
-  // Check if expired
   if (new Date(pending.expires_at) < new Date()) {
     await service.from('pending_registrations').update({ status: 'expired' }).eq('id', registration_id);
     return errorResponse('Registration link has expired', 410);
   }
 
-  // Proceed like register but using pending data
   const { data: authData, error: authError } = await service.auth.admin.createUser({
     email: pending.email,
     password,
@@ -174,19 +152,12 @@ async function handleCompleteRegistration(req: Request) {
   });
 
   if (authError) return errorResponse(authError.message, 400);
-
   const userId = authData.user.id;
   const slug = pending.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
   const { data: company } = await service
     .from('companies')
-    .insert({ name: pending.company_name, slug, subscription_tier: 'starter', subscription_status: 'active' })
-    .select()
-    .single();
-
-  const { data: branch } = await service
-    .from('branches')
-    .insert({ company_id: company!.id, name: 'Main Branch', slug: 'main' })
+    .insert({ name: pending.company_name, slug, owner_id: userId, subscription_tier: 'starter' })
     .select()
     .single();
 
@@ -194,25 +165,19 @@ async function handleCompleteRegistration(req: Request) {
     id: userId,
     company_id: company!.id,
     email: pending.email,
-    full_name: pending.company_name,
+    name: pending.company_name,
     role: 'owner',
-    permissions: [
-      'manage_menu', 'manage_orders', 'manage_inventory', 'manage_staff',
-      'manage_tables', 'manage_delivery', 'manage_settings', 'manage_shifts',
-      'manage_loyalty', 'manage_reports', 'view_audit', 'manage_wastage',
-      'manage_suppliers', 'manage_purchases',
-    ],
-    branch_ids: [branch!.id],
-    active_branch_id: branch!.id,
+    permissions: OWNER_PERMISSIONS,
+    branch_ids: [],
+    active_branch_id: null,
     is_active: true,
   });
 
   await service.from('pending_registrations').update({ status: 'completed' }).eq('id', registration_id);
-
-  return jsonResponse({ user: { id: userId, email: pending.email }, company, branch }, 201);
+  return jsonResponse({ user: { id: userId, email: pending.email }, company }, 201);
 }
 
-// ─── Accept Invitation ──────────────────────────────────────────────────────
+// --- Accept Invitation ---
 
 async function handleAcceptInvitation(req: Request) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
@@ -237,7 +202,6 @@ async function handleAcceptInvitation(req: Request) {
     return errorResponse('Invitation has expired', 410);
   }
 
-  // Create auth user
   const { data: authData, error: authError } = await service.auth.admin.createUser({
     email: invitation.email,
     password,
@@ -246,24 +210,22 @@ async function handleAcceptInvitation(req: Request) {
   });
 
   if (authError) return errorResponse(authError.message, 400);
-
   const userId = authData.user.id;
+  const branchIds = invitation.branch_id ? [invitation.branch_id] : [];
 
-  // Create profile
   await service.from('profiles').insert({
     id: userId,
     company_id: invitation.company_id,
     email: invitation.email,
-    full_name: sanitizeString(full_name),
+    name: sanitizeString(full_name),
     role: invitation.role,
     permissions: invitation.permissions ?? [],
-    branch_ids: invitation.branch_ids ?? [],
-    active_branch_id: invitation.branch_ids?.[0] ?? null,
+    branch_ids: branchIds,
+    active_branch_id: invitation.branch_id ?? null,
     is_active: true,
   });
 
-  // Mark invitation as accepted
-  await service.from('invitations').update({ status: 'accepted', accepted_at: new Date().toISOString() }).eq('id', invitation_id);
+  await service.from('invitations').update({ status: 'accepted' }).eq('id', invitation_id);
 
   return jsonResponse({
     user: { id: userId, email: invitation.email, full_name },
@@ -272,7 +234,7 @@ async function handleAcceptInvitation(req: Request) {
   }, 201);
 }
 
-// ─── Get Profile ────────────────────────────────────────────────────────────
+// --- Get Profile ---
 
 async function handleGetProfile(req: Request) {
   if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
@@ -281,24 +243,37 @@ async function handleGetProfile(req: Request) {
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) return errorResponse('Unauthorized', 401);
 
-  const { data: profile } = await supabase
+  const service = createServiceClient();
+
+  const { data: profile } = await service
     .from('profiles')
-    .select('*, companies(id, name, slug, currency, country, timezone, subscription_tier, subscription_status, settings)')
+    .select('*')
     .eq('id', user.id)
     .single();
 
   if (!profile) return errorResponse('Profile not found', 404);
 
-  // Get branch details
-  const { data: branches } = await supabase
-    .from('branches')
-    .select('id, name, slug, address, city, phone, is_active')
-    .in('id', profile.branch_ids ?? []);
+  const { data: company } = await service
+    .from('companies')
+    .select('*')
+    .eq('id', profile.company_id)
+    .single();
 
-  return jsonResponse({ profile, branches: branches ?? [] });
+  // Return all company branches
+  const { data: branches } = await service
+    .from('branches')
+    .select('*')
+    .eq('company_id', profile.company_id)
+    .order('created_at', { ascending: true });
+
+  return jsonResponse({
+    profile,
+    company: company ?? null,
+    branches: branches ?? [],
+  });
 }
 
-// ─── Update Profile ─────────────────────────────────────────────────────────
+// --- Update Profile ---
 
 async function handleUpdateProfile(req: Request) {
   if (req.method !== 'PUT') return errorResponse('Method not allowed', 405);
@@ -308,13 +283,14 @@ async function handleUpdateProfile(req: Request) {
   if (error || !user) return errorResponse('Unauthorized', 401);
 
   const body = await req.json();
+  const service = createServiceClient();
   const updates: Record<string, unknown> = {};
 
-  if (body.full_name) updates.full_name = sanitizeString(body.full_name);
+  if (body.name) updates.name = sanitizeString(body.name);
   if (body.phone !== undefined) updates.phone = body.phone;
   if (body.avatar_url !== undefined) updates.avatar_url = body.avatar_url;
 
-  const { data, error: updateError } = await supabase
+  const { data, error: updateError } = await service
     .from('profiles')
     .update(updates)
     .eq('id', user.id)
@@ -322,11 +298,10 @@ async function handleUpdateProfile(req: Request) {
     .single();
 
   if (updateError) return errorResponse(updateError.message);
-
   return jsonResponse({ profile: data });
 }
 
-// ─── Switch Active Branch ───────────────────────────────────────────────────
+// --- Switch Active Branch ---
 
 async function handleSwitchBranch(req: Request) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
@@ -338,21 +313,31 @@ async function handleSwitchBranch(req: Request) {
   const { branch_id } = await req.json();
   if (!branch_id) return errorResponse('Missing branch_id');
 
-  // Verify access
-  const { data: profile } = await supabase
+  const service = createServiceClient();
+  const { data: profile } = await service
     .from('profiles')
-    .select('branch_ids')
+    .select('role, company_id, branch_ids')
     .eq('id', user.id)
     .single();
 
-  if (!profile?.branch_ids?.includes(branch_id)) {
+  if (!profile) return errorResponse('Profile not found', 404);
+
+  const isGlobal = profile.role === 'owner' || profile.role === 'general_manager';
+
+  if (!isGlobal && !profile.branch_ids?.includes(branch_id)) {
     return errorResponse('You do not have access to this branch', 403);
   }
 
-  await supabase
-    .from('profiles')
-    .update({ active_branch_id: branch_id })
-    .eq('id', user.id);
+  if (isGlobal) {
+    const { data: branch } = await service
+      .from('branches')
+      .select('id')
+      .eq('id', branch_id)
+      .eq('company_id', profile.company_id)
+      .maybeSingle();
+    if (!branch) return errorResponse('Branch not found in your company', 404);
+  }
 
+  await service.from('profiles').update({ active_branch_id: branch_id }).eq('id', user.id);
   return jsonResponse({ active_branch_id: branch_id });
 }

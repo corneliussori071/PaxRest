@@ -8,6 +8,9 @@ import { api } from '@/lib/supabase';
    POS Cart Store — manages the active order being built
    ═══════════════════════════════════════════════════ */
 
+export interface CartItemExtra { id: string; name: string; price: number }
+export interface CartItemRemovedIngredient { ingredient_id: string; name: string; cost_contribution: number }
+
 export interface CartItem {
   menuItemId: string;
   variantId?: string;
@@ -17,6 +20,8 @@ export interface CartItem {
   quantity: number;
   modifiers: { id: string; name: string; price: number }[];
   notes?: string;
+  removedIngredients?: CartItemRemovedIngredient[];
+  selectedExtras?: CartItemExtra[];
 }
 
 interface CartState {
@@ -61,7 +66,9 @@ export const useCartStore = create<CartState & CartActions>((set, get) => ({
     const key = `${item.menuItemId}_${item.variantId ?? ''}`;
     const existing = s.items.find(
       (i) => `${i.menuItemId}_${i.variantId ?? ''}` === key
-        && JSON.stringify(i.modifiers) === JSON.stringify(item.modifiers),
+        && JSON.stringify(i.modifiers) === JSON.stringify(item.modifiers)
+        && JSON.stringify(i.removedIngredients ?? []) === JSON.stringify(item.removedIngredients ?? [])
+        && JSON.stringify(i.selectedExtras ?? []) === JSON.stringify(item.selectedExtras ?? []),
     );
     if (existing) {
       return { items: s.items.map((i) => i === existing ? { ...i, quantity: i.quantity + 1 } : i) };
@@ -99,7 +106,9 @@ export const useCartStore = create<CartState & CartActions>((set, get) => ({
 
   subtotal: () => get().items.reduce((sum, i) => {
     const modTotal = i.modifiers.reduce((m, mod) => m + mod.price, 0);
-    return sum + (i.basePrice + modTotal) * i.quantity;
+    const extrasTotal = (i.selectedExtras ?? []).reduce((s, e) => s + e.price, 0);
+    const ingredientsDiscount = (i.removedIngredients ?? []).reduce((s, r) => s + r.cost_contribution, 0);
+    return sum + (i.basePrice + modTotal + extrasTotal - ingredientsDiscount) * i.quantity;
   }, 0),
 
   total: () => {
@@ -139,6 +148,43 @@ export const useMenuStore = create<MenuState & MenuActions>((set, get) => ({
       set({ categories: data.categories, loading: false, lastFetched: Date.now() });
     } catch (err) {
       console.error('Failed to load menu:', err);
+      set({ loading: false });
+    }
+  },
+}));
+
+/* ═══════════════════════════════════════════════════
+   Available Meals Store — kitchen-prepared meals
+   ═══════════════════════════════════════════════════ */
+
+export interface AvailableMeal {
+  id: string;
+  menu_item_id: string;
+  menu_item_name?: string;
+  quantity_available: number;
+  menu_items?: { name: string; base_price: number; media_url?: string };
+}
+
+interface AvailableMealsState {
+  meals: AvailableMeal[];
+  loading: boolean;
+}
+
+interface AvailableMealsActions {
+  fetchMeals: (branchId: string) => Promise<void>;
+}
+
+export const useAvailableMealsStore = create<AvailableMealsState & AvailableMealsActions>((set) => ({
+  meals: [],
+  loading: false,
+
+  fetchMeals: async (branchId: string) => {
+    set({ loading: true });
+    try {
+      const data = await api<{ meals: AvailableMeal[] }>('kitchen', 'available-meals', { params: {}, branchId });
+      set({ meals: data.meals ?? [], loading: false });
+    } catch (err) {
+      console.error('Failed to load available meals:', err);
       set({ loading: false });
     }
   },

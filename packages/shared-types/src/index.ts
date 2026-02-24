@@ -7,4 +7,4 @@ export * from './orders';
 export * from './inventory';
 export * from './delivery';
 export * from './operational';
-export * from './api';
+export * from './api';export * from './kitchen';
