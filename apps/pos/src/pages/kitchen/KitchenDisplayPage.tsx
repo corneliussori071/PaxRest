@@ -433,7 +433,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
    ═══════════════════════════════════════════════════════ */
 function MakeDishTab({ branchId, currency }: { branchId: string; currency: string }) {
   const { user } = useAuth();
-  const { data: menuData, loading } = useApi<{ items: any[] }>('menu', 'full-menu', undefined, [branchId]);
+  const { data: menuData, loading } = useApi<any>('menu', 'full', undefined, [branchId]);
 
   // Selected menu item IDs
   const [selected, setSelected] = useState<Set<string>>(new Set());

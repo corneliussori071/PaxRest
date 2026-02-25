@@ -342,7 +342,12 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
       ) : null,
     },
     { id: 'name', label: 'Menu Item', sortable: true },
-    { id: 'base_price', label: 'Base Price', render: (r) => formatCurrency(r.base_price, currency), width: 100, sortable: true },
+    { id: 'base_price', label: 'Price', render: (r) => {
+      const ingCost = (r.menu_item_ingredients ?? []).reduce((s: number, i: any) => s + (Number(i.cost_per_unit ?? i.price ?? 0)), 0);
+      const extCost = (r.menu_item_extras ?? []).reduce((s: number, e: any) => s + (Number(e.price ?? 0)), 0);
+      const total = (Number(r.base_price) || 0) + ingCost + extCost;
+      return formatCurrency(total, currency);
+    }, width: 100, sortable: true },
     { id: 'station', label: 'Station', width: 90 },
     {
       id: 'availability_status', label: 'Status', width: 110,
