@@ -17,6 +17,15 @@ export async function api<T = any>(
   } = {},
 ): Promise<T> {
   const { method = 'GET', body, params, branchId } = options;
+
+  // Force token refresh if expired by calling getUser() first,
+  // then get the (now-refreshed) session for the access_token.
+  const { error: userError } = await supabase.auth.getUser();
+  if (userError) {
+    // getUser failed — try refreshing the session explicitly
+    const { error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError) throw new Error('Not authenticated — please log in again');
+  }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
 
