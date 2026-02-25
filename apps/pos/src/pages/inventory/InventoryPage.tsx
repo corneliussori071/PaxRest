@@ -8,6 +8,8 @@ import {
   Stack, Divider, Badge,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
 import WarningIcon from '@mui/icons-material/Warning';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
@@ -31,7 +33,6 @@ interface ItemForm {
   quantity: number;
   min_stock_level: number;
   cost_per_unit: number;
-  selling_price: number;
   packaging_type: PackagingType;
   items_per_pack: number;
   category: string;
@@ -42,7 +43,7 @@ interface ItemForm {
 
 const emptyForm: ItemForm = {
   name: '', barcode: '', unit: 'pcs', quantity: 0, min_stock_level: 10,
-  cost_per_unit: 0, selling_price: 0, packaging_type: 'single',
+  cost_per_unit: 0, packaging_type: 'single',
   items_per_pack: 1, category: '', storage_location: '', weight_value: '', weight_unit: '',
 };
 
@@ -99,7 +100,7 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
         setForm({
           id: res.item.id, name: res.item.name, barcode: res.item.barcode ?? '',
           unit: res.item.unit, quantity: res.item.quantity, min_stock_level: res.item.min_stock_level,
-          cost_per_unit: res.item.cost_per_unit, selling_price: res.item.selling_price ?? 0,
+          cost_per_unit: res.item.cost_per_unit,
           packaging_type: res.item.packaging_type, items_per_pack: res.item.items_per_pack,
           category: res.item.category ?? '', storage_location: res.item.storage_location ?? '',
           weight_value: res.item.weight_value?.toString() ?? '', weight_unit: res.item.weight_unit ?? '',
@@ -128,7 +129,6 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
           quantity: form.quantity,
           min_stock_level: form.min_stock_level,
           cost_per_unit: form.cost_per_unit,
-          selling_price: form.selling_price,
           packaging_type: form.packaging_type,
           items_per_pack: form.packaging_type === 'pack' ? form.items_per_pack : 1,
           category: form.category || null,
@@ -166,7 +166,7 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
     setForm({
       id: row.id, name: row.name, barcode: row.barcode ?? '',
       unit: row.unit, quantity: row.quantity, min_stock_level: row.min_stock_level,
-      cost_per_unit: row.cost_per_unit, selling_price: row.selling_price ?? 0,
+      cost_per_unit: row.cost_per_unit,
       packaging_type: row.packaging_type ?? 'single', items_per_pack: row.items_per_pack ?? 1,
       category: row.category ?? '', storage_location: row.storage_location ?? '',
       weight_value: row.weight_value?.toString() ?? '', weight_unit: row.weight_unit ?? '',
@@ -177,6 +177,15 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
   const costPerItem = form.packaging_type === 'pack' && form.items_per_pack > 0
     ? (form.cost_per_unit / form.items_per_pack).toFixed(2)
     : form.cost_per_unit.toFixed(2);
+
+  const handleDelete = async (item: any) => {
+    if (!window.confirm(`Delete "${item.name}"? This will deactivate the item.`)) return;
+    try {
+      await api('inventory', 'item', { method: 'DELETE', params: { id: item.id }, branchId });
+      toast.success('Item deleted');
+      refetch();
+    } catch (err: any) { toast.error(err.message); }
+  };
 
   const columns: Column[] = [
     { id: 'name', label: 'Item', render: (r) => (
@@ -193,11 +202,14 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
     )},
     { id: 'packaging_type', label: 'Type', width: 80, render: (r) => r.packaging_type === 'pack' ? `Pack (${r.items_per_pack})` : 'Single' },
     { id: 'cost_per_unit', label: 'Cost', width: 100, render: (r) => formatCurrency(r.cost_per_unit, currency) },
-    { id: 'selling_price', label: 'Sell Price', width: 100, render: (r) => formatCurrency(r.selling_price ?? 0, currency) },
-    { id: 'actions', label: '', width: 90, sortable: false, render: (r) => (
-      <Button size="small" onClick={(e) => { e.stopPropagation(); setSelected(r); setAdjustForm({ quantity_change: 0, reason: '' }); setAdjustDialog(true); }}>
-        Adjust
-      </Button>
+    { id: 'actions', label: '', width: 180, sortable: false, render: (r) => (
+      <Stack direction="row" spacing={0.5}>
+        <Tooltip title="Edit"><IconButton size="small" onClick={(e) => { e.stopPropagation(); openEditItem(r); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
+        <Button size="small" onClick={(e) => { e.stopPropagation(); setSelected(r); setAdjustForm({ quantity_change: 0, reason: '' }); setAdjustDialog(true); }}>
+          Adjust
+        </Button>
+        <Tooltip title="Delete"><IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); handleDelete(r); }}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
+      </Stack>
     )},
   ];
 
@@ -293,7 +305,7 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
 
             {/* Pricing */}
             <Grid size={12}><Divider><Typography variant="caption">Pricing</Typography></Divider></Grid>
-            <Grid size={form.packaging_type === 'pack' ? 4 : 6}>
+            <Grid size={form.packaging_type === 'pack' ? 6 : 12}>
               <TextField
                 fullWidth label={form.packaging_type === 'pack' ? 'Cost per Pack' : 'Cost per Unit'}
                 type="number" value={form.cost_per_unit}
@@ -302,20 +314,12 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
               />
             </Grid>
             {form.packaging_type === 'pack' && (
-              <Grid size={4}>
+              <Grid size={6}>
                 <TextField fullWidth label="Cost per Item" value={costPerItem} disabled
                   slotProps={{ input: { startAdornment: <InputAdornment position="start">{currency}</InputAdornment> }}}
                 />
               </Grid>
             )}
-            <Grid size={form.packaging_type === 'pack' ? 4 : 6}>
-              <TextField
-                fullWidth label="Selling Price" type="number"
-                value={form.selling_price}
-                onChange={(e) => updateForm({ selling_price: Number(e.target.value) })}
-                slotProps={{ input: { startAdornment: <InputAdornment position="start">{currency}</InputAdornment> }}}
-              />
-            </Grid>
 
             {/* Quantity & Threshold */}
             <Grid size={12}><Divider><Typography variant="caption">Stock Levels</Typography></Divider></Grid>

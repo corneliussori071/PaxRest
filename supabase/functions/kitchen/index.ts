@@ -41,6 +41,12 @@ serve(async (req) => {
         return await respondAssignment(req, supabase, auth, branchId);
       case 'assignment-complete':
         return await completeAssignment(req, supabase, auth, branchId);
+      case 'assignment-update':
+        return await updateAssignment(req, supabase, auth, branchId);
+      case 'assignment-delete':
+        return await deleteAssignment(req, supabase, auth, branchId);
+      case 'staff-chefs':
+        return await listChefs(req, supabase, auth, branchId);
 
       // ─── New: Available Meals ───
       case 'available-meals':
@@ -260,31 +266,47 @@ async function createAssignment(req: Request, supabase: any, auth: AuthContext, 
   }
   const body = await req.json();
 
-  if (!body.menu_item_id || !body.menu_item_name) {
-    return errorResponse('Missing menu_item_id or menu_item_name');
+  // For batch mode, items array is required; for single mode, menu_item_id + menu_item_name
+  if (!body.items && (!body.menu_item_id || !body.menu_item_name)) {
+    return errorResponse('Missing items array, or menu_item_id/menu_item_name');
   }
 
-  const { data, error } = await supabase
-    .from('meal_assignments')
-    .insert({
-      company_id: auth.companyId,
-      branch_id: branchId,
-      menu_item_id: body.menu_item_id,
-      menu_item_name: sanitizeString(body.menu_item_name),
-      assigned_to: body.assigned_to ?? auth.userId,
-      assigned_to_name: body.assigned_to_name ?? auth.email,
-      assigned_by: auth.userId,
-      assigned_by_name: body.assigned_by_name ?? auth.email,
-      quantity: body.quantity ?? 1,
-      status: 'pending',
-      notes: body.notes ? sanitizeString(body.notes) : null,
-      station: body.station ?? 'kitchen',
-    })
-    .select()
-    .single();
+  // Support batch creation (array of items)
+  const items = Array.isArray(body.items) ? body.items : [body];
+  const created: any[] = [];
 
-  if (error) return errorResponse(error.message);
-  return jsonResponse({ assignment: data }, 201);
+  for (const item of items) {
+    const mid = item.menu_item_id ?? body.menu_item_id;
+    const mname = item.menu_item_name ?? body.menu_item_name;
+    if (!mid || !mname) continue;
+
+    const { data, error } = await supabase
+      .from('meal_assignments')
+      .insert({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        menu_item_id: mid,
+        menu_item_name: sanitizeString(mname),
+        assigned_to: item.assigned_to ?? body.assigned_to ?? auth.userId,
+        assigned_to_name: item.assigned_to_name ?? body.assigned_to_name ?? auth.email,
+        assigned_by: auth.userId,
+        assigned_by_name: body.assigned_by_name ?? auth.email,
+        quantity: item.quantity ?? body.quantity ?? 1,
+        status: 'pending',
+        notes: item.notes ? sanitizeString(item.notes) : (body.notes ? sanitizeString(body.notes) : null),
+        station: item.station ?? body.station ?? 'kitchen',
+        expected_completion_time: item.expected_completion_time ?? body.expected_completion_time ?? null,
+        excluded_ingredients: item.excluded_ingredients ?? [],
+        excluded_extras: item.excluded_extras ?? [],
+      })
+      .select()
+      .single();
+
+    if (error) return errorResponse(error.message);
+    created.push(data);
+  }
+
+  return jsonResponse({ assignments: created }, 201);
 }
 
 async function respondAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
@@ -302,6 +324,9 @@ async function respondAssignment(req: Request, supabase: any, auth: AuthContext,
   const updates: Record<string, unknown> = { status: body.status };
   if (body.status === 'accepted' || body.status === 'in_progress') {
     updates.started_at = new Date().toISOString();
+  }
+  if (body.status === 'rejected' && body.rejection_reason) {
+    updates.rejection_reason = sanitizeString(body.rejection_reason);
   }
 
   const { error } = await supabase
@@ -377,6 +402,90 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
   }
 
   return jsonResponse({ completed: true, quantity_completed: quantityCompleted });
+}
+
+// ─── Update Assignment ──────────────────────────────────────────────────────
+
+async function updateAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'view_kitchen') && !hasPermission(auth, 'manage_menu')) {
+    return errorResponse('Forbidden', 403);
+  }
+  const body = await req.json();
+  if (!body.assignment_id) return errorResponse('Missing assignment_id');
+
+  const updates: Record<string, unknown> = {};
+  if (body.assigned_to) updates.assigned_to = body.assigned_to;
+  if (body.assigned_to_name) updates.assigned_to_name = sanitizeString(body.assigned_to_name);
+  if (body.quantity) updates.quantity = body.quantity;
+  if (body.notes !== undefined) updates.notes = body.notes ? sanitizeString(body.notes) : null;
+  if (body.expected_completion_time !== undefined) updates.expected_completion_time = body.expected_completion_time;
+  if (body.station) updates.station = body.station;
+
+  if (Object.keys(updates).length === 0) return errorResponse('No fields to update');
+
+  const { error } = await supabase
+    .from('meal_assignments')
+    .update(updates)
+    .eq('id', body.assignment_id)
+    .eq('branch_id', branchId);
+
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ updated: true });
+}
+
+// ─── Delete Assignment ──────────────────────────────────────────────────────
+
+async function deleteAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'view_kitchen') && !hasPermission(auth, 'manage_menu')) {
+    return errorResponse('Forbidden', 403);
+  }
+  const body = await req.json();
+  if (!body.assignment_id) return errorResponse('Missing assignment_id');
+
+  const { error } = await supabase
+    .from('meal_assignments')
+    .delete()
+    .eq('id', body.assignment_id)
+    .eq('branch_id', branchId);
+
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ deleted: true });
+}
+
+// ─── List Chefs (staff with kitchen roles) ──────────────────────────────────
+
+async function listChefs(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  // Fetch staff who can work in kitchen (chef, head_chef, cook, etc.)
+  const { data: staff, error } = await supabase
+    .from('company_staff')
+    .select('user_id, role, profiles(id, full_name, email)')
+    .eq('company_id', auth.companyId)
+    .in('role', ['chef', 'head_chef', 'cook', 'kitchen_staff', 'manager', 'owner', 'general_manager']);
+
+  if (error) return errorResponse(error.message);
+
+  // Also count active assignments per chef
+  const { data: counts } = await supabase
+    .from('meal_assignments')
+    .select('assigned_to')
+    .eq('branch_id', branchId)
+    .in('status', ['pending', 'accepted', 'in_progress']);
+
+  const assignmentCounts: Record<string, number> = {};
+  (counts ?? []).forEach((c: any) => {
+    assignmentCounts[c.assigned_to] = (assignmentCounts[c.assigned_to] ?? 0) + 1;
+  });
+
+  const chefs = (staff ?? []).map((s: any) => ({
+    user_id: s.user_id,
+    name: s.profiles?.full_name ?? s.profiles?.email ?? 'Unknown',
+    role: s.role,
+    active_assignments: assignmentCounts[s.user_id] ?? 0,
+  }));
+
+  return jsonResponse({ chefs });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -6,7 +6,8 @@ import {
   FormControl, InputLabel, ToggleButtonGroup, ToggleButton,
   Badge, Stack, Divider, Avatar, Alert, InputAdornment,
   LinearProgress, List, ListItem, ListItemText, ListItemSecondaryAction,
-  Switch, FormControlLabel, Tooltip,
+  Switch, FormControlLabel, Tooltip, Checkbox, Radio, RadioGroup,
+  Autocomplete, CircularProgress,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -18,6 +19,10 @@ import TimerIcon from '@mui/icons-material/Timer';
 import RemoveIcon from '@mui/icons-material/Remove';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import InventoryIcon from '@mui/icons-material/Inventory';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import SearchIcon from '@mui/icons-material/Search';
+import AutorenewIcon from '@mui/icons-material/Autorenew';
 import { KDSOrderCard, DataTable, type Column } from '@paxrest/ui';
 import {
   formatCurrency,
@@ -163,18 +168,297 @@ function PendingOrdersTab({ branchId }: { branchId: string }) {
 }
 
 /* ═══════════════════════════════════════════════════════
-   Tab 1 — Assignments (assign menu dishes to staff)
+   Tab 1 — Assignments (list with edit / delete / accept / reject / complete)
    ═══════════════════════════════════════════════════════ */
 function AssignmentsTab({ branchId, currency }: { branchId: string; currency: string }) {
-  const { data: menuData, loading, refetch } = useApi<{ items: any[] }>('menu', 'full-menu', undefined, [branchId]);
-  const [assignDialog, setAssignDialog] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<any>(null);
-  const [assignForm, setAssignForm] = useState({ assigned_to_name: '', quantity_to_prepare: 1, notes: '' });
+  const [assignments, setAssignments] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('');
+
+  // Edit dialog
+  const [editDialog, setEditDialog] = useState(false);
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [editForm, setEditForm] = useState({ assigned_to_name: '', quantity: 1, notes: '', expected_completion_time: '' });
+  const [editSaving, setEditSaving] = useState(false);
+
+  // Delete dialog
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+
+  // Reject dialog
+  const [rejectDialog, setRejectDialog] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<any>(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  const fetchAssignments = useCallback(async () => {
+    try {
+      const params: Record<string, string> = { page_size: '200' };
+      if (statusFilter) params.status = statusFilter;
+      const data = await api<{ items: any[] }>('kitchen', 'assignments', { params, branchId });
+      setAssignments(data.items ?? []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [branchId, statusFilter]);
+
+  useEffect(() => { fetchAssignments(); }, [fetchAssignments]);
+  useRealtime('meal_assignments', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchAssignments());
+
+  const handleAccept = async (id: string) => {
+    try {
+      await api('kitchen', 'assignment-respond', { body: { assignment_id: id, status: 'accepted' }, branchId });
+      toast.success('Assignment accepted');
+      fetchAssignments();
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const openReject = (a: any) => { setRejectTarget(a); setRejectReason(''); setRejectDialog(true); };
+  const handleReject = async () => {
+    if (!rejectTarget || !rejectReason.trim()) return;
+    try {
+      await api('kitchen', 'assignment-respond', {
+        body: { assignment_id: rejectTarget.id, status: 'rejected', rejection_reason: rejectReason },
+        branchId,
+      });
+      toast.success('Assignment rejected');
+      setRejectDialog(false);
+      fetchAssignments();
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const handleComplete = async (id: string) => {
+    try {
+      await api('kitchen', 'assignment-complete', { body: { assignment_id: id }, branchId });
+      toast.success('Dish completed & added to available meals!');
+      fetchAssignments();
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const openEdit = (a: any) => {
+    setEditTarget(a);
+    setEditForm({
+      assigned_to_name: a.assigned_to_name ?? '',
+      quantity: a.quantity ?? 1,
+      notes: a.notes ?? '',
+      expected_completion_time: a.expected_completion_time ? new Date(a.expected_completion_time).toISOString().slice(0, 16) : '',
+    });
+    setEditDialog(true);
+  };
+
+  const handleEditSave = async () => {
+    if (!editTarget) return;
+    setEditSaving(true);
+    try {
+      await api('kitchen', 'assignment-update', {
+        body: {
+          assignment_id: editTarget.id,
+          assigned_to_name: editForm.assigned_to_name || undefined,
+          quantity: editForm.quantity,
+          notes: editForm.notes,
+          expected_completion_time: editForm.expected_completion_time ? new Date(editForm.expected_completion_time).toISOString() : null,
+        },
+        branchId,
+      });
+      toast.success('Assignment updated');
+      setEditDialog(false);
+      fetchAssignments();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setEditSaving(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await api('kitchen', 'assignment-delete', { body: { assignment_id: deleteTarget.id }, branchId });
+      toast.success('Assignment deleted');
+      setDeleteDialog(false);
+      fetchAssignments();
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const statusColor = (s: string) =>
+    s === 'pending' ? 'warning' : s === 'accepted' || s === 'in_progress' ? 'info' :
+    s === 'completed' ? 'success' : s === 'rejected' ? 'error' : 'default';
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
+        <Typography variant="subtitle2">Filter:</Typography>
+        <ToggleButtonGroup
+          value={statusFilter} exclusive size="small"
+          onChange={(_, v) => { setStatusFilter(v ?? ''); setLoading(true); }}
+        >
+          <ToggleButton value="">All</ToggleButton>
+          <ToggleButton value="pending">Pending</ToggleButton>
+          <ToggleButton value="accepted">Accepted</ToggleButton>
+          <ToggleButton value="in_progress">In Progress</ToggleButton>
+          <ToggleButton value="completed">Completed</ToggleButton>
+          <ToggleButton value="rejected">Rejected</ToggleButton>
+        </ToggleButtonGroup>
+      </Stack>
+
+      {loading ? <LinearProgress /> : assignments.length === 0 ? (
+        <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+          No assignments found. Use the "Make a Dish" tab to create assignments.
+        </Typography>
+      ) : (
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          {assignments.map((a) => {
+            const sc = statusColor(a.status);
+            return (
+              <Card key={a.id} sx={{ width: 300, borderLeft: `4px solid`, borderLeftColor: `${sc}.main` }}>
+                <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                    <Typography fontWeight={700}>{a.menu_item_name ?? 'Unknown'}</Typography>
+                    <Stack direction="row" spacing={0}>
+                      <Tooltip title="Edit"><IconButton size="small" onClick={() => openEdit(a)}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                      <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => { setDeleteTarget(a); setDeleteDialog(true); }}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
+                    </Stack>
+                  </Stack>
+
+                  <Stack direction="row" spacing={0.5} sx={{ my: 0.5 }} flexWrap="wrap">
+                    <Chip size="small" label={`×${a.quantity}`} />
+                    <Chip size="small" label={MEAL_ASSIGNMENT_STATUS_LABELS[a.status as MealAssignmentStatus] ?? a.status} color={sc as any} />
+                    {a.station && <Chip size="small" label={a.station} variant="outlined" />}
+                  </Stack>
+
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Assigned to: {a.assigned_to_name ?? '—'}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    By: {a.assigned_by_name ?? '—'} · {new Date(a.created_at).toLocaleString()}
+                  </Typography>
+                  {a.expected_completion_time && (
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      <TimerIcon sx={{ fontSize: 12, mr: 0.3, verticalAlign: 'middle' }} />
+                      Expected: {new Date(a.expected_completion_time).toLocaleTimeString()}
+                    </Typography>
+                  )}
+                  {a.notes && <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>📝 {a.notes}</Typography>}
+                  {a.rejection_reason && (
+                    <Typography variant="caption" display="block" color="error" sx={{ mt: 0.5 }}>
+                      Rejection reason: {a.rejection_reason}
+                    </Typography>
+                  )}
+
+                  <Box sx={{ mt: 1, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                    {a.status === 'pending' && (
+                      <>
+                        <Button size="small" variant="contained" color="success" onClick={() => handleAccept(a.id)}>Accept</Button>
+                        <Button size="small" variant="outlined" color="error" onClick={() => openReject(a)}>Reject</Button>
+                      </>
+                    )}
+                    {(a.status === 'accepted' || a.status === 'in_progress') && (
+                      <Button size="small" variant="contained" color="success" startIcon={<CheckCircleIcon />} onClick={() => handleComplete(a.id)}>
+                        Mark Complete
+                      </Button>
+                    )}
+                  </Box>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </Box>
+      )}
+
+      {/* Edit Dialog */}
+      <Dialog open={editDialog} onClose={() => setEditDialog(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Edit Assignment</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth label="Assigned To" sx={{ mt: 1, mb: 2 }}
+            value={editForm.assigned_to_name}
+            onChange={(e) => setEditForm({ ...editForm, assigned_to_name: e.target.value })}
+          />
+          <TextField
+            fullWidth label="Quantity" type="number" sx={{ mb: 2 }}
+            value={editForm.quantity}
+            onChange={(e) => setEditForm({ ...editForm, quantity: Math.max(1, Number(e.target.value)) })}
+          />
+          <TextField
+            fullWidth label="Expected Completion" type="datetime-local" sx={{ mb: 2 }}
+            value={editForm.expected_completion_time}
+            onChange={(e) => setEditForm({ ...editForm, expected_completion_time: e.target.value })}
+            slotProps={{ inputLabel: { shrink: true } }}
+          />
+          <TextField
+            fullWidth label="Notes" multiline rows={2}
+            value={editForm.notes}
+            onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditDialog(false)}>Cancel</Button>
+          <Button variant="contained" onClick={handleEditSave} disabled={editSaving}>Save</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation */}
+      <Dialog open={deleteDialog} onClose={() => setDeleteDialog(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete Assignment?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete the assignment for <strong>{deleteTarget?.menu_item_name}</strong>?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialog(false)}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleDelete}>Delete</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Reject Dialog */}
+      <Dialog open={rejectDialog} onClose={() => setRejectDialog(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Reject Assignment</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ mb: 1 }}>Rejecting: <strong>{rejectTarget?.menu_item_name}</strong></Typography>
+          <TextField
+            fullWidth label="Reason for rejection" required multiline rows={2}
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRejectDialog(false)}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleReject} disabled={!rejectReason.trim()}>
+            Reject
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   Tab 2 — Make a Dish (browse menu, multi-select, assign to chef)
+   ═══════════════════════════════════════════════════════ */
+function MakeDishTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { user } = useAuth();
+  const { data: menuData, loading } = useApi<{ items: any[] }>('menu', 'full-menu', undefined, [branchId]);
+
+  // Selected menu item IDs
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Make-a-Dish dialog
+  const [dishDialog, setDishDialog] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Per-item config in the dialog: quantity, excluded ingredients, excluded extras
+  const [itemConfigs, setItemConfigs] = useState<Record<string, {
+    quantity: number;
+    excludedIngredients: Set<string>;
+    excludedExtras: Set<string>;
+  }>>({});
+
+  // Chef assignment
+  const [assignMode, setAssignMode] = useState<'auto' | 'manual'>('auto');
+  const [chefs, setChefs] = useState<any[]>([]);
+  const [chefsLoading, setChefsLoading] = useState(false);
+  const [selectedChef, setSelectedChef] = useState<any>(null);
+  const [expectedTime, setExpectedTime] = useState('');
+  const [globalNotes, setGlobalNotes] = useState('');
 
   const menuItems = useMemo(() => {
     if (!menuData) return [];
-    // full-menu returns { menu: [...categories with items] }
     const menu = (menuData as any).menu ?? [];
     return menu.flatMap((cat: any) => (cat.items ?? []).map((item: any) => ({ ...item, category_name: cat.name })));
   }, [menuData]);
@@ -189,34 +473,120 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
     return Array.from(cats.entries()).map(([name, items]) => ({ name, items }));
   }, [menuItems]);
 
-  const toggleAvailability = async (item: any) => {
-    const next: MealAvailability = item.availability_status === 'available' ? 'sold_out' : 'available';
-    try {
-      await api('kitchen', 'update-availability', {
-        body: { items: [{ menu_item_id: item.id, availability_status: next }] },
-        branchId,
-      });
-      toast.success(`${item.name} → ${MEAL_AVAILABILITY_LABELS[next]}`);
-      refetch();
-    } catch (err: any) { toast.error(err.message); }
+  const selectedItems = useMemo(() => menuItems.filter((i: any) => selected.has(i.id)), [menuItems, selected]);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   };
 
-  const handleAssign = async () => {
-    if (!selectedItem || !assignForm.assigned_to_name.trim()) return;
+  const selectAll = () => {
+    setSelected(new Set(menuItems.map((i: any) => i.id)));
+  };
+
+  const clearAll = () => setSelected(new Set());
+
+  const fetchChefs = useCallback(async () => {
+    setChefsLoading(true);
+    try {
+      const data = await api<{ chefs: any[] }>('kitchen', 'staff-chefs', { params: {}, branchId });
+      setChefs(data.chefs ?? []);
+    } catch (err) { console.error(err); }
+    finally { setChefsLoading(false); }
+  }, [branchId]);
+
+  const openDishDialog = () => {
+    if (selected.size === 0) { toast.error('Select at least one menu item'); return; }
+    // Initialize configs for each selected item
+    const configs: typeof itemConfigs = {};
+    selectedItems.forEach((item: any) => {
+      configs[item.id] = {
+        quantity: 1,
+        excludedIngredients: new Set(),
+        excludedExtras: new Set(),
+      };
+    });
+    setItemConfigs(configs);
+    setAssignMode('auto');
+    setSelectedChef(null);
+    setExpectedTime('');
+    setGlobalNotes('');
+    fetchChefs();
+    setDishDialog(true);
+  };
+
+  const toggleIngredient = (itemId: string, ingredientId: string) => {
+    setItemConfigs((prev) => {
+      const cfg = { ...prev[itemId] };
+      const ex = new Set(cfg.excludedIngredients);
+      if (ex.has(ingredientId)) ex.delete(ingredientId); else ex.add(ingredientId);
+      cfg.excludedIngredients = ex;
+      return { ...prev, [itemId]: cfg };
+    });
+  };
+
+  const toggleExtra = (itemId: string, extraId: string) => {
+    setItemConfigs((prev) => {
+      const cfg = { ...prev[itemId] };
+      const ex = new Set(cfg.excludedExtras);
+      if (ex.has(extraId)) ex.delete(extraId); else ex.add(extraId);
+      cfg.excludedExtras = ex;
+      return { ...prev, [itemId]: cfg };
+    });
+  };
+
+  const updateQuantity = (itemId: string, qty: number) => {
+    setItemConfigs((prev) => ({
+      ...prev,
+      [itemId]: { ...prev[itemId], quantity: Math.max(1, qty) },
+    }));
+  };
+
+  const handleSubmit = async () => {
     setSaving(true);
     try {
+      // Determine chef assignment
+      let assignedTo: string | undefined;
+      let assignedToName: string | undefined;
+
+      if (assignMode === 'manual' && selectedChef) {
+        assignedTo = selectedChef.user_id;
+        assignedToName = selectedChef.name;
+      } else if (assignMode === 'auto' && chefs.length > 0) {
+        // Pick the chef with the least active assignments
+        const sorted = [...chefs].sort((a, b) => a.active_assignments - b.active_assignments);
+        assignedTo = sorted[0].user_id;
+        assignedToName = sorted[0].name;
+      }
+
+      const items = selectedItems.map((item: any) => {
+        const cfg = itemConfigs[item.id];
+        return {
+          menu_item_id: item.id,
+          menu_item_name: item.name,
+          quantity: cfg?.quantity ?? 1,
+          excluded_ingredients: Array.from(cfg?.excludedIngredients ?? []),
+          excluded_extras: Array.from(cfg?.excludedExtras ?? []),
+        };
+      });
+
       await api('kitchen', 'assignments', {
         body: {
-          menu_item_id: selectedItem.id,
-          assigned_to_name: assignForm.assigned_to_name,
-          quantity_to_prepare: assignForm.quantity_to_prepare,
-          notes: assignForm.notes || undefined,
+          items,
+          assigned_to: assignedTo,
+          assigned_to_name: assignedToName ?? user?.email ?? 'Unassigned',
+          notes: globalNotes || undefined,
+          expected_completion_time: expectedTime ? new Date(expectedTime).toISOString() : undefined,
         },
         branchId,
       });
-      toast.success('Dish assigned to staff');
-      setAssignDialog(false);
-      refetch();
+
+      toast.success(`${items.length} dish(es) assigned successfully!`);
+      setDishDialog(false);
+      setSelected(new Set());
     } catch (err: any) { toast.error(err.message); }
     finally { setSaving(false); }
   };
@@ -224,9 +594,16 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
   return (
     <Box>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Assign dishes from the restaurant menu to kitchen staff. Staff will see their assignments in the "Make a Dish" tab.
-        Toggle availability to mark items as available or sold out.
+        Select menu items to start the Make a Dish flow. You can multi-select items, configure ingredients/extras, and assign to a chef.
       </Alert>
+
+      <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
+        <Button variant="contained" disabled={selected.size === 0} onClick={openDishDialog} startIcon={<PlayArrowIcon />}>
+          Make a Dish ({selected.size})
+        </Button>
+        <Button size="small" onClick={selectAll}>Select All</Button>
+        <Button size="small" onClick={clearAll} disabled={selected.size === 0}>Clear</Button>
+      </Stack>
 
       {loading ? <LinearProgress /> : categories.length === 0 ? (
         <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
@@ -238,54 +615,45 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
             <Typography variant="h6" fontWeight={700} sx={{ mb: 1 }}>{cat.name}</Typography>
             <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
               {cat.items.map((item: any) => {
-                const avail = item.availability_status ?? 'available';
+                const isSelected = selected.has(item.id);
                 return (
-                  <Card key={item.id} sx={{ width: 240, borderLeft: `4px solid`, borderLeftColor: avail === 'available' ? 'success.main' : avail === 'sold_out' ? 'error.main' : 'warning.main' }}>
+                  <Card
+                    key={item.id}
+                    sx={{
+                      width: 240, cursor: 'pointer',
+                      border: isSelected ? '2px solid' : '1px solid',
+                      borderColor: isSelected ? 'primary.main' : 'divider',
+                      bgcolor: isSelected ? 'action.selected' : 'background.paper',
+                      transition: 'all 0.15s',
+                    }}
+                    onClick={() => toggleSelect(item.id)}
+                  >
                     <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                      <Stack direction="row" alignItems="center" spacing={0.5}>
+                        <Checkbox checked={isSelected} size="small" sx={{ p: 0 }} />
+                        <Typography fontWeight={700} noWrap>{item.name}</Typography>
+                      </Stack>
+
                       {item.media_url && (
-                        <Box sx={{ width: '100%', height: 100, mb: 1, borderRadius: 1, overflow: 'hidden' }}>
-                          {item.media_type === 'video' ? (
-                            <video src={item.media_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted />
-                          ) : (
-                            <img src={item.media_url} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                          )}
+                        <Box sx={{ width: '100%', height: 80, mt: 0.5, borderRadius: 1, overflow: 'hidden' }}>
+                          <img src={item.media_url} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         </Box>
                       )}
-                      <Typography fontWeight={700}>{item.name}</Typography>
-                      <Typography variant="body2" color="text.secondary">
+
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                         {formatCurrency(item.base_price, currency)}
                         {item.calories ? ` · ${item.calories} cal` : ''}
                       </Typography>
 
                       {item.menu_item_ingredients?.length > 0 && (
-                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-                          {item.menu_item_ingredients.map((i: any) => i.name || i.ingredient_name).join(', ')}
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.3 }}>
+                          Ingredients: {item.menu_item_ingredients.map((i: any) => i.name || i.ingredient_name).join(', ')}
                         </Typography>
                       )}
-
-                      <Box sx={{ mt: 1, display: 'flex', gap: 0.5, alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Chip
-                          size="small" label={MEAL_AVAILABILITY_LABELS[avail as MealAvailability] ?? avail}
-                          color={avail === 'available' ? 'success' : avail === 'sold_out' ? 'error' : 'warning'}
-                          onClick={() => toggleAvailability(item)}
-                          sx={{ cursor: 'pointer' }}
-                        />
-                        <Tooltip title="Assign to staff">
-                          <IconButton
-                            size="small" color="primary"
-                            onClick={() => {
-                              setSelectedItem(item);
-                              setAssignForm({ assigned_to_name: '', quantity_to_prepare: 1, notes: '' });
-                              setAssignDialog(true);
-                            }}
-                          >
-                            <PersonIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-
-                      {item.available_quantity > 0 && (
-                        <Chip size="small" label={`${item.available_quantity} ready`} color="info" variant="outlined" sx={{ mt: 0.5 }} />
+                      {item.menu_item_extras?.length > 0 && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          Extras: {item.menu_item_extras.map((e: any) => e.name || e.extra_name).join(', ')}
+                        </Typography>
                       )}
                     </CardContent>
                   </Card>
@@ -296,151 +664,140 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
         ))
       )}
 
-      {/* Assign Dialog */}
-      <Dialog open={assignDialog} onClose={() => setAssignDialog(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>Assign: {selectedItem?.name}</DialogTitle>
-        <DialogContent>
+      {/* ──── Make a Dish Dialog ──── */}
+      <Dialog open={dishDialog} onClose={() => setDishDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Make a Dish — {selectedItems.length} item(s)</DialogTitle>
+        <DialogContent dividers>
+          {/* Per-item ingredient / extras config */}
+          {selectedItems.map((item: any) => {
+            const cfg = itemConfigs[item.id];
+            if (!cfg) return null;
+            const ingredients = item.menu_item_ingredients ?? [];
+            const extras = item.menu_item_extras ?? [];
+
+            return (
+              <Box key={item.id} sx={{ mb: 3, pb: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Typography fontWeight={700}>{item.name}</Typography>
+                  <TextField
+                    size="small" label="Qty" type="number" sx={{ width: 80 }}
+                    value={cfg.quantity}
+                    onChange={(e) => updateQuantity(item.id, Number(e.target.value))}
+                  />
+                </Stack>
+
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  Base price: {formatCurrency(item.base_price, currency)}
+                </Typography>
+
+                {ingredients.length > 0 && (
+                  <Box sx={{ ml: 1, mb: 1 }}>
+                    <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Ingredients (uncheck to exclude):</Typography>
+                    {ingredients.map((ing: any) => {
+                      const ingId = ing.id ?? ing.ingredient_id;
+                      const excluded = cfg.excludedIngredients.has(ingId);
+                      return (
+                        <Stack key={ingId} direction="row" alignItems="center" spacing={1} sx={{ ml: 1 }}>
+                          <Checkbox
+                            size="small" checked={!excluded}
+                            onChange={() => toggleIngredient(item.id, ingId)}
+                            sx={{ p: 0.3 }}
+                          />
+                          <Typography variant="body2" sx={{ textDecoration: excluded ? 'line-through' : 'none', color: excluded ? 'text.disabled' : 'text.primary' }}>
+                            {ing.name || ing.ingredient_name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {formatCurrency(ing.cost_per_unit ?? ing.price ?? 0, currency)}
+                          </Typography>
+                        </Stack>
+                      );
+                    })}
+                  </Box>
+                )}
+
+                {extras.length > 0 && (
+                  <Box sx={{ ml: 1 }}>
+                    <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Extras (uncheck to exclude):</Typography>
+                    {extras.map((ext: any) => {
+                      const extId = ext.id ?? ext.extra_id;
+                      const excluded = cfg.excludedExtras.has(extId);
+                      return (
+                        <Stack key={extId} direction="row" alignItems="center" spacing={1} sx={{ ml: 1 }}>
+                          <Checkbox
+                            size="small" checked={!excluded}
+                            onChange={() => toggleExtra(item.id, extId)}
+                            sx={{ p: 0.3 }}
+                          />
+                          <Typography variant="body2" sx={{ textDecoration: excluded ? 'line-through' : 'none', color: excluded ? 'text.disabled' : 'text.primary' }}>
+                            {ext.name || ext.extra_name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {formatCurrency(ext.price ?? 0, currency)}
+                          </Typography>
+                        </Stack>
+                      );
+                    })}
+                  </Box>
+                )}
+              </Box>
+            );
+          })}
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* Chef Assignment */}
+          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Chef Assignment</Typography>
+          <RadioGroup row value={assignMode} onChange={(e) => setAssignMode(e.target.value as 'auto' | 'manual')}>
+            <FormControlLabel value="auto" control={<Radio size="small" />} label="Auto-assign (least busy chef)" />
+            <FormControlLabel value="manual" control={<Radio size="small" />} label="Manual selection" />
+          </RadioGroup>
+
+          {assignMode === 'auto' && (
+            <Alert severity="info" sx={{ mt: 1, mb: 2 }} icon={<AutorenewIcon />}>
+              {chefsLoading ? 'Loading chefs…' : chefs.length === 0
+                ? 'No kitchen staff found. Assignment will default to you.'
+                : `Will auto-assign to the chef with fewest active assignments (${[...chefs].sort((a, b) => a.active_assignments - b.active_assignments)[0]?.name ?? '—'} — ${[...chefs].sort((a, b) => a.active_assignments - b.active_assignments)[0]?.active_assignments ?? 0} active).`}
+            </Alert>
+          )}
+
+          {assignMode === 'manual' && (
+            <Autocomplete
+              options={chefs}
+              getOptionLabel={(o: any) => `${o.name} (${o.role}) — ${o.active_assignments} active`}
+              value={selectedChef}
+              onChange={(_, v) => setSelectedChef(v)}
+              loading={chefsLoading}
+              renderInput={(params) => (
+                <TextField {...params} label="Search chef / staff" sx={{ mt: 1, mb: 2 }}
+                  slotProps={{ input: { ...params.InputProps, endAdornment: (<>{chefsLoading ? <CircularProgress size={18} /> : null}{params.InputProps.endAdornment}</>) } }}
+                />
+              )}
+              sx={{ mt: 1, mb: 2 }}
+            />
+          )}
+
+          {/* Expected Completion Time */}
           <TextField
-            fullWidth label="Assign to (Staff Name)" sx={{ mt: 1, mb: 2 }}
-            value={assignForm.assigned_to_name}
-            onChange={(e) => setAssignForm({ ...assignForm, assigned_to_name: e.target.value })}
+            fullWidth label="Expected Completion Time" type="datetime-local" sx={{ mb: 2 }}
+            value={expectedTime}
+            onChange={(e) => setExpectedTime(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
           />
+
+          {/* Notes */}
           <TextField
-            fullWidth label="Quantity to Prepare" type="number" sx={{ mb: 2 }}
-            value={assignForm.quantity_to_prepare}
-            onChange={(e) => setAssignForm({ ...assignForm, quantity_to_prepare: Math.max(1, Number(e.target.value)) })}
-          />
-          <TextField
-            fullWidth label="Notes (optional)"
-            value={assignForm.notes}
-            onChange={(e) => setAssignForm({ ...assignForm, notes: e.target.value })}
+            fullWidth label="Notes (optional)" multiline rows={2}
+            value={globalNotes}
+            onChange={(e) => setGlobalNotes(e.target.value)}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setAssignDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleAssign} disabled={saving || !assignForm.assigned_to_name.trim()}>
-            Assign
+          <Button onClick={() => setDishDialog(false)}>Cancel</Button>
+          <Button variant="contained" onClick={handleSubmit} disabled={saving}>
+            {saving ? 'Assigning…' : `Assign ${selectedItems.length} Dish(es)`}
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════
-   Tab 2 — Make a Dish (assigned meals to prepare)
-   ═══════════════════════════════════════════════════════ */
-function MakeDishTab({ branchId, currency }: { branchId: string; currency: string }) {
-  const [assignments, setAssignments] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const fetchAssignments = useCallback(async () => {
-    try {
-      const data = await api<{ assignments: any[] }>('kitchen', 'assignments', { params: {}, branchId });
-      setAssignments(data.assignments ?? []);
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
-  }, [branchId]);
-
-  useEffect(() => { fetchAssignments(); }, [fetchAssignments]);
-  useRealtime('meal_assignments', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchAssignments());
-
-  const handleRespond = async (id: string, status: 'accepted' | 'rejected') => {
-    try {
-      await api('kitchen', 'assignment-respond', { body: { assignment_id: id, status }, branchId });
-      toast.success(status === 'accepted' ? 'Accepted!' : 'Rejected');
-      fetchAssignments();
-    } catch (err: any) { toast.error(err.message); }
-  };
-
-  const handleComplete = async (id: string) => {
-    try {
-      await api('kitchen', 'assignment-complete', { body: { assignment_id: id }, branchId });
-      toast.success('Dish completed & added to available meals!');
-      fetchAssignments();
-    } catch (err: any) { toast.error(err.message); }
-  };
-
-  const grouped = useMemo(() => {
-    const pending = assignments.filter((a) => a.status === 'pending');
-    const inProgress = assignments.filter((a) => a.status === 'accepted' || a.status === 'in_progress');
-    const done = assignments.filter((a) => a.status === 'completed');
-    return { pending, inProgress, done };
-  }, [assignments]);
-
-  const renderCard = (a: any) => {
-    const statusColor =
-      a.status === 'pending' ? 'warning' :
-      a.status === 'accepted' || a.status === 'in_progress' ? 'info' :
-      a.status === 'completed' ? 'success' : 'default';
-
-    return (
-      <Card key={a.id} sx={{ width: 260, borderTop: `3px solid`, borderTopColor: `${statusColor}.main` }}>
-        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-          <Typography fontWeight={700}>{a.menu_item_name ?? a.menu_items?.name ?? 'Unknown'}</Typography>
-          <Stack direction="row" spacing={0.5} sx={{ my: 0.5 }}>
-            <Chip size="small" label={`×${a.quantity_to_prepare}`} />
-            <Chip size="small" label={MEAL_ASSIGNMENT_STATUS_LABELS[a.status as MealAssignmentStatus] ?? a.status} color={statusColor as any} />
-          </Stack>
-          <Typography variant="caption" color="text.secondary" display="block">
-            Assigned to: {a.assigned_to_name}
-          </Typography>
-          {a.notes && <Typography variant="caption" display="block">📝 {a.notes}</Typography>}
-
-          <Box sx={{ mt: 1, display: 'flex', gap: 0.5 }}>
-            {a.status === 'pending' && (
-              <>
-                <Button size="small" variant="contained" color="success" onClick={() => handleRespond(a.id, 'accepted')}>Accept</Button>
-                <Button size="small" variant="outlined" color="error" onClick={() => handleRespond(a.id, 'rejected')}>Reject</Button>
-              </>
-            )}
-            {(a.status === 'accepted' || a.status === 'in_progress') && (
-              <Button size="small" variant="contained" color="success" startIcon={<CheckCircleIcon />} onClick={() => handleComplete(a.id)}>
-                Done
-              </Button>
-            )}
-          </Box>
-        </CardContent>
-      </Card>
-    );
-  };
-
-  if (loading) return <LinearProgress />;
-
-  return (
-    <Box>
-      {assignments.length === 0 ? (
-        <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-          No dish assignments yet. Assignments are created from the "Assignments" tab.
-        </Typography>
-      ) : (
-        <>
-          {grouped.pending.length > 0 && (
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" fontWeight={700} color="warning.main" sx={{ mb: 1 }}>
-                Pending ({grouped.pending.length})
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>{grouped.pending.map(renderCard)}</Box>
-            </Box>
-          )}
-          {grouped.inProgress.length > 0 && (
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" fontWeight={700} color="info.main" sx={{ mb: 1 }}>
-                In Progress ({grouped.inProgress.length})
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>{grouped.inProgress.map(renderCard)}</Box>
-            </Box>
-          )}
-          {grouped.done.length > 0 && (
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" fontWeight={700} color="success.main" sx={{ mb: 1 }}>
-                Completed Today ({grouped.done.length})
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>{grouped.done.map(renderCard)}</Box>
-            </Box>
-          )}
-        </>
-      )}
     </Box>
   );
 }

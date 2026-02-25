@@ -81,7 +81,7 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
   } = usePaginated<any>('menu', 'items');
 
   // Fetch categories for the dropdown
-  const { data: catData } = useApi<{ categories: any[] }>('menu', 'categories', undefined, [branchId]);
+  const { data: catData, refetch: refetchCats } = useApi<{ categories: any[] }>('menu', 'categories', undefined, [branchId]);
   const categories = catData?.categories ?? [];
 
   // Fetch inventory items for ingredient selection
@@ -287,6 +287,35 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
   };
   const removeExtra = (idx: number) => setExtras((prev) => prev.filter((_, i) => i !== idx));
 
+  /* ─── Computed total price ─── */
+  const ingredientsCost = ingredients.reduce((sum, ing) => sum + (ing.cost_contribution || 0), 0);
+  const extrasCost = extras.reduce((sum, ext) => sum + (ext.price || 0), 0);
+  const totalPrice = form.base_price + ingredientsCost + extrasCost;
+
+  /* ─── Delete menu item ─── */
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    if (!deleteReason.trim()) { toast.error('Reason is required'); return; }
+    setSaving(true);
+    try {
+      await api('menu', 'item', {
+        method: 'DELETE',
+        params: { id: deleteTarget.id, reason: deleteReason },
+        branchId,
+      });
+      toast.success('Menu item deleted');
+      setDeleteDialog(false);
+      setDeleteTarget(null);
+      setDeleteReason('');
+      refetch();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSaving(false); }
+  };
+
   /* ─── Category options (built-in + existing from DB) ─── */
   const categoryOptions = useMemo(() => {
     const dbNames = categories.map((c: any) => c.name);
@@ -313,7 +342,7 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
       ) : null,
     },
     { id: 'name', label: 'Menu Item', sortable: true },
-    { id: 'base_price', label: 'Price', render: (r) => formatCurrency(r.base_price, currency), width: 100, sortable: true },
+    { id: 'base_price', label: 'Base Price', render: (r) => formatCurrency(r.base_price, currency), width: 100, sortable: true },
     { id: 'station', label: 'Station', width: 90 },
     {
       id: 'availability_status', label: 'Status', width: 110,
@@ -323,6 +352,12 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
       },
     },
     { id: 'is_active', label: 'Active', render: (r) => r.is_active ? 'Yes' : 'No', width: 70 },
+    { id: 'actions', label: '', width: 100, sortable: false, render: (r) => (
+      <Stack direction="row" spacing={0.5}>
+        <Tooltip title="Edit"><IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(r); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
+        <Tooltip title="Delete"><IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(r); setDeleteReason(''); setDeleteDialog(true); }}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
+      </Stack>
+    )},
   ];
 
   return (
@@ -579,12 +614,62 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
                 Add Extra
               </Button>
             </Grid>
+
+            {/* ═══ Total Price Summary ═══ */}
+            <Grid size={12}><Divider sx={{ my: 1 }} /></Grid>
+            <Grid size={12}>
+              <Stack spacing={0.5} sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+                <Stack direction="row" justifyContent="space-between">
+                  <Typography variant="body2" color="text.secondary">Base price</Typography>
+                  <Typography variant="body2">{formatCurrency(form.base_price, currency)}</Typography>
+                </Stack>
+                {ingredientsCost > 0 && (
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography variant="body2" color="text.secondary">+ Ingredients</Typography>
+                    <Typography variant="body2">{formatCurrency(ingredientsCost, currency)}</Typography>
+                  </Stack>
+                )}
+                {extrasCost > 0 && (
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography variant="body2" color="text.secondary">+ Extras (all selected)</Typography>
+                    <Typography variant="body2">{formatCurrency(extrasCost, currency)}</Typography>
+                  </Stack>
+                )}
+                <Divider />
+                <Stack direction="row" justifyContent="space-between">
+                  <Typography variant="subtitle1" fontWeight={700}>Total Menu Price</Typography>
+                  <Typography variant="subtitle1" fontWeight={700} color="primary">{formatCurrency(totalPrice, currency)}</Typography>
+                </Stack>
+              </Stack>
+            </Grid>
           </Grid>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialog(false)}>Cancel</Button>
           <Button variant="contained" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving…' : form.id ? 'Update Menu Item' : 'Create Menu Item'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ─── Delete Confirmation Dialog ─── */}
+      <Dialog open={deleteDialog} onClose={() => setDeleteDialog(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete Menu Item</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Are you sure you want to delete <strong>{deleteTarget?.name}</strong>? Please provide a reason.
+          </Typography>
+          <TextField
+            fullWidth required label="Reason for deletion"
+            value={deleteReason}
+            onChange={(e) => setDeleteReason(e.target.value)}
+            multiline rows={2}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialog(false)}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleDelete} disabled={saving || !deleteReason.trim()}>
+            Delete
           </Button>
         </DialogActions>
       </Dialog>
