@@ -7,6 +7,7 @@ import { TABLE_STATUS_COLORS } from '@paxrest/ui';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
 import { useRealtime } from '@/hooks';
+import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
 interface TableData {
@@ -27,6 +28,10 @@ interface LayoutSection {
 }
 
 export default function TablesPage() {
+  return <BranchGuard><TablesContent /></BranchGuard>;
+}
+
+function TablesContent() {
   const { activeBranchId } = useAuth();
   const [layout, setLayout] = useState<LayoutSection[]>([]);
   const [loading, setLoading] = useState(true);

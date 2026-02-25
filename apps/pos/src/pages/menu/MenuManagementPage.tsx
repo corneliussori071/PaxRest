@@ -17,6 +17,7 @@ import type { MealAvailability } from '@paxrest/shared-types';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, supabase } from '@/lib/supabase';
+import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
 const MENU_CATEGORIES = [
@@ -30,6 +31,10 @@ const ALLOWED_MEDIA_TYPES = [
 ];
 
 export default function MenuManagementPage() {
+  return <BranchGuard><MenuManagementContent /></BranchGuard>;
+}
+
+function MenuManagementContent() {
   const { activeBranchId, company, activeBranch } = useAuth();
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const [tab, setTab] = useState(0);

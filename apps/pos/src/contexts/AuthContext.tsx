@@ -1,7 +1,10 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import type { Profile, Company, Branch } from '@paxrest/shared-types';
 import { supabase, api, publicApi } from '@/lib/supabase';
+
+/** Roles that operate at company-level, not tied to a single branch */
+const GLOBAL_ROLES = ['owner', 'general_manager'];
 
 interface AuthState {
   session: Session | null;
@@ -15,6 +18,10 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
+  /** true for owner / general_manager — not tied to one branch */
+  isGlobalStaff: boolean;
+  /** true when a branch is selected (always true for branch staff, user-driven for global) */
+  hasBranchSelected: boolean;
   activeBranch: Branch | undefined;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (data: {
@@ -22,7 +29,7 @@ interface AuthContextValue extends AuthState {
     companyName: string; phone?: string;
   }) => Promise<void>;
   signOut: () => Promise<void>;
-  switchBranch: (branchId: string) => void;
+  switchBranch: (branchId: string | null) => void;
   refreshProfile: () => Promise<void>;
 }
 
@@ -117,18 +124,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  const switchBranch = (branchId: string) => {
+  const switchBranch = (branchId: string | null) => {
     setState((s) => ({ ...s, activeBranchId: branchId }));
-    // Persist to server
-    api('auth', 'switch-branch', { body: { branch_id: branchId } }).catch(console.error);
+    // Persist to server (null means "unset")
+    if (branchId) {
+      api('auth', 'switch-branch', { body: { branch_id: branchId } }).catch(console.error);
+    }
   };
 
   const refreshProfile = fetchProfile;
 
+  const isGlobalStaff = GLOBAL_ROLES.includes(state.profile?.role ?? '');
   const activeBranch = state.branches.find((b) => b.id === state.activeBranchId);
+  const hasBranchSelected = !!state.activeBranchId;
 
   return (
-    <AuthContext.Provider value={{ ...state, activeBranch, signIn, signUp, signOut, switchBranch, refreshProfile }}>
+    <AuthContext.Provider value={{ ...state, isGlobalStaff, hasBranchSelected, activeBranch, signIn, signUp, signOut, switchBranch, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

@@ -166,7 +166,7 @@ export interface OrderWithDetails extends Omit<Order, 'table'> {
   table: Table | null;
 }
 
-export interface KitchenOrderItem extends OrderItem {
+export interface KitchenOrderItemExtended extends OrderItem {
   order_number: number;
   order_type: OrderType;
   table_name: string | null;

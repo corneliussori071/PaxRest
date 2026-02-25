@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
 import ListAltIcon from '@mui/icons-material/ListAlt';
@@ -14,8 +14,13 @@ import BarChartIcon from '@mui/icons-material/BarChart';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import StorefrontIcon from '@mui/icons-material/Storefront';
+import {
+  Dialog, DialogTitle, DialogContent, List, ListItem,
+  ListItemButton, ListItemText, ListItemIcon, Typography,
+} from '@mui/material';
 import { AppLayout, type NavItem } from '@paxrest/ui';
 import { useAuth } from '@/contexts/AuthContext';
+import BranchSelector from '@/components/BranchSelector';
 import type { Permission } from '@paxrest/shared-types';
 
 interface NavItemWithPermission extends NavItem {
@@ -42,7 +47,12 @@ const NAV_ITEMS: NavItemWithPermission[] = [
 export default function MainLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { profile, company, branches, activeBranchId, signOut, switchBranch } = useAuth();
+  const {
+    profile, company, branches, activeBranchId,
+    isGlobalStaff, signOut, switchBranch,
+  } = useAuth();
+
+  const [branchDialogOpen, setBranchDialogOpen] = useState(false);
 
   const activeBranch = branches.find((b) => b.id === activeBranchId);
 
@@ -60,24 +70,68 @@ export default function MainLayout() {
   // Map path segment to page title
   const pageTitle = filteredNavItems.find((n) => n.id === activeId)?.label ?? 'POS';
 
+  const branchDisplayName = isGlobalStaff
+    ? (activeBranch?.name ?? 'Select Branch')
+    : (activeBranch?.name ?? 'Branch');
+
   return (
-    <AppLayout
-      title={pageTitle}
-      navItems={filteredNavItems}
-      activeItemId={activeId}
-      onNavigate={(path) => navigate(path)}
-      userDisplayName={profile?.name ?? 'User'}
-      userRole={profile?.role?.replace('_', ' ')}
-      branchName={activeBranch?.name ?? 'Branch'}
-      onLogout={signOut}
-      onBranchSwitch={branches.length > 1 ? () => {
-        // Simple rotate for now — could open a dialog
-        const idx = branches.findIndex((b) => b.id === activeBranchId);
-        const next = branches[(idx + 1) % branches.length];
-        switchBranch(next.id);
-      } : undefined}
-    >
-      <Outlet />
-    </AppLayout>
+    <>
+      <AppLayout
+        title={pageTitle}
+        navItems={filteredNavItems}
+        activeItemId={activeId}
+        onNavigate={(path) => navigate(path)}
+        userDisplayName={profile?.name ?? 'User'}
+        userRole={profile?.role?.replace('_', ' ')}
+        branchName={branchDisplayName}
+        onLogout={signOut}
+        onBranchSwitch={
+          isGlobalStaff && branches.length > 0
+            ? () => setBranchDialogOpen(true)
+            : undefined
+        }
+        headerActions={
+          isGlobalStaff ? <BranchSelector compact showAll={false} /> : undefined
+        }
+      >
+        <Outlet />
+      </AppLayout>
+
+      {/* Branch switch dialog for global staff (via sidebar click) */}
+      <Dialog
+        open={branchDialogOpen}
+        onClose={() => setBranchDialogOpen(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Switch Branch</DialogTitle>
+        <DialogContent sx={{ p: 0 }}>
+          <List>
+            {branches.filter((b) => b.is_active).map((branch) => (
+              <ListItem key={branch.id} disablePadding>
+                <ListItemButton
+                  selected={branch.id === activeBranchId}
+                  onClick={() => {
+                    switchBranch(branch.id);
+                    setBranchDialogOpen(false);
+                  }}
+                >
+                  <ListItemIcon><StorefrontIcon /></ListItemIcon>
+                  <ListItemText
+                    primary={branch.name}
+                    secondary={branch.location}
+                  />
+                </ListItemButton>
+              </ListItem>
+            ))}
+          </List>
+          {branches.filter((b) => b.is_active).length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ p: 3, textAlign: 'center' }}>
+              No active branches. Go to Branches to create one.
+            </Typography>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

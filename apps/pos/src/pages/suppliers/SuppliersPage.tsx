@@ -9,9 +9,18 @@ import { formatCurrency } from '@paxrest/shared-utils';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
+import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
 export default function SuppliersPage() {
+  return (
+    <BranchGuard>
+      <SuppliersContent />
+    </BranchGuard>
+  );
+}
+
+function SuppliersContent() {
   const [tab, setTab] = useState(0);
   return (
     <Box>

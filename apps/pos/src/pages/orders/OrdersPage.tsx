@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Box, Typography, Chip, Button, Dialog, DialogTitle,
   DialogContent, DialogActions, Divider, Grid,
@@ -8,15 +8,24 @@ import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
 import { usePaginated, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
+import BranchSelector from '@/components/BranchSelector';
 import toast from 'react-hot-toast';
 
 export default function OrdersPage() {
-  const { activeBranchId, company, activeBranch } = useAuth();
+  const { activeBranchId, company, activeBranch, isGlobalStaff, branches } = useAuth();
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const [statusFilter, setStatusFilter] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // For global staff: local branch filter (null = all branches)
+  const [branchFilter, setBranchFilter] = useState<string | null>(
+    isGlobalStaff ? null : activeBranchId,
+  );
+
+  // The branchId to send in API calls
+  const effectiveBranchId = isGlobalStaff ? (branchFilter ?? '__all__') : (activeBranchId ?? '');
 
   const {
     items: orders, total, loading, page, pageSize, sortBy, sortDir,
@@ -32,14 +41,20 @@ export default function OrdersPage() {
     setSelectedOrder(order);
     setDetailLoading(true);
     try {
-      const data = await api('orders', 'get', { params: { id: order.id }, branchId: activeBranchId! });
+      const data = await api('orders', 'get', {
+        params: { id: order.id },
+        branchId: effectiveBranchId,
+      });
       setDetail(data.order);
     } catch { /* ignore */ } finally { setDetailLoading(false); }
   };
 
   const updateStatus = async (orderId: string, status: string) => {
     try {
-      await api('orders', 'update-status', { body: { order_id: orderId, status }, branchId: activeBranchId! });
+      await api('orders', 'update-status', {
+        body: { order_id: orderId, status },
+        branchId: effectiveBranchId,
+      });
       toast.success(`Order updated to ${status}`);
       refetch();
       if (detail?.id === orderId) setDetail({ ...detail, status });
@@ -48,17 +63,42 @@ export default function OrdersPage() {
 
   const statuses = ['', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'completed', 'cancelled'];
 
-  const columns: Column[] = [
-    { id: 'order_number', label: '#', width: 80, render: (r) => <Typography fontWeight={700}>#{r.order_number}</Typography> },
-    { id: 'order_type', label: 'Type', render: (r) => <Chip size="small" label={r.order_type?.replace('_', ' ')} /> },
-    { id: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} type="order" /> },
-    { id: 'total_amount', label: 'Total', render: (r) => formatCurrency(r.total_amount, currency) },
-    { id: 'customer_name', label: 'Customer', render: (r) => r.customer_name ?? '—' },
-    { id: 'created_at', label: 'Time', render: (r) => formatDateTime(r.created_at) },
-  ];
+  const columns: Column[] = useMemo(() => {
+    const base: Column[] = [
+      { id: 'order_number', label: '#', width: 80, render: (r) => <Typography fontWeight={700}>#{r.order_number}</Typography> },
+      { id: 'order_type', label: 'Type', render: (r) => <Chip size="small" label={r.order_type?.replace('_', ' ')} /> },
+      { id: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} type="order" /> },
+      { id: 'total_amount', label: 'Total', render: (r) => formatCurrency(r.total_amount, currency) },
+      { id: 'customer_name', label: 'Customer', render: (r) => r.customer_name ?? '—' },
+    ];
+    // Show branch column when global staff views all branches
+    if (isGlobalStaff && !branchFilter) {
+      base.push({
+        id: 'branch_id', label: 'Branch', width: 140,
+        render: (r) => {
+          const b = branches.find((br) => br.id === r.branch_id);
+          return <Typography variant="body2">{b?.name ?? '—'}</Typography>;
+        },
+      });
+    }
+    base.push({ id: 'created_at', label: 'Time', render: (r) => formatDateTime(r.created_at) });
+    return base;
+  }, [isGlobalStaff, branchFilter, currency, branches]);
 
   return (
     <Box>
+      {/* Branch filter for global staff */}
+      {isGlobalStaff && (
+        <Box sx={{ mb: 2 }}>
+          <BranchSelector
+            showAll
+            compact
+            value={branchFilter}
+            onChange={(id) => setBranchFilter(id)}
+          />
+        </Box>
+      )}
+
       {/* Status filter chips */}
       <Box sx={{ mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         {statuses.map((s) => (

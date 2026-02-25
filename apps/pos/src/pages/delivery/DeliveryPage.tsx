@@ -7,9 +7,18 @@ import { DataTable, StatusBadge, type Column } from '@paxrest/ui';
 import { usePaginated } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
+import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
 export default function DeliveryPage() {
+  return (
+    <BranchGuard>
+      <DeliveryContent />
+    </BranchGuard>
+  );
+}
+
+function DeliveryContent() {
   const [tab, setTab] = useState(0);
   return (
     <Box>

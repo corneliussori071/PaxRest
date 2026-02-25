@@ -18,6 +18,8 @@ import toast from 'react-hot-toast';
 import type { Permission, CompanyRole } from '@paxrest/shared-types';
 import { canManageRole, DEFAULT_ROLE_PERMISSIONS } from '@paxrest/shared-utils';
 
+const GLOBAL_ROLES: CompanyRole[] = ['owner', 'general_manager'];
+
 // ─── Permission labels mapping ──────────────────────────────────────────────
 
 const PERMISSION_LABELS: { key: Permission; label: string; group: string }[] = [
@@ -188,6 +190,14 @@ export default function StaffPage() {
 
   const handleEditSave = async () => {
     if (!editStaff) return;
+    const isNowGlobal = GLOBAL_ROLES.includes(editRole);
+    const wasGlobal = GLOBAL_ROLES.includes(editStaff.role);
+
+    // Demotion to branch role requires a branch
+    if (!isNowGlobal && !editBranch && wasGlobal) {
+      return toast.error('A branch must be assigned when demoting to a branch role');
+    }
+
     setEditSaving(true);
     try {
       await api('staff', 'update', {
@@ -197,8 +207,9 @@ export default function StaffPage() {
           name: editName,
           role: editRole,
           permissions: editPermissions,
-          branch_ids: editBranch ? [editBranch] : editStaff.branch_ids,
-          active_branch_id: editBranch || editStaff.active_branch_id,
+          // Global: clear branches; Branch: set the selected branch
+          branch_ids: isNowGlobal ? [] : (editBranch ? [editBranch] : editStaff.branch_ids),
+          active_branch_id: isNowGlobal ? null : (editBranch || editStaff.active_branch_id),
         },
       });
       toast.success('Staff updated');
@@ -326,34 +337,43 @@ export default function StaffPage() {
     onRoleChange: (v: CompanyRole) => void;
     branchValue: string;
     onBranchChange: (v: string) => void;
-  }) => (
-    <Grid container spacing={2}>
-      <Grid size={{ xs: 12, sm: 6 }}>
-        <TextField
-          fullWidth select label="Role" required value={roleValue}
-          onChange={(e) => onRoleChange(e.target.value as CompanyRole)}
-          slotProps={{ select: { native: true } }}
-        >
-          {assignableRoles.map((r) => (
-            <option key={r.value} value={r.value}>{r.label}</option>
-          ))}
-        </TextField>
+  }) => {
+    const isGlobal = GLOBAL_ROLES.includes(roleValue);
+    return (
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <TextField
+            fullWidth select label="Role" required value={roleValue}
+            onChange={(e) => {
+              const newRole = e.target.value as CompanyRole;
+              onRoleChange(newRole);
+              // Auto-clear branch when switching to a global role
+              if (GLOBAL_ROLES.includes(newRole)) onBranchChange('');
+            }}
+            slotProps={{ select: { native: true } }}
+          >
+            {assignableRoles.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </TextField>
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <TextField
+            fullWidth select label={isGlobal ? 'Branch' : 'Branch'} value={isGlobal ? '' : branchValue}
+            onChange={(e) => onBranchChange(e.target.value)}
+            slotProps={{ select: { native: true } }}
+            disabled={isGlobal}
+            helperText={isGlobal ? 'Global staff are not tied to a branch' : 'Assign to a branch'}
+          >
+            <option value="">{isGlobal ? 'N/A — Global' : 'No branch (assign later)'}</option>
+            {!isGlobal && branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </TextField>
+        </Grid>
       </Grid>
-      <Grid size={{ xs: 12, sm: 6 }}>
-        <TextField
-          fullWidth select label="Branch (optional)" value={branchValue}
-          onChange={(e) => onBranchChange(e.target.value)}
-          slotProps={{ select: { native: true } }}
-          helperText="Leave empty for global staff"
-        >
-          <option value="">Global (all branches)</option>
-          {branches.map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
-        </TextField>
-      </Grid>
-    </Grid>
-  );
+    );
+  };
 
   return (
     <Box>

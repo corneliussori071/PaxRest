@@ -23,8 +23,13 @@ import {
   type CartItem, type CartItemExtra, type CartItemRemovedIngredient,
 } from '@/stores';
 import type { MenuCategoryWithItems, MenuItemWithDetails } from '@paxrest/shared-types';
+import BranchGuard from '@/components/BranchGuard';
 
 export default function POSTerminalPage() {
+  return <BranchGuard><POSTerminalContent /></BranchGuard>;
+}
+
+function POSTerminalContent() {
   const { activeBranchId, company, activeBranch } = useAuth();
   const { categories, loading: menuLoading, fetchMenu } = useMenuStore();
   const { meals, fetchMeals } = useAvailableMealsStore();

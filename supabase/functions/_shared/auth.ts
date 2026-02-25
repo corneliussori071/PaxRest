@@ -10,7 +10,11 @@ export interface AuthContext {
   activeBranchId: string | null;
   role: string | null;
   permissions: string[];
+  isGlobal: boolean; // true for owner / general_manager
 }
+
+/** Roles that are NOT tied to a single branch */
+const GLOBAL_ROLES = ['owner', 'general_manager'];
 
 /**
  * Extract and validate auth context from the request.
@@ -38,15 +42,23 @@ export async function requireAuth(
     .eq('id', user.id)
     .maybeSingle();
 
+  const role = profile?.role ?? null;
+
   return {
     userId: user.id,
     email: user.email ?? '',
     companyId: profile?.company_id ?? null,
     branchIds: profile?.branch_ids ?? [],
     activeBranchId: profile?.active_branch_id ?? null,
-    role: profile?.role ?? null,
+    role,
     permissions: profile?.permissions ?? [],
+    isGlobal: GLOBAL_ROLES.includes(role ?? ''),
   };
+}
+
+/** Check whether a role is global (not branch-tied) */
+export function isGlobalRole(role: string | null): boolean {
+  return GLOBAL_ROLES.includes(role ?? '');
 }
 
 /** Check the auth context has a specific permission */
@@ -67,6 +79,9 @@ const ROLE_HIERARCHY: Record<string, number> = {
   shisha_maker: 50,
   rider: 40,
   kitchen_display: 30,
+  inventory_clerk: 50,
+  shisha_attendant: 50,
+  custom: 10,
 };
 
 export function hasMinRole(auth: AuthContext, requiredRole: string): boolean {
@@ -75,17 +90,59 @@ export function hasMinRole(auth: AuthContext, requiredRole: string): boolean {
   return userLevel >= requiredLevel;
 }
 
-/** Ensure branch access — the user must have the branch in their branch_ids */
+/**
+ * Ensure branch access.
+ * - Global staff (owner/general_manager) can access ANY branch in their company.
+ * - Branch staff must have the branch in their branch_ids.
+ */
 export function canAccessBranch(auth: AuthContext, branchId: string): boolean {
+  if (auth.isGlobal) return true; // verified at company level by caller
   return auth.branchIds.includes(branchId);
 }
 
-/** Resolve the branch: prefer header, then auth active branch */
+/**
+ * Resolve the effective branch id from the request.
+ * Priority: x-branch-id header → activeBranchId → first branchIds entry.
+ * For global staff, x-branch-id is trusted if present (company-level check
+ * happens in the edge function when querying data).
+ * Returns null if no branch can be determined (global staff with no selection).
+ */
 export function resolveBranchId(auth: AuthContext, req: Request): string | null {
   const headerBranch = req.headers.get('x-branch-id');
-  if (headerBranch && canAccessBranch(auth, headerBranch)) return headerBranch;
-  if (auth.activeBranchId && canAccessBranch(auth, auth.activeBranchId)) return auth.activeBranchId;
+
+  if (auth.isGlobal) {
+    // Global staff: accept header or active_branch_id (company ownership
+    // is verified downstream via company_id filter on the query)
+    if (headerBranch && headerBranch !== '__all__') return headerBranch;
+    if (auth.activeBranchId) return auth.activeBranchId;
+    return null; // no branch selected — caller must handle
+  }
+
+  // Branch staff: verify access
+  if (headerBranch && auth.branchIds.includes(headerBranch)) return headerBranch;
+  if (auth.activeBranchId && auth.branchIds.includes(auth.activeBranchId)) return auth.activeBranchId;
   return auth.branchIds[0] ?? null;
+}
+
+/**
+ * Like resolveBranchId but returns the special `'__all__'` sentinel when a
+ * global staff member explicitly requests all branches (via header or no selection).
+ * Branch staff always get their specific branch; never `'__all__'`.
+ */
+export function resolveBranchIdOrAll(auth: AuthContext, req: Request): string {
+  const headerBranch = req.headers.get('x-branch-id');
+
+  if (auth.isGlobal) {
+    if (headerBranch === '__all__') return '__all__';
+    if (headerBranch) return headerBranch;
+    if (auth.activeBranchId) return auth.activeBranchId;
+    return '__all__'; // global staff with no branch = all branches
+  }
+
+  // Branch staff
+  if (headerBranch && auth.branchIds.includes(headerBranch)) return headerBranch;
+  if (auth.activeBranchId && auth.branchIds.includes(auth.activeBranchId)) return auth.activeBranchId;
+  return auth.branchIds[0] ?? '__all__'; // shouldn't happen for branch staff
 }
 
 /**

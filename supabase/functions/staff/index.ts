@@ -4,6 +4,7 @@ import {
   createUserClient, createServiceClient,
   requireAuth, hasPermission, sanitizeString,
   isValidEmail, validatePagination, applyPagination,
+  isGlobalRole,
 } from '../_shared/index.ts';
 import type { AuthContext } from '../_shared/index.ts';
 
@@ -126,15 +127,56 @@ async function updateStaffMember(req: Request, auth: AuthContext) {
   }
 
   const service = createServiceClient();
+
+  // Fetch current profile to detect role transitions
+  const { data: current, error: fetchErr } = await service
+    .from('profiles')
+    .select('role, branch_ids, active_branch_id')
+    .eq('id', body.id)
+    .eq('company_id', auth.companyId)
+    .single();
+  if (fetchErr) return errorResponse(fetchErr.message, 404);
+
   const updates: Record<string, unknown> = {};
 
   if (body.name) updates.name = sanitizeString(body.name);
   if (body.phone !== undefined) updates.phone = body.phone;
-  if (body.role) updates.role = body.role;
   if (body.permissions) updates.permissions = body.permissions;
-  if (body.branch_ids) updates.branch_ids = body.branch_ids;
-  if (body.active_branch_id !== undefined) updates.active_branch_id = body.active_branch_id;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
+
+  const oldRole = current.role;
+  const newRole = body.role ?? oldRole;
+  if (body.role) updates.role = body.role;
+
+  const wasGlobal = isGlobalRole(oldRole);
+  const isNowGlobal = isGlobalRole(newRole);
+
+  if (!wasGlobal && isNowGlobal) {
+    // ── Promotion to global: clear branch assignment ─────────────────
+    updates.branch_ids = [];
+    updates.active_branch_id = null;
+  } else if (wasGlobal && !isNowGlobal) {
+    // ── Demotion to branch role: must provide a branch ───────────────
+    const targetBranch = body.branch_ids?.[0] ?? body.active_branch_id;
+    if (!targetBranch) {
+      return errorResponse('A branch must be assigned when demoting to a branch role');
+    }
+    updates.branch_ids = [targetBranch];
+    updates.active_branch_id = targetBranch;
+  } else if (!isNowGlobal) {
+    // ── Branch staff: handle transfer ────────────────────────────────
+    if (body.branch_ids) {
+      updates.branch_ids = body.branch_ids;
+      // If active branch is not in new list, reset to first
+      const activeBranch = body.active_branch_id ?? current.active_branch_id;
+      updates.active_branch_id = body.branch_ids.includes(activeBranch)
+        ? activeBranch
+        : body.branch_ids[0] ?? null;
+    } else if (body.active_branch_id !== undefined) {
+      updates.active_branch_id = body.active_branch_id;
+    }
+  }
+  // Global→Global: no branch changes needed
 
   const { data, error } = await service
     .from('profiles')
@@ -206,11 +248,14 @@ async function inviteStaff(req: Request, auth: AuthContext) {
 
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
+  // Global roles don't get a branch assignment
+  const effectiveBranchId = isGlobalRole(body.role) ? null : (body.branch_id ?? null);
+
   const { data: invitation, error } = await service
     .from('invitations')
     .insert({
       company_id: auth.companyId,
-      branch_id: body.branch_id ?? null,
+      branch_id: effectiveBranchId,
       email: body.email,
       role: body.role,
       permissions: body.permissions ?? [],
@@ -267,7 +312,9 @@ async function createStaffDirect(req: Request, auth: AuthContext) {
 
   if (authError) return errorResponse(authError.message, 400);
   const userId = authData.user.id;
-  const branchIds = branch_id ? [branch_id] : [];
+  // Global roles don't get a branch assignment
+  const branchIds = isGlobalRole(role) ? [] : (branch_id ? [branch_id] : []);
+  const effectiveActiveBranch = isGlobalRole(role) ? null : (branch_id ?? null);
 
   const { data: profile, error: profileError } = await service.from('profiles').insert({
     id: userId,
@@ -278,7 +325,7 @@ async function createStaffDirect(req: Request, auth: AuthContext) {
     role,
     permissions: permissions ?? [],
     branch_ids: branchIds,
-    active_branch_id: branch_id ?? null,
+    active_branch_id: effectiveActiveBranch,
     is_active: true,
   }).select().single();
 

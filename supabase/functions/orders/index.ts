@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import {
   corsResponse, jsonResponse, errorResponse,
   createUserClient, createServiceClient,
-  requireAuth, hasPermission, resolveBranchId,
+  requireAuth, hasPermission, resolveBranchId, resolveBranchIdOrAll,
   validatePagination, applyPagination, sanitizeString,
 } from '../_shared/index.ts';
 import type { AuthContext } from '../_shared/index.ts';
@@ -19,16 +19,20 @@ serve(async (req) => {
     const authResult = await requireAuth(supabase, req);
     if (authResult instanceof Response) return authResult;
     const auth = authResult as AuthContext;
-    const branchId = resolveBranchId(auth, req);
-    if (!branchId) return errorResponse('No branch context');
 
     switch (action) {
-      case 'create':
+      case 'create': {
+        const branchId = resolveBranchId(auth, req);
+        if (!branchId) return errorResponse('Select a branch before creating an order');
         return await createOrder(req, supabase, auth, branchId);
+      }
       case 'list':
-        return await listOrders(req, supabase, auth, branchId);
-      case 'get':
-        return await getOrder(req, supabase, auth, branchId);
+        // Global staff can list orders across all branches
+        return await listOrders(req, supabase, auth);
+      case 'get': {
+        // Global staff can view any order in their company
+        return await getOrder(req, supabase, auth);
+      }
       case 'update-status':
         return await updateOrderStatus(req, supabase, auth);
       case 'add-payment':
@@ -101,7 +105,7 @@ async function createOrder(req: Request, supabase: any, auth: AuthContext, branc
 
 // ─── List Orders (paginated) ────────────────────────────────────────────────
 
-async function listOrders(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+async function listOrders(req: Request, supabase: any, auth: AuthContext) {
   const url = new URL(req.url);
   const { page, pageSize, sortColumn, sortDirection } = validatePagination(
     {
@@ -113,10 +117,21 @@ async function listOrders(req: Request, supabase: any, auth: AuthContext, branch
     ['created_at', 'order_number', 'total', 'status'],
   );
 
-  let query = supabase
+  // Determine branch scope
+  const branchIdOrAll = resolveBranchIdOrAll(auth, req);
+
+  const service = createServiceClient();
+  let query = service
     .from('orders')
-    .select('*, order_items(*), order_payments(*)', { count: 'exact' })
-    .eq('branch_id', branchId);
+    .select('*, order_items(*), order_payments(*)', { count: 'exact' });
+
+  if (branchIdOrAll === '__all__') {
+    // Global staff: all orders in their company
+    query = query.eq('company_id', auth.companyId);
+  } else {
+    // Specific branch
+    query = query.eq('branch_id', branchIdOrAll);
+  }
 
   // Filters
   const status = url.searchParams.get('status');
@@ -151,17 +166,26 @@ async function listOrders(req: Request, supabase: any, auth: AuthContext, branch
 
 // ─── Get Single Order ───────────────────────────────────────────────────────
 
-async function getOrder(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+async function getOrder(req: Request, supabase: any, auth: AuthContext) {
   const url = new URL(req.url);
   const id = url.searchParams.get('id');
   if (!id) return errorResponse('Missing order id');
 
-  const { data, error } = await supabase
+  const service = createServiceClient();
+  let query = service
     .from('orders')
     .select('*, order_items(*), order_payments(*), order_status_history(*)')
-    .eq('id', id)
-    .eq('branch_id', branchId)
-    .single();
+    .eq('id', id);
+
+  // Scope to company for global, or branch for branch staff
+  if (auth.isGlobal) {
+    query = query.eq('company_id', auth.companyId);
+  } else {
+    const branchId = resolveBranchId(auth, req);
+    if (branchId) query = query.eq('branch_id', branchId);
+  }
+
+  const { data, error } = await query.single();
 
   if (error) return errorResponse(error.message, 404);
   return jsonResponse({ order: data });

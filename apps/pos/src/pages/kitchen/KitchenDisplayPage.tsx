@@ -28,6 +28,7 @@ import type { MealAvailability, MealAssignmentStatus } from '@paxrest/shared-typ
 import { usePaginated, useApi, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
+import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
 const STATIONS = [
@@ -38,6 +39,10 @@ const STATIONS = [
 ];
 
 export default function KitchenDisplayPage() {
+  return <BranchGuard><KitchenDisplayContent /></BranchGuard>;
+}
+
+function KitchenDisplayContent() {
   const { activeBranchId, company, activeBranch } = useAuth();
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const [tab, setTab] = useState(0);

@@ -9,9 +9,14 @@ import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
 import { usePaginated } from '@/hooks';
+import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
 export default function ShiftsPage() {
+  return <BranchGuard><ShiftsContent /></BranchGuard>;
+}
+
+function ShiftsContent() {
   const { activeBranchId, company, activeBranch, profile } = useAuth();
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const [currentShift, setCurrentShift] = useState<any>(null);
