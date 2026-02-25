@@ -28,11 +28,12 @@ export async function api<T = any>(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${session.access_token}`,
+    apikey: supabaseAnonKey,
   };
   if (branchId) headers['x-branch-id'] = branchId;
 
   const res = await fetch(url.toString(), {
-    method: body ? 'POST' : method,
+    method: body ? (method === 'GET' ? 'POST' : method) : method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
   });

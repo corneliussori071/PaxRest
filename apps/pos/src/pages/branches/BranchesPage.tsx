@@ -65,13 +65,13 @@ export default function BranchesPage() {
     setSaving(true);
     try {
       if (editId) {
-        await api('store', 'update-branch', {
+        await api('store', 'branch', {
           method: 'PUT',
           body: { id: editId, ...form },
         });
         toast.success('Branch updated');
       } else {
-        await api('store', 'create-branch', {
+        await api('store', 'branches', {
           body: form,
         });
         toast.success('Branch created');
@@ -89,7 +89,7 @@ export default function BranchesPage() {
   const handleToggleActive = async (branch: Branch) => {
     setMenuAnchor(null);
     try {
-      await api('store', 'update-branch', {
+      await api('store', 'branch', {
         method: 'PUT',
         body: { id: branch.id, is_active: !branch.is_active },
       });

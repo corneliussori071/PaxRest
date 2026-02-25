@@ -156,18 +156,31 @@ async function createBranch(req: Request, auth: AuthContext) {
 
   if (error) return errorResponse(error.message);
 
-  // Add branch to the creator's branch_ids
-  const { data: profile } = await service
-    .from('profiles')
-    .select('branch_ids')
-    .eq('id', auth.userId)
-    .single();
+  // For branch staff, add the new branch to their branch_ids.
+  // Global staff (owner/general_manager) don't carry branch_ids — just
+  // set active_branch_id as a convenience if they have none yet.
+  if (!auth.isGlobal) {
+    const { data: profile } = await service
+      .from('profiles')
+      .select('branch_ids')
+      .eq('id', auth.userId)
+      .single();
 
-  const newBranchIds = [...(profile?.branch_ids ?? []), data.id];
-  await service
-    .from('profiles')
-    .update({ branch_ids: newBranchIds, active_branch_id: profile?.branch_ids?.length ? undefined : data.id })
-    .eq('id', auth.userId);
+    const newBranchIds = [...(profile?.branch_ids ?? []), data.id];
+    await service
+      .from('profiles')
+      .update({
+        branch_ids: newBranchIds,
+        active_branch_id: profile?.branch_ids?.length ? undefined : data.id,
+      })
+      .eq('id', auth.userId);
+  } else if (!auth.activeBranchId) {
+    // Global staff with no active branch → set it for convenience
+    await service
+      .from('profiles')
+      .update({ active_branch_id: data.id })
+      .eq('id', auth.userId);
+  }
 
   return jsonResponse({ branch: data }, 201);
 }
