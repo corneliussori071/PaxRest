@@ -442,12 +442,17 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
   const [dishDialog, setDishDialog] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Per-item config in the dialog: quantity, excluded ingredients, excluded extras
+  // Per-item config in the dialog: size, unit, estimated customers, excluded ingredients/extras
   const [itemConfigs, setItemConfigs] = useState<Record<string, {
-    quantity: number;
+    size: number;
+    unit: string;
+    customUnit: string;
+    estimatedCustomers: number;
     excludedIngredients: Set<string>;
     excludedExtras: Set<string>;
   }>>({});
+
+  const UNITS = ['pot', 'cup', 'kg', 'pounds', 'litres', 'plates', 'bowls', 'trays', 'pieces', 'custom'];
 
   // Chef assignment
   const [assignMode, setAssignMode] = useState<'auto' | 'manual'>('auto');
@@ -504,7 +509,10 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
     const configs: typeof itemConfigs = {};
     selectedItems.forEach((item: any) => {
       configs[item.id] = {
-        quantity: 1,
+        size: 1,
+        unit: 'pot',
+        customUnit: '',
+        estimatedCustomers: 1,
         excludedIngredients: new Set(),
         excludedExtras: new Set(),
       };
@@ -538,10 +546,10 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
     });
   };
 
-  const updateQuantity = (itemId: string, qty: number) => {
+  const updateConfig = (itemId: string, patch: Record<string, any>) => {
     setItemConfigs((prev) => ({
       ...prev,
-      [itemId]: { ...prev[itemId], quantity: Math.max(1, qty) },
+      [itemId]: { ...prev[itemId], ...patch },
     }));
   };
 
@@ -564,10 +572,12 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
 
       const items = selectedItems.map((item: any) => {
         const cfg = itemConfigs[item.id];
+        const unit = cfg?.unit === 'custom' ? (cfg?.customUnit || 'custom') : (cfg?.unit ?? 'pot');
         return {
           menu_item_id: item.id,
           menu_item_name: item.name,
-          quantity: cfg?.quantity ?? 1,
+          quantity: cfg?.size ?? 1,
+          notes: `Size: ${cfg?.size ?? 1} ${unit} · Est. customers: ${cfg?.estimatedCustomers ?? 1}`,
           excluded_ingredients: Array.from(cfg?.excludedIngredients ?? []),
           excluded_extras: Array.from(cfg?.excludedExtras ?? []),
         };
@@ -641,7 +651,12 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
                       )}
 
                       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                        {formatCurrency(item.base_price, currency)}
+                        {formatCurrency(
+                          (Number(item.base_price) || 0)
+                          + (item.menu_item_ingredients ?? []).reduce((s: number, i: any) => s + Number(i.cost_per_unit ?? i.price ?? 0), 0)
+                          + (item.menu_item_extras ?? []).reduce((s: number, e: any) => s + Number(e.price ?? 0), 0),
+                          currency,
+                        )}
                         {item.calories ? ` · ${item.calories} cal` : ''}
                       </Typography>
 
@@ -677,17 +692,46 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
 
             return (
               <Box key={item.id} sx={{ mb: 3, pb: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography fontWeight={700}>{item.name}</Typography>
+                <Typography fontWeight={700} sx={{ mb: 1 }}>{item.name}</Typography>
+
+                <Stack direction="row" spacing={1} sx={{ mb: 1 }} flexWrap="wrap">
                   <TextField
-                    size="small" label="Qty" type="number" sx={{ width: 80 }}
-                    value={cfg.quantity}
-                    onChange={(e) => updateQuantity(item.id, Number(e.target.value))}
+                    size="small" label="Size" type="number" sx={{ width: 80 }}
+                    value={cfg.size}
+                    onChange={(e) => updateConfig(item.id, { size: Math.max(1, Number(e.target.value)) })}
+                  />
+                  <FormControl size="small" sx={{ minWidth: 120 }}>
+                    <InputLabel>Unit</InputLabel>
+                    <Select
+                      value={cfg.unit} label="Unit"
+                      onChange={(e) => updateConfig(item.id, { unit: e.target.value })}
+                    >
+                      {UNITS.map((u) => (
+                        <MuiMenuItem key={u} value={u}>{u.charAt(0).toUpperCase() + u.slice(1)}</MuiMenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  {cfg.unit === 'custom' && (
+                    <TextField
+                      size="small" label="Custom unit" sx={{ width: 120 }}
+                      value={cfg.customUnit}
+                      onChange={(e) => updateConfig(item.id, { customUnit: e.target.value })}
+                    />
+                  )}
+                  <TextField
+                    size="small" label="Est. customers" type="number" sx={{ width: 120 }}
+                    value={cfg.estimatedCustomers}
+                    onChange={(e) => updateConfig(item.id, { estimatedCustomers: Math.max(1, Number(e.target.value)) })}
                   />
                 </Stack>
 
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                  Base price: {formatCurrency(item.base_price, currency)}
+                  Total price: {formatCurrency(
+                    (Number(item.base_price) || 0)
+                    + ingredients.filter((i: any) => !cfg.excludedIngredients.has(i.id ?? i.ingredient_id)).reduce((s: number, i: any) => s + Number(i.cost_per_unit ?? i.price ?? 0), 0)
+                    + extras.filter((e: any) => !cfg.excludedExtras.has(e.id ?? e.extra_id)).reduce((s: number, e: any) => s + Number(e.price ?? 0), 0),
+                    currency,
+                  )}
                 </Typography>
 
                 {ingredients.length > 0 && (

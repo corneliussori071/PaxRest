@@ -155,7 +155,7 @@ async function listItems(req: Request, supabase: any, auth: AuthContext, branchI
 
   let query = supabase
     .from('menu_items')
-    .select('*, menu_variants(*), menu_item_modifier_groups(*, modifier_groups(*, modifiers(*)))', { count: 'exact' })
+    .select('*, menu_variants(*), menu_item_modifier_groups(*, modifier_groups(*, modifiers(*))), menu_item_ingredients(*), menu_item_extras(*)', { count: 'exact' })
     .eq('branch_id', branchId);
 
   if (categoryId) query = query.eq('category_id', categoryId);

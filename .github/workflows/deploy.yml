@@ -16,6 +16,8 @@ jobs:
   deploy-supabase:
     name: Deploy Supabase
     runs-on: ubuntu-latest
+    # Only run when Supabase secrets are configured
+    if: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +43,8 @@ jobs:
   deploy-pos:
     name: Deploy POS App
     runs-on: ubuntu-latest
+    # Don't block on Supabase — run independently
+    if: always()
     needs: deploy-supabase
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +78,7 @@ jobs:
   deploy-customer:
     name: Deploy Customer App
     runs-on: ubuntu-latest
+    if: always()
     needs: deploy-supabase
     steps:
       - uses: actions/checkout@v4
@@ -102,6 +107,7 @@ jobs:
   deploy-rider:
     name: Deploy Rider App
     runs-on: ubuntu-latest
+    if: always()
     needs: deploy-supabase
     steps:
       - uses: actions/checkout@v4
