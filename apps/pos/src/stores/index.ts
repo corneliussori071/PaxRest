@@ -144,8 +144,8 @@ export const useMenuStore = create<MenuState & MenuActions>((set, get) => ({
     if (get().lastFetched && Date.now() - get().lastFetched! < 5 * 60_000) return;
     set({ loading: true });
     try {
-      const data = await api<{ categories: MenuCategoryWithItems[] }>('menu', 'full-menu', { params: {}, branchId });
-      set({ categories: data.categories, loading: false, lastFetched: Date.now() });
+      const data = await api<{ menu: MenuCategoryWithItems[] }>('menu', 'full', { params: {}, branchId });
+      set({ categories: data.menu ?? [], loading: false, lastFetched: Date.now() });
     } catch (err) {
       console.error('Failed to load menu:', err);
       set({ loading: false });
