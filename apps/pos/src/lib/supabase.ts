@@ -18,14 +18,6 @@ export async function api<T = any>(
 ): Promise<T> {
   const { method = 'GET', body, params, branchId } = options;
 
-  // Force token refresh if expired by calling getUser() first,
-  // then get the (now-refreshed) session for the access_token.
-  const { error: userError } = await supabase.auth.getUser();
-  if (userError) {
-    // getUser failed — try refreshing the session explicitly
-    const { error: refreshError } = await supabase.auth.refreshSession();
-    if (refreshError) throw new Error('Not authenticated — please log in again');
-  }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
 
@@ -34,18 +26,31 @@ export async function api<T = any>(
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${session.access_token}`,
-    apikey: supabaseAnonKey,
-  };
-  if (branchId) headers['x-branch-id'] = branchId;
+  const doFetch = (token: string) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      apikey: supabaseAnonKey,
+    };
+    if (branchId) headers['x-branch-id'] = branchId;
 
-  const res = await fetch(url.toString(), {
-    method: body ? (method === 'GET' ? 'POST' : method) : method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+    return fetch(url.toString(), {
+      method: body ? (method === 'GET' ? 'POST' : method) : method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  };
+
+  let res = await doFetch(session.access_token);
+
+  // If 401 (token expired), refresh session and retry once
+  if (res.status === 401) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError || !refreshData.session) {
+      throw new Error('Session expired — please log in again');
+    }
+    res = await doFetch(refreshData.session.access_token);
+  }
 
   const json = await res.json();
   if (!res.ok) {
