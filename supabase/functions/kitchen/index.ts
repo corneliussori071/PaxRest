@@ -21,44 +21,62 @@ serve(async (req) => {
     const branchId = resolveBranchId(auth, req);
     if (!branchId) return errorResponse('No branch context');
 
+    // Helper: check granular kitchen permission OR legacy umbrella perm
+    const canKitchen = (perm: string) =>
+      hasPermission(auth, perm) || hasPermission(auth, 'view_kitchen') || hasPermission(auth, 'manage_menu');
+
     switch (action) {
       // ─── Existing KDS actions ───
       case 'orders':
+        if (!canKitchen('kitchen_orders')) return errorResponse('Forbidden', 403);
         return await getKitchenOrders(req, supabase, auth, branchId);
       case 'update-item':
+        if (!canKitchen('kitchen_orders')) return errorResponse('Forbidden', 403);
         return await updateItemStatus(req, supabase, auth);
       case 'bump':
+        if (!canKitchen('kitchen_orders')) return errorResponse('Forbidden', 403);
         return await bumpOrder(req, supabase, auth);
       case 'recall':
+        if (!canKitchen('kitchen_orders')) return errorResponse('Forbidden', 403);
         return await recallOrder(req, supabase, auth);
 
-      // ─── New: Meal Assignments (Make a Dish) ───
+      // ─── Meal Assignments (Make a Dish) ───
       case 'assignments':
-        return req.method === 'GET'
-          ? await listAssignments(req, supabase, auth, branchId)
-          : await createAssignment(req, supabase, auth, branchId);
+        if (req.method === 'GET') {
+          if (!canKitchen('kitchen_assignments')) return errorResponse('Forbidden', 403);
+          return await listAssignments(req, supabase, auth, branchId);
+        }
+        if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
+        return await createAssignment(req, supabase, auth, branchId);
       case 'assignment-respond':
+        if (!canKitchen('kitchen_assignments')) return errorResponse('Forbidden', 403);
         return await respondAssignment(req, supabase, auth, branchId);
       case 'assignment-complete':
+        if (!canKitchen('kitchen_assignments')) return errorResponse('Forbidden', 403);
         return await completeAssignment(req, supabase, auth, branchId);
       case 'assignment-update':
+        if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
         return await updateAssignment(req, supabase, auth, branchId);
       case 'assignment-delete':
+        if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
         return await deleteAssignment(req, supabase, auth, branchId);
       case 'staff-chefs':
+        if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
         return await listChefs(req, supabase, auth, branchId);
 
-      // ─── New: Available Meals ───
+      // ─── Available Meals ───
       case 'available-meals':
+        if (!canKitchen('kitchen_available_meals')) return errorResponse('Forbidden', 403);
         return req.method === 'GET'
           ? await listAvailableMeals(req, supabase, auth, branchId)
           : await updateAvailableMeal(req, supabase, auth, branchId);
 
-      // ─── New: Menu Availability ───
+      // ─── Menu Availability ───
       case 'update-availability':
+        if (!canKitchen('kitchen_available_meals')) return errorResponse('Forbidden', 403);
         return await updateMenuAvailability(req, supabase, auth, branchId);
 
-      // ─── New: Kitchen Stats ───
+      // ─── Kitchen Stats ───
       case 'stats':
         return await getKitchenStats(supabase, auth, branchId);
 
@@ -261,9 +279,6 @@ async function listAssignments(req: Request, supabase: any, auth: AuthContext, b
 }
 
 async function createAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
-  if (!hasPermission(auth, 'view_kitchen') && !hasPermission(auth, 'manage_menu')) {
-    return errorResponse('Forbidden', 403);
-  }
   const body = await req.json();
 
   // For batch mode, items array is required; for single mode, menu_item_id + menu_item_name
@@ -408,9 +423,6 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
 
 async function updateAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
-  if (!hasPermission(auth, 'view_kitchen') && !hasPermission(auth, 'manage_menu')) {
-    return errorResponse('Forbidden', 403);
-  }
   const body = await req.json();
   if (!body.assignment_id) return errorResponse('Missing assignment_id');
 
@@ -438,9 +450,6 @@ async function updateAssignment(req: Request, supabase: any, auth: AuthContext, 
 
 async function deleteAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
-  if (!hasPermission(auth, 'view_kitchen') && !hasPermission(auth, 'manage_menu')) {
-    return errorResponse('Forbidden', 403);
-  }
   const body = await req.json();
   if (!body.assignment_id) return errorResponse('Missing assignment_id');
 
@@ -560,9 +569,6 @@ async function updateAvailableMeal(req: Request, supabase: any, auth: AuthContex
 
 async function updateMenuAvailability(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
-  if (!hasPermission(auth, 'view_kitchen') && !hasPermission(auth, 'manage_menu')) {
-    return errorResponse('Forbidden', 403);
-  }
   const body = await req.json();
 
   if (!body.menu_item_id || !body.availability_status) {

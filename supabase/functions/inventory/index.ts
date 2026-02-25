@@ -638,7 +638,9 @@ async function listIngredientRequests(req: Request, supabase: any, auth: AuthCon
 // ─── Create Ingredient Request ──────────────────────────────────────────────
 
 async function createIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
-  if (!hasPermission(auth, 'view_kitchen')) return errorResponse('Forbidden', 403);
+  if (!hasPermission(auth, 'kitchen_ingredient_requests') && !hasPermission(auth, 'view_kitchen') && !hasPermission(auth, 'manage_inventory')) {
+    return errorResponse('Forbidden', 403);
+  }
   const body = await req.json();
 
   if (!body.items || body.items.length === 0) {

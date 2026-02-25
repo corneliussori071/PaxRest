@@ -25,14 +25,23 @@ const GLOBAL_ROLES: CompanyRole[] = ['owner', 'general_manager'];
 const PERMISSION_LABELS: { key: Permission; label: string; group: string }[] = [
   { key: 'process_pos', label: 'POS Terminal', group: 'Operations' },
   { key: 'manage_orders', label: 'View & Manage Orders', group: 'Operations' },
-  { key: 'view_kitchen', label: 'Kitchen Display', group: 'Operations' },
   { key: 'manage_tables', label: 'Assign Tables', group: 'Operations' },
+  // Kitchen Display — own heading with granular sub-permissions
+  { key: 'view_kitchen', label: 'Access Kitchen Display', group: 'Kitchen Display' },
+  { key: 'kitchen_orders', label: 'Pending Orders', group: 'Kitchen Display' },
+  { key: 'kitchen_assignments', label: 'Assignments', group: 'Kitchen Display' },
+  { key: 'kitchen_make_dish', label: 'Make a Dish', group: 'Kitchen Display' },
+  { key: 'kitchen_available_meals', label: 'Available Meals', group: 'Kitchen Display' },
+  { key: 'kitchen_completed', label: 'Completed', group: 'Kitchen Display' },
+  { key: 'kitchen_ingredient_requests', label: 'Ingredient Requests', group: 'Kitchen Display' },
+  // Management
   { key: 'manage_menu', label: 'Manage Menu', group: 'Management' },
   { key: 'manage_inventory', label: 'Inventory', group: 'Management' },
   { key: 'manage_suppliers', label: 'Suppliers', group: 'Management' },
   { key: 'manage_branches', label: 'Manage Branches', group: 'Management' },
   { key: 'manage_delivery', label: 'Deliveries', group: 'Management' },
   { key: 'manage_shifts', label: 'Shifts & Cash', group: 'Management' },
+  // Admin
   { key: 'manage_staff', label: 'Staff Management', group: 'Admin' },
   { key: 'view_reports', label: 'Access Reports', group: 'Admin' },
   { key: 'manage_settings', label: 'Store Settings', group: 'Admin' },

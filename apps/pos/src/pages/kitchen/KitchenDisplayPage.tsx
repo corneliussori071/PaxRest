@@ -48,30 +48,55 @@ export default function KitchenDisplayPage() {
 }
 
 function KitchenDisplayContent() {
-  const { activeBranchId, company, activeBranch } = useAuth();
+  const { activeBranchId, company, activeBranch, profile } = useAuth();
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const [tab, setTab] = useState(0);
+
+  const perms = profile?.permissions ?? [];
+  // Helper: user has permission OR has the umbrella view_kitchen perm
+  const can = (p: string) => perms.includes(p as any) || perms.includes('view_kitchen' as any);
+
+  // Build visible tabs based on permissions
+  const tabs = useMemo(() => {
+    const all: { key: string; label: string; icon: React.ReactElement; component: React.ReactNode }[] = [];
+    if (can('kitchen_orders'))
+      all.push({ key: 'orders', label: 'Pending Orders', icon: <KitchenIcon />, component: <PendingOrdersTab branchId={activeBranchId!} /> });
+    if (can('kitchen_assignments'))
+      all.push({ key: 'assignments', label: 'Assignments', icon: <PersonIcon />, component: <AssignmentsTab branchId={activeBranchId!} currency={currency} /> });
+    if (can('kitchen_make_dish'))
+      all.push({ key: 'make_dish', label: 'Make a Dish', icon: <PlayArrowIcon />, component: <MakeDishTab branchId={activeBranchId!} currency={currency} /> });
+    if (can('kitchen_available_meals'))
+      all.push({ key: 'available', label: 'Available Meals', icon: <ShoppingCartIcon />, component: <AvailableMealsTab branchId={activeBranchId!} currency={currency} /> });
+    if (can('kitchen_completed'))
+      all.push({ key: 'completed', label: 'Completed', icon: <DoneAllIcon />, component: <CompletedOrdersTab branchId={activeBranchId!} /> });
+    if (can('kitchen_ingredient_requests'))
+      all.push({ key: 'requests', label: 'Ingredient Requests', icon: <InventoryIcon />, component: <IngredientRequestsTab branchId={activeBranchId!} /> });
+    return all;
+  }, [perms, activeBranchId, currency]);
+
+  // Clamp tab index if permissions change
+  const safeTab = Math.min(tab, Math.max(0, tabs.length - 1));
+
+  if (tabs.length === 0) {
+    return (
+      <Box sx={{ p: 4, textAlign: 'center' }}>
+        <Typography color="text.secondary">You do not have permissions to view any kitchen tabs. Contact your manager.</Typography>
+      </Box>
+    );
+  }
 
   return (
     <Box>
       <Tabs
-        value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}
+        value={safeTab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}
         variant="scrollable" scrollButtons="auto"
       >
-        <Tab label="Pending Orders" icon={<KitchenIcon />} iconPosition="start" />
-        <Tab label="Assignments" icon={<PersonIcon />} iconPosition="start" />
-        <Tab label="Make a Dish" icon={<PlayArrowIcon />} iconPosition="start" />
-        <Tab label="Available Meals" icon={<ShoppingCartIcon />} iconPosition="start" />
-        <Tab label="Completed" icon={<DoneAllIcon />} iconPosition="start" />
-        <Tab label="Ingredient Requests" icon={<InventoryIcon />} iconPosition="start" />
+        {tabs.map((t) => (
+          <Tab key={t.key} label={t.label} icon={t.icon as React.ReactElement} iconPosition="start" />
+        ))}
       </Tabs>
 
-      {tab === 0 && <PendingOrdersTab branchId={activeBranchId!} />}
-      {tab === 1 && <AssignmentsTab branchId={activeBranchId!} currency={currency} />}
-      {tab === 2 && <MakeDishTab branchId={activeBranchId!} currency={currency} />}
-      {tab === 3 && <AvailableMealsTab branchId={activeBranchId!} currency={currency} />}
-      {tab === 4 && <CompletedOrdersTab branchId={activeBranchId!} />}
-      {tab === 5 && <IngredientRequestsTab branchId={activeBranchId!} />}
+      {tabs[safeTab]?.component}
     </Box>
   );
 }

@@ -44,6 +44,8 @@ const OWNER_PERMISSIONS = [
   'manage_loyalty', 'view_reports', 'export_reports', 'view_audit',
   'manage_wastage', 'manage_suppliers', 'manage_purchases',
   'manage_branches', 'process_pos', 'admin_panel', 'view_kitchen',
+  'kitchen_orders', 'kitchen_assignments', 'kitchen_make_dish',
+  'kitchen_available_meals', 'kitchen_completed', 'kitchen_ingredient_requests',
 ];
 
 // --- Register: Create company + owner profile (no branch) ---
