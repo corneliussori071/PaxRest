@@ -199,11 +199,16 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
 
     setSaving(true);
     try {
-      // If custom category, create it first
+      // If custom or new category, create it first
       let categoryId = form.category_id;
-      if (!categoryId && form.custom_category.trim()) {
+      let newCatName = '';
+      if (categoryId.startsWith('__new__')) {
+        newCatName = categoryId.replace('__new__', '');
+        categoryId = '';
+      }
+      if (!categoryId && (form.custom_category.trim() || newCatName)) {
         const catResult = await api<{ category: any }>('menu', 'categories', {
-          body: { name: form.custom_category.trim() },
+          body: { name: (form.custom_category.trim() || newCatName) },
           branchId,
         });
         categoryId = catResult.category.id;
