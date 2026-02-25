@@ -18,6 +18,7 @@ export async function api<T = any>(
 ): Promise<T> {
   const { method = 'GET', body, params, branchId } = options;
 
+  // getSession() in v2.49 auto-refreshes expired tokens
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
 
@@ -43,13 +44,14 @@ export async function api<T = any>(
 
   let res = await doFetch(session.access_token);
 
-  // If 401 (token expired), refresh session and retry once
+  // If 401 (token expired between getSession and fetch), refresh and retry once
   if (res.status === 401) {
-    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-    if (refreshError || !refreshData.session) {
+    const { data: { session: refreshed } } = await supabase.auth.refreshSession();
+    if (!refreshed) {
+      await supabase.auth.signOut();
       throw new Error('Session expired — please log in again');
     }
-    res = await doFetch(refreshData.session.access_token);
+    res = await doFetch(refreshed.access_token);
   }
 
   const json = await res.json();
