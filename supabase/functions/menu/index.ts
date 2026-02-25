@@ -88,12 +88,10 @@ async function upsertCategory(req: Request, supabase: any, auth: AuthContext, br
 
   if (!body.name) return errorResponse('Missing category name');
 
-  const slug = sanitizeString(body.name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const record = {
     company_id: auth.companyId,
     branch_id: branchId,
     name: sanitizeString(body.name),
-    slug,
     description: body.description ? sanitizeString(body.description) : null,
     image_url: body.image_url ?? null,
     sort_order: body.sort_order ?? 0,
@@ -201,13 +199,11 @@ async function upsertItem(req: Request, supabase: any, auth: AuthContext, branch
     return errorResponse('Missing required fields: name, category_id, base_price');
   }
 
-  const slug = sanitizeString(body.name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const record = {
     company_id: auth.companyId,
     branch_id: branchId,
     category_id: body.category_id,
     name: sanitizeString(body.name),
-    slug,
     description: body.description ? sanitizeString(body.description) : null,
     base_price: body.base_price,
     station: body.station ?? 'kitchen',
