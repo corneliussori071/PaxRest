@@ -211,7 +211,7 @@ async function upsertItem(req: Request, supabase: any, auth: AuthContext, branch
     availability_status: body.availability_status ?? 'available',
     is_active: body.is_active ?? true,
     sort_order: body.sort_order ?? 0,
-    prep_time_minutes: body.prep_time_minutes ?? null,
+    preparation_time_min: body.prep_time_minutes ?? body.preparation_time_min ?? 15,
     image_url: body.image_url ?? null,
     media_url: body.media_url ?? null,
     media_type: body.media_type ?? null,
