@@ -306,7 +306,7 @@ async function createAssignment(req: Request, supabase: any, auth: AuthContext, 
         assigned_to: item.assigned_to ?? body.assigned_to ?? auth.userId,
         assigned_to_name: item.assigned_to_name ?? body.assigned_to_name ?? auth.email,
         assigned_by: auth.userId,
-        assigned_by_name: body.assigned_by_name ?? auth.email,
+        assigned_by_name: body.assigned_by_name ?? auth.name ?? auth.email,
         quantity: item.quantity ?? body.quantity ?? 1,
         status: 'pending',
         notes: item.notes ? sanitizeString(item.notes) : (body.notes ? sanitizeString(body.notes) : null),
@@ -337,8 +337,28 @@ async function respondAssignment(req: Request, supabase: any, auth: AuthContext,
     return errorResponse('Invalid status. Must be accepted, rejected, or in_progress');
   }
 
-  const updates: Record<string, unknown> = { status: body.status };
-  if (body.status === 'accepted' || body.status === 'in_progress') {
+  // Fetch the assignment to enforce ownership / privilege checks
+  const { data: assignment, error: fetchErr } = await supabase
+    .from('meal_assignments')
+    .select('assigned_to, status')
+    .eq('id', body.assignment_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (fetchErr || !assignment) return errorResponse('Assignment not found', 404);
+
+  const isOwner = assignment.assigned_to === auth.userId;
+  const isPrivileged = hasPermission(auth, 'kitchen_make_dish') ||
+    hasPermission(auth, 'kitchen_ingredient_requests') ||
+    hasPermission(auth, 'manage_menu');
+  if (!isOwner && !isPrivileged) {
+    return errorResponse('You can only respond to your own assignments', 403);
+  }
+
+  // Accept immediately transitions to in_progress
+  const targetStatus = body.status === 'accepted' ? 'in_progress' : body.status;
+
+  const updates: Record<string, unknown> = { status: targetStatus };
+  if (targetStatus === 'in_progress') {
     updates.started_at = new Date().toISOString();
   }
   if (body.status === 'rejected' && body.rejection_reason) {
@@ -352,7 +372,7 @@ async function respondAssignment(req: Request, supabase: any, auth: AuthContext,
     .eq('branch_id', branchId);
 
   if (error) return errorResponse(error.message);
-  return jsonResponse({ updated: true });
+  return jsonResponse({ updated: true, status: targetStatus });
 }
 
 async function completeAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
@@ -370,6 +390,15 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
     .single();
 
   if (fetchErr || !assignment) return errorResponse('Assignment not found', 404);
+
+  // Only the assigned staff or privileged users can complete
+  const isOwner = assignment.assigned_to === auth.userId;
+  const isPrivileged = hasPermission(auth, 'kitchen_make_dish') ||
+    hasPermission(auth, 'kitchen_ingredient_requests') ||
+    hasPermission(auth, 'manage_menu');
+  if (!isOwner && !isPrivileged) {
+    return errorResponse('Only the assigned staff or a privileged user can complete this assignment', 403);
+  }
 
   const quantityCompleted = body.quantity_completed ?? assignment.quantity;
 
@@ -427,6 +456,11 @@ async function updateAssignment(req: Request, supabase: any, auth: AuthContext, 
   const body = await req.json();
   if (!body.assignment_id) return errorResponse('Missing assignment_id');
 
+  // Only users with make_dish or ingredient_requests can edit
+  if (!hasPermission(auth, 'kitchen_make_dish') && !hasPermission(auth, 'kitchen_ingredient_requests') && !hasPermission(auth, 'manage_menu')) {
+    return errorResponse('You do not have permission to edit assignments', 403);
+  }
+
   const updates: Record<string, unknown> = {};
   if (body.assigned_to) updates.assigned_to = body.assigned_to;
   if (body.assigned_to_name) updates.assigned_to_name = sanitizeString(body.assigned_to_name);
@@ -454,6 +488,11 @@ async function deleteAssignment(req: Request, supabase: any, auth: AuthContext, 
   const body = await req.json();
   if (!body.assignment_id) return errorResponse('Missing assignment_id');
 
+  // Only users with make_dish or ingredient_requests can delete
+  if (!hasPermission(auth, 'kitchen_make_dish') && !hasPermission(auth, 'kitchen_ingredient_requests') && !hasPermission(auth, 'manage_menu')) {
+    return errorResponse('You do not have permission to delete assignments', 403);
+  }
+
   const { error } = await supabase
     .from('meal_assignments')
     .delete()
@@ -480,10 +519,10 @@ async function listChefs(req: Request, supabase: any, auth: AuthContext, branchI
 
   if (error) return errorResponse(error.message);
 
-  // Narrow to staff assigned to the current branch (or those with no branch restriction)
+  // Strictly filter to staff that have this branch in their branch_ids
   const branchStaff = (staff ?? []).filter((s: any) => {
     const ids: string[] = s.branch_ids ?? [];
-    return ids.length === 0 || ids.includes(branchId);
+    return ids.includes(branchId);
   });
 
   // Count active assignments per staff member

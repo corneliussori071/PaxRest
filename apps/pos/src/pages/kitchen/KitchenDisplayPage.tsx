@@ -197,9 +197,17 @@ function PendingOrdersTab({ branchId }: { branchId: string }) {
    Tab 1 — Assignments (list with edit / delete / accept / reject / complete)
    ═══════════════════════════════════════════════════════ */
 function AssignmentsTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { profile } = useAuth();
+  const perms = profile?.permissions ?? [];
+  const myUserId = profile?.id ?? '';
+  const isPrivileged = perms.includes('kitchen_make_dish' as any) ||
+    perms.includes('kitchen_ingredient_requests' as any) ||
+    perms.includes('manage_menu' as any);
+
   const [assignments, setAssignments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  const [now, setNow] = useState(Date.now());
 
   // Edit dialog
   const [editDialog, setEditDialog] = useState(false);
@@ -228,6 +236,22 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
 
   useEffect(() => { fetchAssignments(); }, [fetchAssignments]);
   useRealtime('meal_assignments', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchAssignments());
+
+  // Tick every second to update countdown timers
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Format remaining time as HH:MM:SS or "overdue"
+  const formatCountdown = (expectedIso: string) => {
+    const diff = new Date(expectedIso).getTime() - now;
+    if (diff <= 0) return 'Overdue';
+    const h = Math.floor(diff / 3_600_000);
+    const m = Math.floor((diff % 3_600_000) / 60_000);
+    const s = Math.floor((diff % 60_000) / 1000);
+    return `${h > 0 ? `${h}h ` : ''}${m}m ${s}s`;
+  };
 
   const handleAccept = async (id: string) => {
     try {
@@ -330,15 +354,19 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           {assignments.map((a) => {
             const sc = statusColor(a.status);
+            const isMyAssignment = a.assigned_to === myUserId;
+            const canRespond = isMyAssignment || isPrivileged;
             return (
               <Card key={a.id} sx={{ width: 300, borderLeft: `4px solid`, borderLeftColor: `${sc}.main` }}>
                 <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
                     <Typography fontWeight={700}>{a.menu_item_name ?? 'Unknown'}</Typography>
-                    <Stack direction="row" spacing={0}>
-                      <Tooltip title="Edit"><IconButton size="small" onClick={() => openEdit(a)}><EditIcon fontSize="small" /></IconButton></Tooltip>
-                      <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => { setDeleteTarget(a); setDeleteDialog(true); }}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
-                    </Stack>
+                    {isPrivileged && (
+                      <Stack direction="row" spacing={0}>
+                        <Tooltip title="Edit"><IconButton size="small" onClick={() => openEdit(a)}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                        <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => { setDeleteTarget(a); setDeleteDialog(true); }}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
+                      </Stack>
+                    )}
                   </Stack>
 
                   <Stack direction="row" spacing={0.5} sx={{ my: 0.5 }} flexWrap="wrap">
@@ -353,12 +381,24 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                   <Typography variant="caption" color="text.secondary" display="block">
                     By: {a.assigned_by_name ?? '—'} · {new Date(a.created_at).toLocaleString()}
                   </Typography>
-                  {a.expected_completion_time && (
+
+                  {/* Countdown timer for in-progress assignments */}
+                  {a.expected_completion_time && a.status === 'in_progress' && (
+                    <Typography
+                      variant="caption" fontWeight={700} display="block" sx={{ mt: 0.5 }}
+                      color={new Date(a.expected_completion_time).getTime() - now <= 0 ? 'error.main' : 'info.main'}
+                    >
+                      <TimerIcon sx={{ fontSize: 12, mr: 0.3, verticalAlign: 'middle' }} />
+                      {formatCountdown(a.expected_completion_time)}
+                    </Typography>
+                  )}
+                  {a.expected_completion_time && a.status !== 'in_progress' && (
                     <Typography variant="caption" color="text.secondary" display="block">
                       <TimerIcon sx={{ fontSize: 12, mr: 0.3, verticalAlign: 'middle' }} />
                       Expected: {new Date(a.expected_completion_time).toLocaleTimeString()}
                     </Typography>
                   )}
+
                   {a.notes && <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>📝 {a.notes}</Typography>}
                   {a.rejection_reason && (
                     <Typography variant="caption" display="block" color="error" sx={{ mt: 0.5 }}>
@@ -367,13 +407,13 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                   )}
 
                   <Box sx={{ mt: 1, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                    {a.status === 'pending' && (
+                    {a.status === 'pending' && canRespond && (
                       <>
                         <Button size="small" variant="contained" color="success" onClick={() => handleAccept(a.id)}>Accept</Button>
                         <Button size="small" variant="outlined" color="error" onClick={() => openReject(a)}>Reject</Button>
                       </>
                     )}
-                    {(a.status === 'accepted' || a.status === 'in_progress') && (
+                    {a.status === 'in_progress' && canRespond && (
                       <Button size="small" variant="contained" color="success" startIcon={<CheckCircleIcon />} onClick={() => handleComplete(a.id)}>
                         Mark Complete
                       </Button>
@@ -458,7 +498,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
    Tab 2 — Make a Dish (browse menu, multi-select, assign to chef)
    ═══════════════════════════════════════════════════════ */
 function MakeDishTab({ branchId, currency }: { branchId: string; currency: string }) {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { data: menuData, loading } = useApi<any>('menu', 'full', undefined, [branchId]);
 
   // Selected menu item IDs
@@ -654,6 +694,7 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
           items,
           assigned_to: assignedTo,
           assigned_to_name: assignedToName ?? user?.email ?? 'Unassigned',
+          assigned_by_name: profile?.name ?? user?.email ?? 'Unknown',
           notes: globalNotes || undefined,
           expected_completion_time: expectedTime ? new Date(expectedTime).toISOString() : undefined,
         },

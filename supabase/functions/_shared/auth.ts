@@ -5,6 +5,7 @@ import { createServiceClient } from './db.ts';
 export interface AuthContext {
   userId: string;
   email: string;
+  name: string;
   companyId: string | null;
   branchIds: string[];
   activeBranchId: string | null;
@@ -38,7 +39,7 @@ export async function requireAuth(
   const service = createServiceClient();
   const { data: profile } = await service
     .from('profiles')
-    .select('company_id, branch_ids, active_branch_id, role, permissions')
+    .select('company_id, branch_ids, active_branch_id, role, permissions, name')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -47,6 +48,7 @@ export async function requireAuth(
   return {
     userId: user.id,
     email: user.email ?? '',
+    name: profile?.name ?? user.email ?? '',
     companyId: profile?.company_id ?? null,
     branchIds: profile?.branch_ids ?? [],
     activeBranchId: profile?.active_branch_id ?? null,
