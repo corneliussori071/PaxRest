@@ -469,18 +469,22 @@ async function deleteAssignment(req: Request, supabase: any, auth: AuthContext, 
 async function listChefs(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   // Fetch all profiles in the same company that have view_kitchen permission
   // (view_kitchen = "Access Kitchen Display" — the nav-level gate).
+  // Column names per 00002_create_core_tables: name, email, role, permissions,
+  // branch_ids (uuid[]), active_branch_id.
   const { data: staff, error } = await supabase
     .from('profiles')
-    .select('id, full_name, email, role, permissions, branch_id')
+    .select('id, name, email, role, permissions, branch_ids, active_branch_id')
     .eq('company_id', auth.companyId)
+    .eq('is_active', true)
     .contains('permissions', ['view_kitchen']);
 
   if (error) return errorResponse(error.message);
 
-  // Optionally narrow to the current branch (or show all company kitchen staff)
-  const branchStaff = (staff ?? []).filter(
-    (s: any) => !s.branch_id || s.branch_id === branchId,
-  );
+  // Narrow to staff assigned to the current branch (or those with no branch restriction)
+  const branchStaff = (staff ?? []).filter((s: any) => {
+    const ids: string[] = s.branch_ids ?? [];
+    return ids.length === 0 || ids.includes(branchId);
+  });
 
   // Count active assignments per staff member
   const { data: counts } = await supabase
@@ -496,7 +500,7 @@ async function listChefs(req: Request, supabase: any, auth: AuthContext, branchI
 
   const chefs = branchStaff.map((s: any) => ({
     user_id: s.id,
-    name: s.full_name ?? s.email ?? 'Unknown',
+    name: s.name ?? s.email ?? 'Unknown',
     role: s.role ?? 'staff',
     active_assignments: assignmentCounts[s.id] ?? 0,
   }));
