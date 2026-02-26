@@ -79,6 +79,9 @@ serve(async (req) => {
         return req.method === 'GET'
           ? await listAvailableMeals(req, supabase, auth, branchId)
           : await updateAvailableMeal(req, supabase, auth, branchId);
+      case 'meal-detail':
+        if (!canKitchen('kitchen_available_meals')) return errorResponse('Forbidden', 403);
+        return await getMealDetail(req, supabase, auth, branchId);
 
       // ─── Menu Availability ───
       case 'update-availability':
@@ -465,6 +468,15 @@ async function makeAvailableFromAssignment(req: Request, supabase: any, auth: Au
 
   const qty = assignment.quantity_completed ?? assignment.quantity;
 
+  // Extract quantity label from assignment notes (e.g. "Size: 2 pots · Est. customers: 10")
+  let quantityLabel = `${qty}`;
+  if (assignment.notes) {
+    const sizeMatch = assignment.notes.match(/Size:\s*(.+?)(?:\s*·|$)/i);
+    if (sizeMatch) {
+      quantityLabel = sizeMatch[1].trim();
+    }
+  }
+
   // Upsert into available_meals
   const { data: existing } = await service
     .from('available_meals')
@@ -478,6 +490,7 @@ async function makeAvailableFromAssignment(req: Request, supabase: any, auth: Au
       .from('available_meals')
       .update({
         quantity_available: existing.quantity_available + qty,
+        quantity_label: quantityLabel,
         availability_status: 'full',
         prepared_by: auth.userId,
         prepared_by_name: auth.name ?? auth.email,
@@ -492,6 +505,7 @@ async function makeAvailableFromAssignment(req: Request, supabase: any, auth: Au
         menu_item_id: assignment.menu_item_id,
         menu_item_name: assignment.menu_item_name,
         quantity_available: qty,
+        quantity_label: quantityLabel,
         availability_status: 'full',
         prepared_by: auth.userId,
         prepared_by_name: auth.name ?? auth.email,
@@ -686,6 +700,31 @@ async function listAvailableMeals(req: Request, supabase: any, auth: AuthContext
 
   if (error) return errorResponse(error.message);
   return jsonResponse({ meals: data });
+}
+
+// ─── Meal Detail (food info only, for available meals tab) ──────────────────
+
+async function getMealDetail(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  const url = new URL(req.url);
+  const menuItemId = url.searchParams.get('menu_item_id');
+  if (!menuItemId) return errorResponse('Missing menu_item_id');
+
+  const { data: menuItem, error } = await supabase
+    .from('menu_items')
+    .select(`
+      id, name, description, base_price, image_url, media_url, media_type,
+      calories, allergens, tags, station, preparation_time_min,
+      is_available, availability_status,
+      menu_categories(name),
+      menu_item_ingredients(id, name, quantity_used, unit, cost_contribution, inventory_items(name, unit)),
+      menu_item_extras(id, name, price, is_available, sort_order),
+      menu_variants(id, name, price_adjustment, is_default, is_active)
+    `)
+    .eq('id', menuItemId)
+    .single();
+
+  if (error || !menuItem) return errorResponse('Menu item not found', 404);
+  return jsonResponse({ menu_item: menuItem });
 }
 
 async function updateAvailableMeal(req: Request, supabase: any, auth: AuthContext, branchId: string) {

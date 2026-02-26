@@ -1209,6 +1209,11 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
   const [meals, setMeals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Meal detail dialog
+  const [mealDetailOpen, setMealDetailOpen] = useState(false);
+  const [mealDetailData, setMealDetailData] = useState<any>(null);
+  const [mealDetailLoading, setMealDetailLoading] = useState(false);
+
   const fetchMeals = useCallback(async () => {
     try {
       const data = await api<{ meals: any[] }>('kitchen', 'available-meals', { params: {}, branchId });
@@ -1220,17 +1225,6 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
   useEffect(() => { fetchMeals(); }, [fetchMeals]);
   useRealtime('available_meals', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchMeals());
 
-  const handleDecrement = async (meal: any) => {
-    try {
-      await api('kitchen', 'available-meals', {
-        body: { meal_id: meal.id, action: 'decrement' },
-        branchId,
-      });
-      toast.success(`${meal.menu_item_name ?? 'Meal'} decremented`);
-      fetchMeals();
-    } catch (err: any) { toast.error(err.message); }
-  };
-
   const handleStatusChange = async (meal: any, newStatus: string) => {
     try {
       await api('kitchen', 'available-meals', {
@@ -1240,6 +1234,43 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
       toast.success(`Status updated to ${AVAILABLE_MEAL_STATUS_LABELS[newStatus as AvailableMealStatus] ?? newStatus}`);
       fetchMeals();
     } catch (err: any) { toast.error(err.message); }
+  };
+
+  const openMealDetail = async (menuItemId: string) => {
+    setMealDetailOpen(true);
+    setMealDetailLoading(true);
+    setMealDetailData(null);
+    try {
+      const data = await api<{ menu_item: any }>('kitchen', 'meal-detail', {
+        params: { menu_item_id: menuItemId },
+        branchId,
+      });
+      setMealDetailData(data.menu_item);
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to load details');
+      setMealDetailOpen(false);
+    } finally {
+      setMealDetailLoading(false);
+    }
+  };
+
+  const handlePrintMealDetail = () => {
+    const el = document.getElementById('meal-detail-print');
+    if (!el) return;
+    const w = window.open('', '_blank', 'width=800,height=600');
+    if (!w) return;
+    w.document.write(`<html><head><title>Meal Details</title>
+      <style>body{font-family:Arial,sans-serif;padding:20px}
+      img{max-width:200px;border-radius:8px}
+      table{border-collapse:collapse;width:100%;margin-top:10px}
+      th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}
+      th{background:#f5f5f5}
+      .section{margin-top:16px;font-weight:700;font-size:14px;border-bottom:1px solid #ccc;padding-bottom:4px}
+      </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+    w.close();
   };
 
   if (loading) return <LinearProgress />;
@@ -1259,6 +1290,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
           {meals.map((meal) => {
             const status = (meal.availability_status ?? 'full') as AvailableMealStatus;
             const statusOpt = AVAILABLE_MEAL_STATUS_OPTIONS.find((o) => o.value === status);
+            const qtyDisplay = meal.quantity_label || `${meal.quantity_available}`;
             return (
               <Card key={meal.id} sx={{ width: 260, textAlign: 'center', borderTop: `3px solid`, borderTopColor: `${statusOpt?.color ?? 'success'}.main` }}>
                 <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
@@ -1272,11 +1304,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
                   <Typography fontWeight={700}>{meal.menu_item_name ?? meal.menu_items?.name ?? '—'}</Typography>
 
                   <Stack direction="row" spacing={0.5} justifyContent="center" sx={{ my: 1 }}>
-                    <Chip
-                      size="small"
-                      label={`Qty: ${meal.quantity_available}`}
-                      color={meal.quantity_available > 0 ? 'success' : 'error'}
-                    />
+                    <Chip size="small" label={qtyDisplay} variant="outlined" />
                     <Chip
                       size="small"
                       label={statusOpt?.label ?? status}
@@ -1295,10 +1323,10 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
 
                   {canEditStatus && (
                     <FormControl fullWidth size="small" sx={{ mt: 1.5 }}>
-                      <InputLabel>Status</InputLabel>
+                      <InputLabel>Update Status</InputLabel>
                       <Select
                         value={status}
-                        label="Status"
+                        label="Update Status"
                         onChange={(e) => handleStatusChange(meal, e.target.value)}
                       >
                         {AVAILABLE_MEAL_STATUS_OPTIONS.map((opt) => (
@@ -1308,19 +1336,155 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
                     </FormControl>
                   )}
 
-                  {canEditStatus && (
-                    <Box sx={{ mt: 1, display: 'flex', justifyContent: 'center' }}>
-                      <IconButton color="error" onClick={() => handleDecrement(meal)} disabled={meal.quantity_available <= 0}>
-                        <RemoveIcon />
-                      </IconButton>
-                    </Box>
-                  )}
+                  <Box sx={{ mt: 1.5, display: 'flex', justifyContent: 'center' }}>
+                    <Button size="small" variant="outlined" startIcon={<VisibilityIcon />} onClick={() => openMealDetail(meal.menu_item_id)}>
+                      Details
+                    </Button>
+                  </Box>
                 </CardContent>
               </Card>
             );
           })}
         </Box>
       )}
+
+      {/* Meal Detail Dialog (food info only) */}
+      <Dialog open={mealDetailOpen} onClose={() => setMealDetailOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <LocalDiningIcon />
+            <Typography variant="h6">Meal Details</Typography>
+          </Stack>
+          <Stack direction="row" spacing={0.5}>
+            <Tooltip title="Print"><IconButton onClick={handlePrintMealDetail} disabled={mealDetailLoading}><PrintIcon /></IconButton></Tooltip>
+            <Tooltip title="Close"><IconButton onClick={() => setMealDetailOpen(false)}><CloseIcon /></IconButton></Tooltip>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers>
+          {mealDetailLoading ? (
+            <Box sx={{ textAlign: 'center', py: 4 }}><CircularProgress /></Box>
+          ) : mealDetailData ? (
+            <Box id="meal-detail-print">
+              {/* Header: image + name */}
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="flex-start">
+                {(mealDetailData.media_url || mealDetailData.image_url) && (
+                  <Avatar
+                    src={mealDetailData.media_url ?? mealDetailData.image_url}
+                    variant="rounded"
+                    sx={{ width: 140, height: 140 }}
+                  />
+                )}
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="h5" fontWeight={700}>{mealDetailData.name ?? '—'}</Typography>
+                  {mealDetailData.menu_categories?.name && (
+                    <Chip size="small" label={mealDetailData.menu_categories.name} sx={{ mt: 0.5 }} />
+                  )}
+                  {mealDetailData.description && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      {mealDetailData.description}
+                    </Typography>
+                  )}
+                  <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
+                    {mealDetailData.base_price != null && (
+                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(mealDetailData.base_price, currency)}</Typography>
+                    )}
+                    {mealDetailData.calories != null && (
+                      <Typography variant="body2"><strong>Calories:</strong> {mealDetailData.calories} kcal</Typography>
+                    )}
+                    {mealDetailData.preparation_time_min != null && (
+                      <Typography variant="body2"><strong>Prep Time:</strong> {mealDetailData.preparation_time_min} min</Typography>
+                    )}
+                    {mealDetailData.station && (
+                      <Typography variant="body2"><strong>Station:</strong> {mealDetailData.station}</Typography>
+                    )}
+                  </Stack>
+                  {mealDetailData.tags?.length > 0 && (
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 1 }} flexWrap="wrap">
+                      {mealDetailData.tags.map((t: string) => <Chip key={t} size="small" label={t} variant="outlined" />)}
+                    </Stack>
+                  )}
+                  {mealDetailData.allergens?.length > 0 && (
+                    <Typography variant="body2" color="warning.main" sx={{ mt: 0.5 }}>
+                      <strong>Allergens:</strong> {mealDetailData.allergens.join(', ')}
+                    </Typography>
+                  )}
+                </Box>
+              </Stack>
+
+              {/* Ingredients */}
+              {mealDetailData.menu_item_ingredients?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Ingredients</Typography>
+                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1.5, py: 0.75, fontSize: 13 }, '& th': { bgcolor: 'action.hover', fontWeight: 700 } }}>
+                    <thead>
+                      <tr><th>Ingredient</th><th>Quantity</th><th>Unit</th><th>Cost</th></tr>
+                    </thead>
+                    <tbody>
+                      {mealDetailData.menu_item_ingredients.map((ing: any) => (
+                        <tr key={ing.id}>
+                          <td>{ing.name ?? ing.inventory_items?.name ?? '—'}</td>
+                          <td>{ing.quantity_used}</td>
+                          <td>{ing.unit}</td>
+                          <td>{ing.cost_contribution ? formatCurrency(ing.cost_contribution, currency) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Box>
+                </>
+              )}
+
+              {/* Extras */}
+              {mealDetailData.menu_item_extras?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Extras / Add-ons</Typography>
+                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1.5, py: 0.75, fontSize: 13 }, '& th': { bgcolor: 'action.hover', fontWeight: 700 } }}>
+                    <thead>
+                      <tr><th>Extra</th><th>Price</th><th>Available</th></tr>
+                    </thead>
+                    <tbody>
+                      {mealDetailData.menu_item_extras.map((ext: any) => (
+                        <tr key={ext.id}>
+                          <td>{ext.name}</td>
+                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{ext.is_available ? 'Yes' : 'No'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Box>
+                </>
+              )}
+
+              {/* Variants */}
+              {mealDetailData.menu_variants?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Variants</Typography>
+                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                    {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
+                      <Chip
+                        key={v.id}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${formatCurrency(v.price_adjustment, currency)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        variant="outlined"
+                        size="small"
+                      />
+                    ))}
+                  </Stack>
+                </>
+              )}
+            </Box>
+          ) : (
+            <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No data available</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMealDetailOpen(false)}>Close</Button>
+          <Button variant="outlined" startIcon={<PrintIcon />} onClick={handlePrintMealDetail} disabled={mealDetailLoading || !mealDetailData}>
+            Print
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
