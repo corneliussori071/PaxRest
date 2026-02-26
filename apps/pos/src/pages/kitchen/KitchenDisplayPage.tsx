@@ -53,8 +53,9 @@ function KitchenDisplayContent() {
   const [tab, setTab] = useState(0);
 
   const perms = profile?.permissions ?? [];
-  // Helper: user has permission OR has the umbrella view_kitchen perm
-  const can = (p: string) => perms.includes(p as any) || perms.includes('view_kitchen' as any);
+  // view_kitchen only controls nav-menu visibility (MainLayout).
+  // Each tab is gated by its own granular permission — no umbrella fallback.
+  const can = (p: string) => perms.includes(p as any);
 
   // Build visible tabs based on permissions
   const tabs = useMemo(() => {
@@ -484,6 +485,7 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
   const [chefs, setChefs] = useState<any[]>([]);
   const [chefsLoading, setChefsLoading] = useState(false);
   const [selectedChef, setSelectedChef] = useState<any>(null);
+  const [excludedChefIds, setExcludedChefIds] = useState<Set<string>>(new Set());
   const [expectedTime, setExpectedTime] = useState('');
   const [globalNotes, setGlobalNotes] = useState('');
 
@@ -504,6 +506,44 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
   }, [menuItems]);
 
   const selectedItems = useMemo(() => menuItems.filter((i: any) => selected.has(i.id)), [menuItems, selected]);
+
+  // Chefs available for auto-assign (after exclusions)
+  const availableAutoChefs = useMemo(
+    () => chefs.filter((c: any) => !excludedChefIds.has(c.user_id)),
+    [chefs, excludedChefIds],
+  );
+
+  const toggleExcludeChef = (userId: string) => {
+    setExcludedChefIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId); else next.add(userId);
+      return next;
+    });
+  };
+
+  // Form-level validation: Assign button only active when all required fields filled
+  const isFormReady = useMemo(() => {
+    // Every selected item must have size ≥ 1, a valid unit, and est. customers ≥ 1
+    const itemsOk = selectedItems.every((item: any) => {
+      const cfg = itemConfigs[item.id];
+      if (!cfg) return false;
+      if (cfg.size < 1) return false;
+      if (!cfg.unit) return false;
+      if (cfg.unit === 'custom' && !cfg.customUnit.trim()) return false;
+      if (cfg.estimatedCustomers < 1) return false;
+      return true;
+    });
+    if (!itemsOk) return false;
+
+    // Expected completion time is required
+    if (!expectedTime) return false;
+
+    // Staff selection
+    if (assignMode === 'manual' && !selectedChef) return false;
+    if (assignMode === 'auto' && availableAutoChefs.length === 0) return false;
+
+    return true;
+  }, [selectedItems, itemConfigs, expectedTime, assignMode, selectedChef, availableAutoChefs]);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -545,6 +585,7 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
     setItemConfigs(configs);
     setAssignMode('auto');
     setSelectedChef(null);
+    setExcludedChefIds(new Set());
     setExpectedTime('');
     setGlobalNotes('');
     fetchChefs();
@@ -588,9 +629,9 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
       if (assignMode === 'manual' && selectedChef) {
         assignedTo = selectedChef.user_id;
         assignedToName = selectedChef.name;
-      } else if (assignMode === 'auto' && chefs.length > 0) {
-        // Pick the chef with the least active assignments
-        const sorted = [...chefs].sort((a, b) => a.active_assignments - b.active_assignments);
+      } else if (assignMode === 'auto' && availableAutoChefs.length > 0) {
+        // Pick the non-excluded chef with the least active assignments
+        const sorted = [...availableAutoChefs].sort((a, b) => a.active_assignments - b.active_assignments);
         assignedTo = sorted[0].user_id;
         assignedToName = sorted[0].name;
       }
@@ -822,11 +863,33 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
           </RadioGroup>
 
           {assignMode === 'auto' && (
-            <Alert severity="info" sx={{ mt: 1, mb: 2 }} icon={<AutorenewIcon />}>
-              {chefsLoading ? 'Loading chefs…' : chefs.length === 0
-                ? 'No kitchen staff found. Assignment will default to you.'
-                : `Will auto-assign to the chef with fewest active assignments (${[...chefs].sort((a, b) => a.active_assignments - b.active_assignments)[0]?.name ?? '—'} — ${[...chefs].sort((a, b) => a.active_assignments - b.active_assignments)[0]?.active_assignments ?? 0} active).`}
-            </Alert>
+            <Box sx={{ mt: 1, mb: 2 }}>
+              <Alert severity="info" icon={<AutorenewIcon />} sx={{ mb: 1 }}>
+                {chefsLoading ? 'Loading kitchen staff…' : chefs.length === 0
+                  ? 'No kitchen staff found. Assignment will default to you.'
+                  : availableAutoChefs.length === 0
+                    ? 'All staff excluded. Uncheck at least one staff member.'
+                    : `Will auto-assign to the least-busy staff (${[...availableAutoChefs].sort((a, b) => a.active_assignments - b.active_assignments)[0]?.name ?? '—'} — ${[...availableAutoChefs].sort((a, b) => a.active_assignments - b.active_assignments)[0]?.active_assignments ?? 0} active).`}
+              </Alert>
+              {chefs.length > 0 && (
+                <Box sx={{ ml: 1 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Uncheck staff to exclude from auto-assignment:</Typography>
+                  {chefs.map((c: any) => (
+                    <Stack key={c.user_id} direction="row" alignItems="center" spacing={1}>
+                      <Checkbox
+                        size="small"
+                        checked={!excludedChefIds.has(c.user_id)}
+                        onChange={() => toggleExcludeChef(c.user_id)}
+                        sx={{ p: 0.3 }}
+                      />
+                      <Typography variant="body2" sx={{ color: excludedChefIds.has(c.user_id) ? 'text.disabled' : 'text.primary' }}>
+                        {c.name} ({c.role}) — {c.active_assignments} active
+                      </Typography>
+                    </Stack>
+                  ))}
+                </Box>
+              )}
+            </Box>
           )}
 
           {assignMode === 'manual' && (
@@ -862,7 +925,7 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDishDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={saving}>
+          <Button variant="contained" onClick={handleSubmit} disabled={saving || !isFormReady}>
             {saving ? 'Assigning…' : `Assign ${selectedItems.length} Dish(es)`}
           </Button>
         </DialogActions>

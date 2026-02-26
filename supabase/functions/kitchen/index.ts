@@ -21,9 +21,10 @@ serve(async (req) => {
     const branchId = resolveBranchId(auth, req);
     if (!branchId) return errorResponse('No branch context');
 
-    // Helper: check granular kitchen permission OR legacy umbrella perm
+    // view_kitchen only gates sidebar visibility; each action checks its own granular perm.
+    // manage_menu is still allowed as a super-permission for managers.
     const canKitchen = (perm: string) =>
-      hasPermission(auth, perm) || hasPermission(auth, 'view_kitchen') || hasPermission(auth, 'manage_menu');
+      hasPermission(auth, perm) || hasPermission(auth, 'manage_menu');
 
     switch (action) {
       // ─── Existing KDS actions ───
@@ -466,16 +467,22 @@ async function deleteAssignment(req: Request, supabase: any, auth: AuthContext, 
 // ─── List Chefs (staff with kitchen roles) ──────────────────────────────────
 
 async function listChefs(req: Request, supabase: any, auth: AuthContext, branchId: string) {
-  // Fetch staff who can work in kitchen (chef, head_chef, cook, etc.)
+  // Fetch all profiles in the same company that have view_kitchen permission
+  // (view_kitchen = "Access Kitchen Display" — the nav-level gate).
   const { data: staff, error } = await supabase
-    .from('company_staff')
-    .select('user_id, role, profiles(id, full_name, email)')
+    .from('profiles')
+    .select('id, full_name, email, role, permissions, branch_id')
     .eq('company_id', auth.companyId)
-    .in('role', ['chef', 'head_chef', 'cook', 'kitchen_staff', 'manager', 'owner', 'general_manager']);
+    .contains('permissions', ['view_kitchen']);
 
   if (error) return errorResponse(error.message);
 
-  // Also count active assignments per chef
+  // Optionally narrow to the current branch (or show all company kitchen staff)
+  const branchStaff = (staff ?? []).filter(
+    (s: any) => !s.branch_id || s.branch_id === branchId,
+  );
+
+  // Count active assignments per staff member
   const { data: counts } = await supabase
     .from('meal_assignments')
     .select('assigned_to')
@@ -487,11 +494,11 @@ async function listChefs(req: Request, supabase: any, auth: AuthContext, branchI
     assignmentCounts[c.assigned_to] = (assignmentCounts[c.assigned_to] ?? 0) + 1;
   });
 
-  const chefs = (staff ?? []).map((s: any) => ({
-    user_id: s.user_id,
-    name: s.profiles?.full_name ?? s.profiles?.email ?? 'Unknown',
-    role: s.role,
-    active_assignments: assignmentCounts[s.user_id] ?? 0,
+  const chefs = branchStaff.map((s: any) => ({
+    user_id: s.id,
+    name: s.full_name ?? s.email ?? 'Unknown',
+    role: s.role ?? 'staff',
+    active_assignments: assignmentCounts[s.id] ?? 0,
   }));
 
   return jsonResponse({ chefs });
