@@ -232,7 +232,8 @@ export type MealAssignmentStatus =
   | 'accepted'
   | 'in_progress'
   | 'completed'
-  | 'rejected';
+  | 'rejected'
+  | 'available';
 
 export type IngredientRequestStatus =
   | 'pending'

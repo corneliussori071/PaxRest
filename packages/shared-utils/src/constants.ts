@@ -136,6 +136,7 @@ export const MEAL_ASSIGNMENT_STATUS_LABELS: Record<MealAssignmentStatus, string>
   in_progress: 'In Progress',
   completed: 'Completed',
   rejected: 'Rejected',
+  available: 'Available',
 };
 
 // ─── Ingredient Request Status Labels ───────────────────────────────────────

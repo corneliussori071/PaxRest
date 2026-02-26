@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import {
   corsResponse, jsonResponse, errorResponse,
-  createUserClient, requireAuth, hasPermission, resolveBranchId,
+  createUserClient, createServiceClient, requireAuth, hasPermission, resolveBranchId,
   validatePagination, applyPagination, sanitizeString,
 } from '../_shared/index.ts';
 import type { AuthContext } from '../_shared/index.ts';
@@ -61,6 +61,9 @@ serve(async (req) => {
       case 'assignment-delete':
         if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
         return await deleteAssignment(req, supabase, auth, branchId);
+      case 'assignment-make-available':
+        if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
+        return await makeAvailableFromAssignment(req, supabase, auth, branchId);
       case 'staff-chefs':
         if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
         return await listChefs(req, supabase, auth, branchId);
@@ -337,14 +340,22 @@ async function respondAssignment(req: Request, supabase: any, auth: AuthContext,
     return errorResponse('Invalid status. Must be accepted, rejected, or in_progress');
   }
 
+  // Use service client to bypass RLS (auth already validated at router level)
+  const service = createServiceClient();
+
   // Fetch the assignment to enforce ownership / privilege checks
-  const { data: assignment, error: fetchErr } = await supabase
+  const { data: assignment, error: fetchErr } = await service
     .from('meal_assignments')
     .select('assigned_to, status')
     .eq('id', body.assignment_id)
     .eq('branch_id', branchId)
     .single();
   if (fetchErr || !assignment) return errorResponse('Assignment not found', 404);
+
+  // Only pending assignments can be accepted/rejected
+  if (assignment.status !== 'pending') {
+    return errorResponse(`Cannot respond to an assignment with status "${assignment.status}"`, 400);
+  }
 
   const isOwner = assignment.assigned_to === auth.userId;
   const isPrivileged = hasPermission(auth, 'kitchen_make_dish') ||
@@ -365,7 +376,7 @@ async function respondAssignment(req: Request, supabase: any, auth: AuthContext,
     updates.rejection_reason = sanitizeString(body.rejection_reason);
   }
 
-  const { error } = await supabase
+  const { error } = await service
     .from('meal_assignments')
     .update(updates)
     .eq('id', body.assignment_id)
@@ -381,8 +392,11 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
 
   if (!body.assignment_id) return errorResponse('Missing assignment_id');
 
+  // Use service client to bypass RLS
+  const service = createServiceClient();
+
   // Get the assignment
-  const { data: assignment, error: fetchErr } = await supabase
+  const { data: assignment, error: fetchErr } = await service
     .from('meal_assignments')
     .select('*')
     .eq('id', body.assignment_id)
@@ -390,6 +404,11 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
     .single();
 
   if (fetchErr || !assignment) return errorResponse('Assignment not found', 404);
+
+  // Only in_progress assignments can be completed
+  if (assignment.status !== 'in_progress') {
+    return errorResponse(`Cannot complete an assignment with status "${assignment.status}"`, 400);
+  }
 
   // Only the assigned staff or privileged users can complete
   const isOwner = assignment.assigned_to === auth.userId;
@@ -402,8 +421,9 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
 
   const quantityCompleted = body.quantity_completed ?? assignment.quantity;
 
-  // Update assignment status
-  const { error: updateErr } = await supabase
+  // Mark assignment as completed (does NOT auto-add to available meals —
+  // that is a separate "Make Available" step)
+  const { error: updateErr } = await service
     .from('meal_assignments')
     .update({
       status: 'completed',
@@ -414,8 +434,34 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
 
   if (updateErr) return errorResponse(updateErr.message);
 
-  // Upsert available_meals — increment quantity
-  const { data: existing } = await supabase
+  return jsonResponse({ completed: true, quantity_completed: quantityCompleted });
+}
+
+// ─── Make Available (move completed assignment to available_meals) ───────────
+
+async function makeAvailableFromAssignment(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.assignment_id) return errorResponse('Missing assignment_id');
+
+  const service = createServiceClient();
+
+  const { data: assignment, error: fetchErr } = await service
+    .from('meal_assignments')
+    .select('*')
+    .eq('id', body.assignment_id)
+    .eq('branch_id', branchId)
+    .single();
+
+  if (fetchErr || !assignment) return errorResponse('Assignment not found', 404);
+  if (assignment.status !== 'completed') {
+    return errorResponse('Only completed assignments can be made available', 400);
+  }
+
+  const qty = assignment.quantity_completed ?? assignment.quantity;
+
+  // Upsert into available_meals
+  const { data: existing } = await service
     .from('available_meals')
     .select('id, quantity_available')
     .eq('branch_id', branchId)
@@ -423,30 +469,36 @@ async function completeAssignment(req: Request, supabase: any, auth: AuthContext
     .maybeSingle();
 
   if (existing) {
-    await supabase
+    await service
       .from('available_meals')
       .update({
-        quantity_available: existing.quantity_available + quantityCompleted,
+        quantity_available: existing.quantity_available + qty,
         prepared_by: auth.userId,
-        prepared_by_name: body.prepared_by_name ?? auth.email,
+        prepared_by_name: auth.name ?? auth.email,
       })
       .eq('id', existing.id);
   } else {
-    await supabase
+    await service
       .from('available_meals')
       .insert({
         company_id: auth.companyId,
         branch_id: branchId,
         menu_item_id: assignment.menu_item_id,
         menu_item_name: assignment.menu_item_name,
-        quantity_available: quantityCompleted,
+        quantity_available: qty,
         prepared_by: auth.userId,
-        prepared_by_name: body.prepared_by_name ?? auth.email,
+        prepared_by_name: auth.name ?? auth.email,
         station: assignment.station,
       });
   }
 
-  return jsonResponse({ completed: true, quantity_completed: quantityCompleted });
+  // Mark assignment as "available" so it's no longer actionable
+  await service
+    .from('meal_assignments')
+    .update({ status: 'available' })
+    .eq('id', body.assignment_id);
+
+  return jsonResponse({ made_available: true, quantity: qty });
 }
 
 // ─── Update Assignment ──────────────────────────────────────────────────────
@@ -461,6 +513,20 @@ async function updateAssignment(req: Request, supabase: any, auth: AuthContext, 
     return errorResponse('You do not have permission to edit assignments', 403);
   }
 
+  const service = createServiceClient();
+
+  // Only pending assignments can be edited
+  const { data: existing } = await service
+    .from('meal_assignments')
+    .select('status')
+    .eq('id', body.assignment_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!existing) return errorResponse('Assignment not found', 404);
+  if (existing.status !== 'pending') {
+    return errorResponse('Only pending assignments can be edited', 400);
+  }
+
   const updates: Record<string, unknown> = {};
   if (body.assigned_to) updates.assigned_to = body.assigned_to;
   if (body.assigned_to_name) updates.assigned_to_name = sanitizeString(body.assigned_to_name);
@@ -471,7 +537,7 @@ async function updateAssignment(req: Request, supabase: any, auth: AuthContext, 
 
   if (Object.keys(updates).length === 0) return errorResponse('No fields to update');
 
-  const { error } = await supabase
+  const { error } = await service
     .from('meal_assignments')
     .update(updates)
     .eq('id', body.assignment_id)
@@ -493,7 +559,21 @@ async function deleteAssignment(req: Request, supabase: any, auth: AuthContext, 
     return errorResponse('You do not have permission to delete assignments', 403);
   }
 
-  const { error } = await supabase
+  const service = createServiceClient();
+
+  // Only pending assignments can be deleted
+  const { data: existing } = await service
+    .from('meal_assignments')
+    .select('status')
+    .eq('id', body.assignment_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!existing) return errorResponse('Assignment not found', 404);
+  if (existing.status !== 'pending') {
+    return errorResponse('Only pending assignments can be deleted', 400);
+  }
+
+  const { error } = await service
     .from('meal_assignments')
     .delete()
     .eq('id', body.assignment_id)

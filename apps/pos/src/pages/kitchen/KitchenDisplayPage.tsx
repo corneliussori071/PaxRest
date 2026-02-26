@@ -68,8 +68,6 @@ function KitchenDisplayContent() {
       all.push({ key: 'make_dish', label: 'Make a Dish', icon: <PlayArrowIcon />, component: <MakeDishTab branchId={activeBranchId!} currency={currency} /> });
     if (can('kitchen_available_meals'))
       all.push({ key: 'available', label: 'Available Meals', icon: <ShoppingCartIcon />, component: <AvailableMealsTab branchId={activeBranchId!} currency={currency} /> });
-    if (can('kitchen_completed'))
-      all.push({ key: 'completed', label: 'Completed', icon: <DoneAllIcon />, component: <CompletedOrdersTab branchId={activeBranchId!} /> });
     if (can('kitchen_ingredient_requests'))
       all.push({ key: 'requests', label: 'Ingredient Requests', icon: <InventoryIcon />, component: <IngredientRequestsTab branchId={activeBranchId!} /> });
     return all;
@@ -278,7 +276,15 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
   const handleComplete = async (id: string) => {
     try {
       await api('kitchen', 'assignment-complete', { body: { assignment_id: id }, branchId });
-      toast.success('Dish completed & added to available meals!');
+      toast.success('Dish marked as completed!');
+      fetchAssignments();
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const handleMakeAvailable = async (id: string) => {
+    try {
+      await api('kitchen', 'assignment-make-available', { body: { assignment_id: id }, branchId });
+      toast.success('Dish added to Available Meals!');
       fetchAssignments();
     } catch (err: any) { toast.error(err.message); }
   };
@@ -327,7 +333,8 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
 
   const statusColor = (s: string) =>
     s === 'pending' ? 'warning' : s === 'accepted' || s === 'in_progress' ? 'info' :
-    s === 'completed' ? 'success' : s === 'rejected' ? 'error' : 'default';
+    s === 'completed' ? 'success' : s === 'rejected' ? 'error' :
+    s === 'available' ? 'primary' : 'default';
 
   return (
     <Box>
@@ -361,7 +368,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                 <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
                     <Typography fontWeight={700}>{a.menu_item_name ?? 'Unknown'}</Typography>
-                    {isPrivileged && (
+                    {isPrivileged && a.status === 'pending' && (
                       <Stack direction="row" spacing={0}>
                         <Tooltip title="Edit"><IconButton size="small" onClick={() => openEdit(a)}><EditIcon fontSize="small" /></IconButton></Tooltip>
                         <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => { setDeleteTarget(a); setDeleteDialog(true); }}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
@@ -416,6 +423,11 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                     {a.status === 'in_progress' && canRespond && (
                       <Button size="small" variant="contained" color="success" startIcon={<CheckCircleIcon />} onClick={() => handleComplete(a.id)}>
                         Mark Complete
+                      </Button>
+                    )}
+                    {a.status === 'completed' && isPrivileged && (
+                      <Button size="small" variant="contained" color="primary" onClick={() => handleMakeAvailable(a.id)}>
+                        Make Available
                       </Button>
                     )}
                   </Box>
