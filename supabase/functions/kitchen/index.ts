@@ -64,6 +64,11 @@ serve(async (req) => {
       case 'assignment-make-available':
         if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
         return await makeAvailableFromAssignment(req, supabase, auth, branchId);
+      case 'assignment-detail':
+        // Any kitchen permission can view assignment details
+        if (!canKitchen('kitchen_orders') && !canKitchen('kitchen_assignments'))
+          return errorResponse('Forbidden', 403);
+        return await getAssignmentDetail(req, supabase, auth, branchId);
       case 'staff-chefs':
         if (!canKitchen('kitchen_make_dish')) return errorResponse('Forbidden', 403);
         return await listChefs(req, supabase, auth, branchId);
@@ -473,6 +478,7 @@ async function makeAvailableFromAssignment(req: Request, supabase: any, auth: Au
       .from('available_meals')
       .update({
         quantity_available: existing.quantity_available + qty,
+        availability_status: 'full',
         prepared_by: auth.userId,
         prepared_by_name: auth.name ?? auth.email,
       })
@@ -486,6 +492,7 @@ async function makeAvailableFromAssignment(req: Request, supabase: any, auth: Au
         menu_item_id: assignment.menu_item_id,
         menu_item_name: assignment.menu_item_name,
         quantity_available: qty,
+        availability_status: 'full',
         prepared_by: auth.userId,
         prepared_by_name: auth.name ?? auth.email,
         station: assignment.station,
@@ -499,6 +506,45 @@ async function makeAvailableFromAssignment(req: Request, supabase: any, auth: Au
     .eq('id', body.assignment_id);
 
   return jsonResponse({ made_available: true, quantity: qty });
+}
+
+// ─── Assignment Detail (full menu item info) ────────────────────────────────
+
+async function getAssignmentDetail(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  const url = new URL(req.url);
+  const assignmentId = url.searchParams.get('assignment_id');
+  if (!assignmentId) return errorResponse('Missing assignment_id');
+
+  // Fetch assignment
+  const { data: assignment, error: aErr } = await supabase
+    .from('meal_assignments')
+    .select('*')
+    .eq('id', assignmentId)
+    .eq('branch_id', branchId)
+    .single();
+  if (aErr || !assignment) return errorResponse('Assignment not found', 404);
+
+  // Fetch full menu item with related data
+  const { data: menuItem, error: mErr } = await supabase
+    .from('menu_items')
+    .select(`
+      id, name, description, base_price, image_url, media_url, media_type,
+      calories, allergens, tags, station, preparation_time_min,
+      is_available, availability_status,
+      menu_categories(name),
+      menu_item_ingredients(id, name, quantity_used, unit, cost_contribution, inventory_items(name, unit)),
+      menu_item_extras(id, name, price, is_available, sort_order),
+      menu_variants(id, name, price_adjustment, is_default, is_active)
+    `)
+    .eq('id', assignment.menu_item_id)
+    .single();
+
+  if (mErr || !menuItem) return errorResponse('Menu item not found', 404);
+
+  return jsonResponse({
+    assignment,
+    menu_item: menuItem,
+  });
 }
 
 // ─── Update Assignment ──────────────────────────────────────────────────────
@@ -634,29 +680,61 @@ async function listChefs(req: Request, supabase: any, auth: AuthContext, branchI
 async function listAvailableMeals(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const { data, error } = await supabase
     .from('available_meals')
-    .select('*')
+    .select('*, menu_items(name, description, image_url, media_url, media_type, base_price, calories, allergens, tags, station, preparation_time_min)')
     .eq('branch_id', branchId)
-    .gt('quantity_available', 0)
     .order('menu_item_name', { ascending: true });
 
   if (error) return errorResponse(error.message);
-  return jsonResponse({ items: data });
+  return jsonResponse({ meals: data });
 }
 
 async function updateAvailableMeal(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const body = await req.json();
 
-  if (!body.menu_item_id) return errorResponse('Missing menu_item_id');
+  const mealId = body.meal_id;           // available_meals row id
+  const menuItemId = body.menu_item_id;  // menu_items FK
+
+  if (body.action === 'update-status') {
+    // Update the availability status of an available meal
+    if (!mealId) return errorResponse('Missing meal_id');
+    const validStatuses = ['full', 'half', 'thirty_pct', 'ten_pct', 'unavailable'];
+    if (!body.availability_status || !validStatuses.includes(body.availability_status)) {
+      return errorResponse('Invalid availability_status. Use: full, half, thirty_pct, ten_pct, unavailable');
+    }
+    const service = createServiceClient();
+    const { error } = await service
+      .from('available_meals')
+      .update({ availability_status: body.availability_status })
+      .eq('id', mealId)
+      .eq('branch_id', branchId);
+    if (error) return errorResponse(error.message);
+    return jsonResponse({ updated: true, availability_status: body.availability_status });
+  }
 
   if (body.action === 'decrement') {
     // When POS sells an available meal, decrement quantity
-    const { data: existing } = await supabase
-      .from('available_meals')
-      .select('id, quantity_available')
-      .eq('branch_id', branchId)
-      .eq('menu_item_id', body.menu_item_id)
-      .maybeSingle();
+    // Accept either meal_id (row id) or menu_item_id
+    let existing: any = null;
+    if (mealId) {
+      const res = await supabase
+        .from('available_meals')
+        .select('id, quantity_available')
+        .eq('id', mealId)
+        .eq('branch_id', branchId)
+        .maybeSingle();
+      existing = res.data;
+    } else if (menuItemId) {
+      const res = await supabase
+        .from('available_meals')
+        .select('id, quantity_available')
+        .eq('branch_id', branchId)
+        .eq('menu_item_id', menuItemId)
+        .maybeSingle();
+      existing = res.data;
+    } else {
+      return errorResponse('Missing meal_id or menu_item_id');
+    }
 
     if (!existing || existing.quantity_available <= 0) {
       return errorResponse('No available meals to sell', 400);
@@ -690,7 +768,7 @@ async function updateAvailableMeal(req: Request, supabase: any, auth: AuthContex
     return jsonResponse({ updated: true });
   }
 
-  return errorResponse('Invalid action. Use "decrement" or "set"');
+  return errorResponse('Invalid action. Use "decrement", "set", or "update-status"');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

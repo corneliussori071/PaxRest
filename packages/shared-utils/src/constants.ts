@@ -1,4 +1,4 @@
-import type { CompanyRole, Permission, OrderStatus, DeliveryStatus, KitchenStation, MealAssignmentStatus, MealAvailability, IngredientRequestStatus } from '@paxrest/shared-types';
+import type { CompanyRole, Permission, OrderStatus, DeliveryStatus, KitchenStation, MealAssignmentStatus, MealAvailability, AvailableMealStatus, IngredientRequestStatus } from '@paxrest/shared-types';
 
 // ─── Default Pagination ─────────────────────────────────────────────────────
 
@@ -128,6 +128,32 @@ export const MEAL_AVAILABILITY_COLORS: Record<MealAvailability, string> = {
   sold_out: 'error',
 };
 
+// ─── Available Meal Status Labels (kitchen availability for POS/terminal) ───
+
+export const AVAILABLE_MEAL_STATUS_OPTIONS: { value: AvailableMealStatus; label: string; color: string }[] = [
+  { value: 'full', label: '100% Available', color: 'success' },
+  { value: 'half', label: '50% Available', color: 'info' },
+  { value: 'thirty_pct', label: '30% Left', color: 'warning' },
+  { value: 'ten_pct', label: '10% Left', color: 'warning' },
+  { value: 'unavailable', label: 'Not Available', color: 'error' },
+];
+
+export const AVAILABLE_MEAL_STATUS_LABELS: Record<AvailableMealStatus, string> = {
+  full: '100% Available',
+  half: '50% Available',
+  thirty_pct: '30% Left',
+  ten_pct: '10% Left',
+  unavailable: 'Not Available',
+};
+
+export const AVAILABLE_MEAL_STATUS_COLORS: Record<AvailableMealStatus, string> = {
+  full: 'success',
+  half: 'info',
+  thirty_pct: 'warning',
+  ten_pct: 'warning',
+  unavailable: 'error',
+};
+
 // ─── Meal Assignment Status Labels ──────────────────────────────────────────
 
 export const MEAL_ASSIGNMENT_STATUS_LABELS: Record<MealAssignmentStatus, string> = {
@@ -136,7 +162,7 @@ export const MEAL_ASSIGNMENT_STATUS_LABELS: Record<MealAssignmentStatus, string>
   in_progress: 'In Progress',
   completed: 'Completed',
   rejected: 'Rejected',
-  available: 'Available',
+  available: 'Added to Meals',
 };
 
 // ─── Ingredient Request Status Labels ───────────────────────────────────────

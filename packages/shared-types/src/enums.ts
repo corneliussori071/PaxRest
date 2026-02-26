@@ -227,6 +227,8 @@ export type WeightUnit = 'kg' | 'g' | 'lb' | 'oz';
 
 export type MealAvailability = 'available' | 'low' | 'sold_out';
 
+export type AvailableMealStatus = 'full' | 'half' | 'thirty_pct' | 'ten_pct' | 'unavailable';
+
 export type MealAssignmentStatus =
   | 'pending'
   | 'accepted'
