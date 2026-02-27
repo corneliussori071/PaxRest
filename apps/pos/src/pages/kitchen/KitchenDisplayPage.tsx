@@ -1960,6 +1960,7 @@ const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: 'in_transit', label: 'In Transit' },
   { value: 'disbursed', label: 'Disbursed' },
   { value: 'received', label: 'Received' },
+  { value: 'return_requested', label: 'Return Requested' },
   { value: 'returned', label: 'Returned' },
   { value: 'rejected', label: 'Rejected' },
   { value: 'cancelled', label: 'Cancelled' },
@@ -1984,6 +1985,10 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
   const [returnDialog, setReturnDialog] = useState<string | null>(null);
   const [returnNotes, setReturnNotes] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Receive dialog state
+  const [receiveDialog, setReceiveDialog] = useState<any>(null);
+  const [receiveItems, setReceiveItems] = useState<any[]>([]);
 
   // Quick list of inventory items for the selector
   const { data: invData } = useApi<{ items: any[] }>('inventory', 'items', { page_size: '200' }, [branchId]);
@@ -2073,11 +2078,35 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
     finally { setActionLoading(null); }
   };
 
-  const handleReceive = async (id: string) => {
-    setActionLoading(id);
+  // Open receive dialog with item quantities pre-filled
+  const openReceive = (req: any) => {
+    const items = (req.ingredient_request_items ?? []).map((i: any) => ({
+      id: i.id,
+      name: i.inventory_items?.name ?? i.inventory_item_name ?? 'Item',
+      quantity_disbursed: i.quantity_disbursed ?? 0,
+      quantity_received: i.quantity_disbursed ?? i.quantity_requested ?? 0,
+      unit: i.unit,
+    }));
+    setReceiveItems(items);
+    setReceiveDialog(req);
+  };
+
+  const handleReceive = async () => {
+    if (!receiveDialog) return;
+    setActionLoading(receiveDialog.id);
     try {
-      await api('inventory', 'ingredient-request-receive', { body: { request_id: id }, branchId });
+      await api('inventory', 'ingredient-request-receive', {
+        body: {
+          request_id: receiveDialog.id,
+          items: receiveItems.map((i) => ({
+            id: i.id,
+            quantity_received: Number(i.quantity_received),
+          })),
+        },
+        branchId,
+      });
       toast.success('Items received!');
+      setReceiveDialog(null);
       fetchRequests();
     } catch (err: any) { toast.error(err.message); }
     finally { setActionLoading(null); }
@@ -2091,7 +2120,7 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
         body: { request_id: returnDialog, return_notes: returnNotes || undefined },
         branchId,
       });
-      toast.success('Items returned to inventory');
+      toast.success('Return requested — waiting for inventory to accept');
       setReturnDialog(null);
       setReturnNotes('');
       fetchRequests();
@@ -2192,7 +2221,7 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
                           )}
                           {canReceive && (
                             <Button size="small" variant="contained" color="success" startIcon={<CallReceivedIcon />}
-                              onClick={() => handleReceive(req.id)} disabled={actionLoading === req.id}>
+                              onClick={() => openReceive(req)} disabled={actionLoading === req.id}>
                               Receive
                             </Button>
                           )}
@@ -2202,6 +2231,9 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
                               disabled={actionLoading === req.id}>
                               Return
                             </Button>
+                          )}
+                          {status === 'return_requested' && (
+                            <Chip size="small" label="Return Pending" color="warning" variant="outlined" />
                           )}
                         </Stack>
                       </TableCell>
@@ -2219,6 +2251,7 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
                                   <TableCell align="right">Qty Requested</TableCell>
                                   <TableCell align="right">Qty Approved</TableCell>
                                   <TableCell align="right">Qty Disbursed</TableCell>
+                                  <TableCell align="right">Qty Received</TableCell>
                                   <TableCell>Unit</TableCell>
                                   <TableCell>Notes</TableCell>
                                 </TableRow>
@@ -2230,6 +2263,7 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
                                     <TableCell align="right">{item.quantity_requested}</TableCell>
                                     <TableCell align="right">{item.quantity_approved ?? '—'}</TableCell>
                                     <TableCell align="right">{item.quantity_disbursed ?? '—'}</TableCell>
+                                    <TableCell align="right">{item.quantity_received ?? '—'}</TableCell>
                                     <TableCell>{item.unit}</TableCell>
                                     <TableCell>{item.disbursement_notes ?? '—'}</TableCell>
                                   </TableRow>
@@ -2259,10 +2293,20 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
                                   Received: {new Date(req.received_at).toLocaleString()}
                                 </Typography>
                               )}
+                              {req.return_notes && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Return notes: {req.return_notes}
+                                </Typography>
+                              )}
+                              {req.return_accepted_by_name && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Return handled by: <strong>{req.return_accepted_by_name}</strong>
+                                  {req.return_response_notes && ` — ${req.return_response_notes}`}
+                                </Typography>
+                              )}
                               {req.returned_at && (
                                 <Typography variant="caption" color="text.secondary">
                                   Returned: {new Date(req.returned_at).toLocaleString()}
-                                  {req.return_notes && ` — ${req.return_notes}`}
                                 </Typography>
                               )}
                             </Stack>
@@ -2331,12 +2375,57 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
         </DialogActions>
       </Dialog>
 
+      {/* ─── Receive Dialog (with actual quantities) ─── */}
+      <Dialog open={!!receiveDialog} onClose={() => setReceiveDialog(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Receive Items</DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Confirm the actual quantity received for each item. Quantities are pre-filled with disbursed amounts.
+          </Alert>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Item</TableCell>
+                <TableCell align="right">Qty Disbursed</TableCell>
+                <TableCell align="right" width={130}>Qty Received</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {receiveItems.map((item, idx) => (
+                <TableRow key={item.id}>
+                  <TableCell>{item.name} <Typography variant="caption" color="text.secondary">({item.unit})</Typography></TableCell>
+                  <TableCell align="right">{item.quantity_disbursed}</TableCell>
+                  <TableCell align="right">
+                    <TextField
+                      size="small" type="number" sx={{ width: 110 }}
+                      value={item.quantity_received}
+                      onChange={(e) => {
+                        const updated = [...receiveItems];
+                        updated[idx] = { ...updated[idx], quantity_received: e.target.value };
+                        setReceiveItems(updated);
+                      }}
+                      inputProps={{ min: 0 }}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReceiveDialog(null)}>Cancel</Button>
+          <Button variant="contained" color="success" onClick={handleReceive} disabled={actionLoading === receiveDialog?.id}>
+            Confirm Receipt
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* ─── Return Dialog ─── */}
       <Dialog open={!!returnDialog} onClose={() => setReturnDialog(null)} maxWidth="xs" fullWidth>
-        <DialogTitle>Return Items to Inventory</DialogTitle>
+        <DialogTitle>Request Return to Inventory</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            All disbursed items will be returned to inventory stock.
+            Inventory team will review and accept or reject the return.
           </Typography>
           <TextField
             fullWidth label="Return Notes (optional)" multiline rows={2}
@@ -2347,7 +2436,7 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
         <DialogActions>
           <Button onClick={() => setReturnDialog(null)}>Cancel</Button>
           <Button variant="contained" color="warning" onClick={handleReturn} disabled={actionLoading === returnDialog}>
-            Confirm Return
+            Request Return
           </Button>
         </DialogActions>
       </Dialog>

@@ -59,6 +59,10 @@ serve(async (req) => {
         return await receiveIngredientRequest(req, supabase, auth, branchId);
       case 'ingredient-request-return':
         return await returnIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-accept-return':
+        return await acceptReturnIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-reject-return':
+        return await rejectReturnIngredientRequest(req, supabase, auth, branchId);
       case 'ingredient-request-update':
         return await updateIngredientRequest(req, supabase, auth, branchId);
       case 'ingredient-request-delete':
@@ -930,7 +934,7 @@ async function disburseIngredientRequest(req: Request, supabase: any, auth: Auth
   return jsonResponse({ disbursed: true });
 }
 
-// ─── Receive Ingredient Request (kitchen confirms receipt) ──────────────────
+// ─── Receive Ingredient Request (kitchen confirms receipt with actual quantities) ─
 
 async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
@@ -951,6 +955,17 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
     return errorResponse('Only in-transit or disbursed requests can be received', 400);
   }
 
+  // Update quantity_received per item if provided
+  if (body.items && Array.isArray(body.items)) {
+    for (const item of body.items) {
+      if (!item.id || item.quantity_received == null) continue;
+      await service
+        .from('ingredient_request_items')
+        .update({ quantity_received: Number(item.quantity_received) })
+        .eq('id', item.id);
+    }
+  }
+
   await service
     .from('ingredient_requests')
     .update({
@@ -962,7 +977,7 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
   return jsonResponse({ received: true });
 }
 
-// ─── Return Ingredient Request (kitchen returns items to inventory) ─────────
+// ─── Return Ingredient Request (kitchen requests return → inventory must accept) ─
 
 async function returnIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
@@ -972,7 +987,6 @@ async function returnIngredientRequest(req: Request, supabase: any, auth: AuthCo
 
   const service = createServiceClient();
 
-  // Verify request exists and is received/disbursed
   const { data: request } = await service
     .from('ingredient_requests')
     .select('status')
@@ -984,15 +998,50 @@ async function returnIngredientRequest(req: Request, supabase: any, auth: AuthCo
     return errorResponse('Only received requests can be returned', 400);
   }
 
-  // Get all disbursed items for this request
+  // Kitchen initiates return — inventory must accept or reject it
+  await service
+    .from('ingredient_requests')
+    .update({
+      status: 'return_requested',
+      return_notes: body.return_notes ? sanitizeString(body.return_notes) : null,
+    })
+    .eq('id', body.request_id);
+
+  return jsonResponse({ return_requested: true });
+}
+
+// ─── Accept Return (inventory accepts return, stock is restored) ────────────
+
+async function acceptReturnIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  if (!body.request_id) return errorResponse('Missing request_id');
+
+  const service = createServiceClient();
+
+  const { data: request } = await service
+    .from('ingredient_requests')
+    .select('status')
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!request) return errorResponse('Request not found', 404);
+  if (request.status !== 'return_requested') {
+    return errorResponse('Only return-requested items can be accepted', 400);
+  }
+
+  // Get all disbursed items and return stock
   const { data: reqItems } = await service
     .from('ingredient_request_items')
-    .select('inventory_item_id, quantity_disbursed')
+    .select('inventory_item_id, quantity_disbursed, quantity_received')
     .eq('request_id', body.request_id);
 
-  // Return stock to inventory for each item
   for (const item of (reqItems ?? [])) {
-    if (!item.quantity_disbursed || Number(item.quantity_disbursed) <= 0) continue;
+    // Return the received quantity (or disbursed qty if no received qty recorded)
+    const returnQty = Number(item.quantity_received ?? item.quantity_disbursed ?? 0);
+    if (returnQty <= 0) continue;
 
     const { data: invItem } = await service
       .from('inventory_items')
@@ -1002,14 +1051,13 @@ async function returnIngredientRequest(req: Request, supabase: any, auth: AuthCo
     if (!invItem) continue;
 
     const qtyBefore = Number(invItem.quantity);
-    const qtyAfter = qtyBefore + Number(item.quantity_disbursed);
+    const qtyAfter = qtyBefore + returnQty;
 
     await service
       .from('inventory_items')
       .update({ quantity: qtyAfter })
       .eq('id', invItem.id);
 
-    // Log stock movement (positive = return)
     await service
       .from('stock_movements')
       .insert({
@@ -1017,15 +1065,15 @@ async function returnIngredientRequest(req: Request, supabase: any, auth: AuthCo
         branch_id: branchId,
         inventory_item_id: invItem.id,
         movement_type: 'kitchen_return',
-        quantity_change: Number(item.quantity_disbursed),
+        quantity_change: returnQty,
         quantity_before: qtyBefore,
         quantity_after: qtyAfter,
         unit_cost: 0,
         reference_type: 'ingredient_request',
         reference_id: body.request_id,
-        notes: body.return_notes ? sanitizeString(body.return_notes) : 'Returned from kitchen',
+        notes: body.return_response_notes ? sanitizeString(body.return_response_notes) : 'Return accepted',
         performed_by: auth.userId,
-        performed_by_name: auth.name ?? auth.email,
+        performed_by_name: auth.name,
       });
   }
 
@@ -1034,9 +1082,49 @@ async function returnIngredientRequest(req: Request, supabase: any, auth: AuthCo
     .update({
       status: 'returned',
       returned_at: new Date().toISOString(),
-      return_notes: body.return_notes ? sanitizeString(body.return_notes) : null,
+      return_accepted_by: auth.userId,
+      return_accepted_by_name: auth.name,
+      return_response_notes: body.return_response_notes ? sanitizeString(body.return_response_notes) : null,
     })
     .eq('id', body.request_id);
 
-  return jsonResponse({ returned: true });
+  return jsonResponse({ accepted: true });
+}
+
+// ─── Reject Return (inventory rejects return, status reverts to received) ───
+
+async function rejectReturnIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  if (!body.request_id) return errorResponse('Missing request_id');
+
+  const service = createServiceClient();
+
+  const { data: request } = await service
+    .from('ingredient_requests')
+    .select('status')
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!request) return errorResponse('Request not found', 404);
+  if (request.status !== 'return_requested') {
+    return errorResponse('Only return-requested items can be rejected', 400);
+  }
+
+  await service
+    .from('ingredient_requests')
+    .update({
+      status: 'received',
+      return_notes: null,
+      return_accepted_by: auth.userId,
+      return_accepted_by_name: auth.name,
+      return_response_notes: body.return_response_notes
+        ? sanitizeString(body.return_response_notes)
+        : 'Return rejected',
+    })
+    .eq('id', body.request_id);
+
+  return jsonResponse({ rejected: true });
 }

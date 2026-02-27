@@ -567,7 +567,7 @@ function MovementsTab({ branchId }: { branchId: string }) {
       </Tabs>
       {subTab === 0 && <StockMovementsSubTab branchId={branchId} />}
       {subTab === 1 && <RequestsSubTab branchId={branchId} statusFilter="pending,approved" title="Pending & Approved Requests" />}
-      {subTab === 2 && <RequestsSubTab branchId={branchId} statusFilter="in_transit,disbursed,received,returned,fulfilled" title="Completed Requests" />}
+      {subTab === 2 && <RequestsSubTab branchId={branchId} statusFilter="in_transit,disbursed,received,return_requested,returned,fulfilled" title="Completed Requests" />}
       {subTab === 3 && <RequestsSubTab branchId={branchId} statusFilter="rejected,cancelled" title="Rejected & Cancelled Requests" />}
     </Box>
   );
@@ -629,6 +629,10 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
   const [disburseItems, setDisburseItems] = useState<any[]>([]);
   const [respondDialog, setRespondDialog] = useState<{ id: string; action: 'approved' | 'rejected' } | null>(null);
   const [responseNotes, setResponseNotes] = useState('');
+
+  // Return response state
+  const [returnRespondDialog, setReturnRespondDialog] = useState<{ id: string; action: 'accept' | 'reject' } | null>(null);
+  const [returnResponseNotes, setReturnResponseNotes] = useState('');
 
   const fetchRequests = useCallback(async () => {
     try {
@@ -703,6 +707,29 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
       });
       toast.success('Items disbursed and sent to kitchen');
       setDisburseDialog(null);
+      fetchRequests();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setActionLoading(null); }
+  };
+
+  // ─── Accept / Reject Return ────────────────────────────────────────
+  const handleReturnRespond = async () => {
+    if (!returnRespondDialog) return;
+    setActionLoading(returnRespondDialog.id);
+    const endpoint = returnRespondDialog.action === 'accept'
+      ? 'ingredient-request-accept-return'
+      : 'ingredient-request-reject-return';
+    try {
+      await api('inventory', endpoint, {
+        body: {
+          request_id: returnRespondDialog.id,
+          return_response_notes: returnResponseNotes || undefined,
+        },
+        branchId,
+      });
+      toast.success(returnRespondDialog.action === 'accept' ? 'Return accepted — stock restored' : 'Return rejected');
+      setReturnRespondDialog(null);
+      setReturnResponseNotes('');
       fetchRequests();
     } catch (err: any) { toast.error(err.message); }
     finally { setActionLoading(null); }
@@ -804,6 +831,22 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
                               Disburse
                             </Button>
                           )}
+                          {status === 'return_requested' && (
+                            <>
+                              <Button size="small" variant="contained" color="success"
+                                startIcon={<CheckCircleIcon />}
+                                onClick={() => { setReturnRespondDialog({ id: req.id, action: 'accept' }); setReturnResponseNotes(''); }}
+                                disabled={actionLoading === req.id}>
+                                Accept Return
+                              </Button>
+                              <Button size="small" variant="outlined" color="error"
+                                startIcon={<CancelIcon />}
+                                onClick={() => { setReturnRespondDialog({ id: req.id, action: 'reject' }); setReturnResponseNotes(''); }}
+                                disabled={actionLoading === req.id}>
+                                Reject Return
+                              </Button>
+                            </>
+                          )}
                         </Stack>
                       </TableCell>
                     </TableRow>
@@ -820,6 +863,7 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
                                   <TableCell align="right">Qty Requested</TableCell>
                                   <TableCell align="right">Qty Approved</TableCell>
                                   <TableCell align="right">Qty Disbursed</TableCell>
+                                  <TableCell align="right">Qty Received</TableCell>
                                   <TableCell>Unit</TableCell>
                                   <TableCell>In Stock</TableCell>
                                   <TableCell>Disburse Notes</TableCell>
@@ -832,6 +876,7 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
                                     <TableCell align="right">{item.quantity_requested}</TableCell>
                                     <TableCell align="right">{item.quantity_approved ?? '—'}</TableCell>
                                     <TableCell align="right">{item.quantity_disbursed ?? '—'}</TableCell>
+                                    <TableCell align="right">{item.quantity_received ?? '—'}</TableCell>
                                     <TableCell>{item.unit}</TableCell>
                                     <TableCell>{item.inventory_items?.quantity ?? '—'} {item.inventory_items?.unit ?? ''}</TableCell>
                                     <TableCell>{item.disbursement_notes ?? '—'}</TableCell>
@@ -856,10 +901,20 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
                               {req.received_at && (
                                 <Typography variant="caption" color="text.secondary">Received: {new Date(req.received_at).toLocaleString()}</Typography>
                               )}
+                              {req.return_notes && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Return notes: {req.return_notes}
+                                </Typography>
+                              )}
+                              {req.return_accepted_by_name && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Return handled by: <strong>{req.return_accepted_by_name}</strong>
+                                  {req.return_response_notes && ` — ${req.return_response_notes}`}
+                                </Typography>
+                              )}
                               {req.returned_at && (
                                 <Typography variant="caption" color="text.secondary">
                                   Returned: {new Date(req.returned_at).toLocaleString()}
-                                  {req.return_notes && ` — ${req.return_notes}`}
                                 </Typography>
                               )}
                             </Stack>
@@ -903,6 +958,34 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
             disabled={actionLoading === respondDialog?.id}
           >
             {respondDialog?.action === 'approved' ? 'Approve' : 'Reject'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ─── Accept/Reject Return Dialog ─── */}
+      <Dialog open={!!returnRespondDialog} onClose={() => setReturnRespondDialog(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>{returnRespondDialog?.action === 'accept' ? 'Accept Return' : 'Reject Return'}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {returnRespondDialog?.action === 'accept'
+              ? 'Accepting will restore the returned quantities back to inventory stock.'
+              : 'Rejecting will keep the items with kitchen. Status will revert to "Received".'}
+          </Typography>
+          <TextField
+            fullWidth label="Notes (optional)" multiline rows={2}
+            value={returnResponseNotes}
+            onChange={(e) => setReturnResponseNotes(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReturnRespondDialog(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color={returnRespondDialog?.action === 'accept' ? 'success' : 'error'}
+            onClick={handleReturnRespond}
+            disabled={actionLoading === returnRespondDialog?.id}
+          >
+            {returnRespondDialog?.action === 'accept' ? 'Accept Return' : 'Reject Return'}
           </Button>
         </DialogActions>
       </Dialog>

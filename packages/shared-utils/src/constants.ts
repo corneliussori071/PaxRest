@@ -176,6 +176,7 @@ export const INGREDIENT_REQUEST_STATUS_LABELS: Record<IngredientRequestStatus, s
   in_transit: 'In Transit',
   disbursed: 'Disbursed',
   received: 'Received',
+  return_requested: 'Return Requested',
   returned: 'Returned',
 };
 
@@ -188,6 +189,7 @@ export const INGREDIENT_REQUEST_STATUS_COLORS: Record<IngredientRequestStatus, s
   in_transit: 'info',
   disbursed: 'primary',
   received: 'success',
+  return_requested: 'warning',
   returned: 'secondary',
 };
 

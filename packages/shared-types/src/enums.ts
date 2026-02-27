@@ -248,4 +248,5 @@ export type IngredientRequestStatus =
   | 'in_transit'
   | 'disbursed'
   | 'received'
+  | 'return_requested'
   | 'returned';
