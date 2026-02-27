@@ -11,6 +11,7 @@ const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
 
 const BUCKETS: Record<string, string> = {
   'menu': 'menu-images',
+  'table': 'menu-images',
   'receipt': 'receipts',
   'wastage': 'wastage-photos',
   'profile': 'profile-avatars',

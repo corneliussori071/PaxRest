@@ -28,6 +28,8 @@ serve(async (req) => {
         return await upsertTable(req, supabase, auth, branchId);
       case 'update-status':
         return await updateTableStatus(req, supabase, auth, branchId);
+      case 'assign':
+        return await assignTable(req, supabase, auth, branchId);
       case 'layout':
         return await getTableLayout(supabase, auth, branchId);
       default:
@@ -39,16 +41,16 @@ serve(async (req) => {
   }
 });
 
+/* ─── List all tables ─── */
 async function listTables(supabase: any, auth: AuthContext, branchId: string) {
   const { data, error } = await supabase
     .from('tables')
     .select('*, orders(id, order_number, total, status, created_at)')
     .eq('branch_id', branchId)
-    .order('number', { ascending: true });
+    .order('table_number', { ascending: true });
 
   if (error) return errorResponse(error.message);
 
-  // Attach current order if occupied
   const tables = (data ?? []).map((t: any) => {
     const currentOrder = t.current_order_id
       ? t.orders?.find((o: any) => o.id === t.current_order_id)
@@ -59,6 +61,7 @@ async function listTables(supabase: any, auth: AuthContext, branchId: string) {
   return jsonResponse({ tables });
 }
 
+/* ─── Get single table ─── */
 async function getTable(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const url = new URL(req.url);
   const id = url.searchParams.get('id');
@@ -75,25 +78,33 @@ async function getTable(req: Request, supabase: any, auth: AuthContext, branchId
   return jsonResponse({ table: data });
 }
 
+/* ─── Create / update table ─── */
 async function upsertTable(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   if (!hasPermission(auth, 'manage_tables')) return errorResponse('Forbidden', 403);
 
   const body = await req.json();
-  if (!body.number || !body.name) return errorResponse('Missing number or name');
+  const tableNumber = body.table_number ?? body.number;
+  const name = body.name;
 
-  const record = {
+  if (!tableNumber || !name) return errorResponse('Missing number or name');
+
+  const record: Record<string, unknown> = {
     company_id: auth.companyId,
     branch_id: branchId,
-    number: body.number,
-    name: body.name,
+    table_number: String(tableNumber),
+    name,
     capacity: body.capacity ?? 4,
-    section: body.section ?? 'Indoor',
+    section: body.section ?? 'Main',
     status: body.status ?? 'available',
     position_x: body.position_x ?? 0,
     position_y: body.position_y ?? 0,
     is_active: body.is_active ?? true,
   };
+
+  // Optional fields
+  if (body.image_url !== undefined) record.image_url = body.image_url;
+  if (body.notes !== undefined) record.notes = body.notes;
 
   if (body.id) {
     const { data, error } = await supabase
@@ -108,11 +119,13 @@ async function upsertTable(req: Request, supabase: any, auth: AuthContext, branc
   }
 }
 
+/* ─── Update table status ─── */
 async function updateTableStatus(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const body = await req.json();
 
-  if (!body.id || !body.status) return errorResponse('Missing id or status');
+  const tableId = body.table_id ?? body.id;
+  if (!tableId || !body.status) return errorResponse('Missing table_id or status');
 
   const validStatuses = ['available', 'occupied', 'reserved', 'dirty', 'maintenance'];
   if (!validStatuses.includes(body.status)) {
@@ -122,12 +135,14 @@ async function updateTableStatus(req: Request, supabase: any, auth: AuthContext,
   const updates: Record<string, unknown> = { status: body.status };
   if (body.status === 'available') {
     updates.current_order_id = null;
+    updates.assigned_customer_name = null;
+    updates.num_people = null;
   }
 
   const { data, error } = await supabase
     .from('tables')
     .update(updates)
-    .eq('id', body.id)
+    .eq('id', tableId)
     .eq('branch_id', branchId)
     .select()
     .single();
@@ -136,28 +151,82 @@ async function updateTableStatus(req: Request, supabase: any, auth: AuthContext,
   return jsonResponse({ table: data });
 }
 
+/* ─── Assign table to customer ─── */
+async function assignTable(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+
+  const tableId = body.table_id;
+  if (!tableId) return errorResponse('Missing table_id');
+
+  const status = body.status ?? 'occupied';
+  const validStatuses = ['occupied', 'reserved', 'dirty', 'maintenance'];
+  if (!validStatuses.includes(status)) {
+    return errorResponse(`Invalid assign status. Must be one of: ${validStatuses.join(', ')}`);
+  }
+
+  // Validate num_people against capacity
+  if (body.num_people) {
+    const { data: tbl } = await supabase
+      .from('tables').select('capacity').eq('id', tableId).single();
+    if (tbl && body.num_people > tbl.capacity) {
+      return errorResponse(`Number of people (${body.num_people}) exceeds table capacity (${tbl.capacity})`);
+    }
+  }
+
+  const updates: Record<string, unknown> = {
+    status,
+    assigned_customer_name: body.customer_name ?? null,
+    num_people: body.num_people ?? null,
+  };
+
+  const { data, error } = await supabase
+    .from('tables')
+    .update(updates)
+    .eq('id', tableId)
+    .eq('branch_id', branchId)
+    .select()
+    .single();
+
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ table: data });
+}
+
+/* ─── Layout – grouped by status for tabs ─── */
 async function getTableLayout(supabase: any, auth: AuthContext, branchId: string) {
   const { data, error } = await supabase
     .from('tables')
-    .select('id, number, name, capacity, section, status, position_x, position_y, current_order_id, is_active')
+    .select('id, table_number, name, capacity, section, status, image_url, notes, assigned_customer_name, num_people, position_x, position_y, current_order_id, is_active')
     .eq('branch_id', branchId)
     .eq('is_active', true)
-    .order('number', { ascending: true });
+    .order('table_number', { ascending: true });
 
   if (error) return errorResponse(error.message);
 
-  // Group by section
-  const sections = new Map<string, any[]>();
-  for (const table of data ?? []) {
-    const sec = table.section ?? 'Default';
-    if (!sections.has(sec)) sections.set(sec, []);
-    sections.get(sec)!.push(table);
+  const allTables = data ?? [];
+
+  // Build sections array (grouped by status) for the frontend tabs
+  const statusOrder = ['available', 'occupied', 'reserved', 'dirty', 'maintenance'];
+  const byStatus = new Map<string, any[]>();
+  for (const s of statusOrder) byStatus.set(s, []);
+
+  for (const table of allTables) {
+    const bucket = byStatus.get(table.status);
+    if (bucket) bucket.push(table);
+    else byStatus.set(table.status, [table]);
   }
 
+  const sections = statusOrder.map((s) => ({
+    section: s,
+    tables: byStatus.get(s) ?? [],
+    available: s === 'available' ? (byStatus.get(s)?.length ?? 0) : 0,
+    total: byStatus.get(s)?.length ?? 0,
+  }));
+
   return jsonResponse({
-    layout: Object.fromEntries(sections),
-    total_tables: data?.length ?? 0,
-    available: data?.filter((t: any) => t.status === 'available').length ?? 0,
-    occupied: data?.filter((t: any) => t.status === 'occupied').length ?? 0,
+    sections,
+    total_tables: allTables.length,
+    available: byStatus.get('available')?.length ?? 0,
+    occupied: byStatus.get('occupied')?.length ?? 0,
   });
 }
