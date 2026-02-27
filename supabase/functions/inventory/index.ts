@@ -630,10 +630,17 @@ async function listIngredientRequests(req: Request, supabase: any, auth: AuthCon
   const status = url.searchParams.get('status');
   const dateRange = url.searchParams.get('date_range'); // 'today','7d','30d','all'
 
+  const station = url.searchParams.get('station'); // 'kitchen','bar','shisha'
+
   let query = supabase
     .from('ingredient_requests')
     .select('*, ingredient_request_items(*, inventory_items(name, unit, quantity))', { count: 'exact' })
     .eq('branch_id', branchId);
+
+  // Filter by station/department so each internal store only sees its own requests
+  if (station) {
+    query = query.eq('station', station);
+  }
 
   if (status) {
     // Support comma-separated statuses for multi-tab filtering
@@ -858,12 +865,14 @@ async function disburseIngredientRequest(req: Request, supabase: any, auth: Auth
   // Verify request exists and is approved
   const { data: request } = await service
     .from('ingredient_requests')
-    .select('status')
+    .select('status, station')
     .eq('id', body.request_id)
     .eq('branch_id', branchId)
     .single();
   if (!request) return errorResponse('Request not found', 404);
   if (request.status !== 'approved') return errorResponse('Only approved requests can be disbursed', 400);
+
+  const department = request.station ?? 'kitchen';
 
   // Process each item: update disbursed quantity, deduct from inventory, log movement
   for (const item of body.items) {
@@ -909,14 +918,14 @@ async function disburseIngredientRequest(req: Request, supabase: any, auth: Auth
         company_id: auth.companyId,
         branch_id: branchId,
         inventory_item_id: invItem.id,
-        movement_type: 'kitchen_request',
+        movement_type: `${department}_request`,
         quantity_change: -Number(item.quantity_disbursed),
         quantity_before: qtyBefore,
         quantity_after: qtyAfter,
         unit_cost: 0,
         reference_type: 'ingredient_request',
         reference_id: body.request_id,
-        notes: `Disbursed for kitchen request`,
+        notes: `Disbursed for ${department} request`,
         performed_by: auth.userId,
         performed_by_name: auth.name ?? auth.email,
       });
@@ -946,7 +955,7 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
 
   const { data: request } = await service
     .from('ingredient_requests')
-    .select('status')
+    .select('status, station')
     .eq('id', body.request_id)
     .eq('branch_id', branchId)
     .single();
@@ -954,6 +963,8 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
   if (request.status !== 'in_transit' && request.status !== 'disbursed') {
     return errorResponse('Only in-transit or disbursed requests can be received', 400);
   }
+
+  const department = request.station ?? 'kitchen';
 
   // Update quantity_received per item if provided
   if (body.items && Array.isArray(body.items)) {
@@ -974,20 +985,25 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
     })
     .eq('id', body.request_id);
 
-  // ── Auto-stock Kitchen Internal Store ──────────────────────────────────
+  // ── Auto-stock Internal Store based on department ────────────────────────
   // Fetch all items with their actual received (or disbursed) quantities
   const { data: receivedItems } = await service
     .from('ingredient_request_items')
     .select('inventory_item_id, inventory_item_name, unit, quantity_received, quantity_disbursed, quantity_requested')
     .eq('request_id', body.request_id);
 
+  // Determine which store tables to use based on department
+  const storeTable = department === 'bar' ? 'bar_store_items' : 'kitchen_store_items';
+  const movementTable = department === 'bar' ? 'bar_store_movements' : 'kitchen_store_movements';
+  const storeFk = department === 'bar' ? 'bar_store_item_id' : 'kitchen_store_item_id';
+
   for (const item of (receivedItems ?? [])) {
     const qty = Number(item.quantity_received ?? item.quantity_disbursed ?? item.quantity_requested ?? 0);
     if (qty <= 0) continue;
 
-    // Upsert kitchen store item
+    // Upsert internal store item
     const { data: existing } = await service
-      .from('kitchen_store_items')
+      .from(storeTable)
       .select('id, quantity')
       .eq('branch_id', branchId)
       .eq('inventory_item_id', item.inventory_item_id)
@@ -1002,22 +1018,23 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
       qtyAfter = qtyBefore + qty;
       storeItemId = existing.id;
       await service
-        .from('kitchen_store_items')
+        .from(storeTable)
         .update({ quantity: qtyAfter, updated_at: new Date().toISOString() })
         .eq('id', existing.id);
     } else {
       qtyBefore = 0;
       qtyAfter = qty;
+      const insertData: Record<string, unknown> = {
+        company_id: auth.companyId,
+        branch_id: branchId,
+        inventory_item_id: item.inventory_item_id,
+        item_name: item.inventory_item_name,
+        unit: item.unit,
+        quantity: qtyAfter,
+      };
       const { data: created } = await service
-        .from('kitchen_store_items')
-        .insert({
-          company_id: auth.companyId,
-          branch_id: branchId,
-          inventory_item_id: item.inventory_item_id,
-          item_name: item.inventory_item_name,
-          unit: item.unit,
-          quantity: qtyAfter,
-        })
+        .from(storeTable)
+        .insert(insertData)
         .select('id')
         .single();
       storeItemId = created?.id;
@@ -1025,11 +1042,11 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
 
     if (storeItemId) {
       await service
-        .from('kitchen_store_movements')
+        .from(movementTable)
         .insert({
           company_id: auth.companyId,
           branch_id: branchId,
-          kitchen_store_item_id: storeItemId,
+          [storeFk]: storeItemId,
           inventory_item_id: item.inventory_item_id,
           movement_type: 'received',
           quantity_change: qty,
@@ -1093,7 +1110,7 @@ async function acceptReturnIngredientRequest(req: Request, supabase: any, auth: 
 
   const { data: request } = await service
     .from('ingredient_requests')
-    .select('status')
+    .select('status, station')
     .eq('id', body.request_id)
     .eq('branch_id', branchId)
     .single();
@@ -1101,6 +1118,11 @@ async function acceptReturnIngredientRequest(req: Request, supabase: any, auth: 
   if (request.status !== 'return_requested') {
     return errorResponse('Only return-requested items can be accepted', 400);
   }
+
+  const department = request.station ?? 'kitchen';
+  const storeTable = department === 'bar' ? 'bar_store_items' : 'kitchen_store_items';
+  const movementTable = department === 'bar' ? 'bar_store_movements' : 'kitchen_store_movements';
+  const storeFk = department === 'bar' ? 'bar_store_item_id' : 'kitchen_store_item_id';
 
   // Get all disbursed items and return stock
   const { data: reqItems } = await service
@@ -1146,28 +1168,28 @@ async function acceptReturnIngredientRequest(req: Request, supabase: any, auth: 
         performed_by_name: auth.name,
       });
 
-    // ── Deduct from Kitchen Internal Store ────────────────────────────────
-    const { data: kitchenItem } = await service
-      .from('kitchen_store_items')
+    // ── Deduct from Internal Store (kitchen or bar) ─────────────────────
+    const { data: storeItem } = await service
+      .from(storeTable)
       .select('id, quantity')
       .eq('branch_id', branchId)
       .eq('inventory_item_id', item.inventory_item_id)
       .maybeSingle();
 
-    if (kitchenItem) {
-      const kBefore = Number(kitchenItem.quantity);
+    if (storeItem) {
+      const kBefore = Number(storeItem.quantity);
       const kAfter = Math.max(0, kBefore - returnQty);
       await service
-        .from('kitchen_store_items')
+        .from(storeTable)
         .update({ quantity: kAfter, updated_at: new Date().toISOString() })
-        .eq('id', kitchenItem.id);
+        .eq('id', storeItem.id);
 
       await service
-        .from('kitchen_store_movements')
+        .from(movementTable)
         .insert({
           company_id: auth.companyId,
           branch_id: branchId,
-          kitchen_store_item_id: kitchenItem.id,
+          [storeFk]: storeItem.id,
           inventory_item_id: item.inventory_item_id,
           movement_type: 'returned_to_inventory',
           quantity_change: -(Math.min(returnQty, kBefore)),

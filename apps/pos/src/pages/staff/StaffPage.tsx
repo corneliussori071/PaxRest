@@ -34,6 +34,12 @@ const PERMISSION_LABELS: { key: Permission; label: string; group: string }[] = [
   { key: 'kitchen_available_meals', label: 'Available Meals', group: 'Kitchen Display' },
   { key: 'kitchen_completed', label: 'Completed', group: 'Kitchen Display' },
   { key: 'kitchen_ingredient_requests', label: 'Ingredient Requests', group: 'Kitchen Display' },
+  // Bar — own heading with granular sub-permissions
+  { key: 'view_bar', label: 'Access Bar', group: 'Bar' },
+  { key: 'bar_create_order', label: 'Create Order', group: 'Bar' },
+  { key: 'bar_pending_orders', label: 'Pending Orders', group: 'Bar' },
+  { key: 'bar_pending_payment', label: 'Pending Payment', group: 'Bar' },
+  { key: 'bar_request_items', label: 'Request for Items', group: 'Bar' },
   // Management
   { key: 'manage_menu', label: 'Manage Menu', group: 'Management' },
   { key: 'manage_inventory', label: 'Inventory', group: 'Management' },

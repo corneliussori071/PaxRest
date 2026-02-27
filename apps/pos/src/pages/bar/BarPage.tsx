@@ -7,7 +7,7 @@ import {
   Badge, Stack, Divider, Alert, InputAdornment,
   LinearProgress, Table, TableHead, TableBody, TableRow, TableCell,
   TableContainer, Paper, Collapse, TablePagination,
-  Tooltip, Autocomplete, CircularProgress,
+  Tooltip, Autocomplete, CircularProgress, Avatar,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
@@ -28,7 +28,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
 import TableBarIcon from '@mui/icons-material/TableBar';
 import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_STATUS_COLORS } from '@paxrest/shared-utils';
-import type { IngredientRequestStatus } from '@paxrest/shared-types';
+import type { IngredientRequestStatus, Permission } from '@paxrest/shared-types';
 import { useApi, usePaginated, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
@@ -41,29 +41,37 @@ export default function BarPage() {
 }
 
 function BarContent() {
-  const { activeBranchId, company, activeBranch } = useAuth();
+  const { activeBranchId, company, activeBranch, profile } = useAuth();
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const [tab, setTab] = useState(0);
 
-  const TAB_LABELS = ['Create Order', 'Pending Orders', 'Pending Payment', 'Request for Items'];
+  const userPerms: Permission[] = profile?.permissions ?? [];
+
+  // Build visible tabs dynamically based on permissions
+  const ALL_TABS: { label: string; perm: Permission; icon: React.ReactElement }[] = [
+    { label: 'Create Order',      perm: 'bar_create_order',   icon: <PointOfSaleIcon /> },
+    { label: 'Pending Orders',    perm: 'bar_pending_orders',  icon: <LocalBarIcon /> },
+    { label: 'Pending Payment',   perm: 'bar_pending_payment', icon: <CheckCircleIcon /> },
+    { label: 'Request for Items', perm: 'bar_request_items',   icon: <RestaurantIcon /> },
+  ];
+
+  const visibleTabs = ALL_TABS.filter((t) => userPerms.includes(t.perm));
+
+  // If user has view_bar but no granular tab perms (legacy), show all tabs
+  const tabs = visibleTabs.length > 0 ? visibleTabs : ALL_TABS;
 
   return (
     <Box sx={{ p: 0 }}>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ mb: 2 }}>
-        {TAB_LABELS.map((label, i) => (
-          <Tab key={label} label={label} icon={
-            i === 0 ? <PointOfSaleIcon /> :
-            i === 1 ? <LocalBarIcon /> :
-            i === 2 ? <CheckCircleIcon /> :
-            <RestaurantIcon />
-          } iconPosition="start" />
+        {tabs.map((t) => (
+          <Tab key={t.label} label={t.label} icon={t.icon} iconPosition="start" />
         ))}
       </Tabs>
 
-      {tab === 0 && <CreateOrderTab branchId={activeBranchId!} currency={currency} />}
-      {tab === 1 && <PendingOrdersTab branchId={activeBranchId!} currency={currency} />}
-      {tab === 2 && <PendingPaymentTab branchId={activeBranchId!} currency={currency} />}
-      {tab === 3 && <RequestForItemsTab branchId={activeBranchId!} />}
+      {tabs[tab]?.label === 'Create Order' && <CreateOrderTab branchId={activeBranchId!} currency={currency} />}
+      {tabs[tab]?.label === 'Pending Orders' && <PendingOrdersTab branchId={activeBranchId!} currency={currency} />}
+      {tabs[tab]?.label === 'Pending Payment' && <PendingPaymentTab branchId={activeBranchId!} currency={currency} />}
+      {tabs[tab]?.label === 'Request for Items' && <RequestForItemsTab branchId={activeBranchId!} />}
     </Box>
   );
 }
@@ -106,6 +114,11 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Meal detail dialog
+  const [mealDetailOpen, setMealDetailOpen] = useState(false);
+  const [mealDetailData, setMealDetailData] = useState<any>(null);
+  const [mealDetailLoading, setMealDetailLoading] = useState(false);
+
   const fmt = (n: number) => formatCurrency(n, currency);
 
   // Fetch bar store items
@@ -125,12 +138,11 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   useEffect(() => { fetchStore(); }, [fetchStore]);
   useEffect(() => { if (branchId) fetchMeals(branchId); }, [branchId]);
 
-  // Fetch available tables
+  // Fetch available tables (all statuses for full visibility)
   useEffect(() => {
     (async () => {
       try {
-        const data = await api<{ tables: any[]; counts: Record<string, number> }>('tables', 'layout', {
-          params: { status: 'available', page: '1', page_size: '100' },
+        const data = await api<{ tables: any[] }>('tables', 'list', {
           branchId,
         });
         setTables(data.tables ?? []);
@@ -193,6 +205,44 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   };
 
   const subtotal = cart.reduce((s, c) => s + c.unit_price * c.quantity, 0);
+
+  // Meal detail view
+  const openMealDetail = async (menuItemId: string) => {
+    setMealDetailOpen(true);
+    setMealDetailLoading(true);
+    setMealDetailData(null);
+    try {
+      const data = await api<{ menu_item: any }>('kitchen', 'meal-detail', {
+        params: { menu_item_id: menuItemId },
+        branchId,
+      });
+      setMealDetailData(data.menu_item);
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to load details');
+      setMealDetailOpen(false);
+    } finally {
+      setMealDetailLoading(false);
+    }
+  };
+
+  const handlePrintMealDetail = () => {
+    const el = document.getElementById('bar-meal-detail-print');
+    if (!el) return;
+    const w = window.open('', '_blank', 'width=800,height=600');
+    if (!w) return;
+    w.document.write(`<html><head><title>Meal Details</title>
+      <style>body{font-family:Arial,sans-serif;padding:20px}
+      img{max-width:200px;border-radius:8px}
+      table{border-collapse:collapse;width:100%;margin-top:10px}
+      th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}
+      th{background:#f5f5f5}
+      .section{margin-top:16px;font-weight:700;font-size:14px;border-bottom:1px solid #ccc;padding-bottom:4px}
+      </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+    w.close();
+  };
 
   const handleSubmit = async () => {
     if (cart.length === 0) return toast.error('Cart is empty');
@@ -286,10 +336,10 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   })}
                 >
                   <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                    {(meal.menu_items?.media_url || meal.menu_items?.image_url) && (
+                    {meal.menu_items?.media_url && (
                       <Box sx={{ width: '100%', height: 60, borderRadius: 1, overflow: 'hidden', mb: 0.5 }}>
                         <img
-                          src={meal.menu_items.media_url ?? meal.menu_items.image_url}
+                          src={meal.menu_items.media_url}
                           alt={meal.menu_item_name}
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         />
@@ -302,6 +352,15 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                       </Typography>
                       <Chip size="small" label={`${meal.quantity_available} avail`} color="success" />
                     </Stack>
+                    <Box sx={{ mt: 0.5, display: 'flex', justifyContent: 'center' }}>
+                      <Button
+                        size="small" variant="outlined" startIcon={<VisibilityIcon />}
+                        onClick={(e) => { e.stopPropagation(); openMealDetail(meal.menu_item_id); }}
+                        sx={{ fontSize: 11, py: 0.25 }}
+                      >
+                        View
+                      </Button>
+                    </Box>
                   </CardContent>
                 </Card>
               ))}
@@ -366,15 +425,40 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           Bar Order
         </Typography>
 
-        {/* Table Selection */}
+        {/* Table Selection — shows all tables with status, only available selectable */}
         <FormControl fullWidth size="small" sx={{ mb: 1 }}>
           <InputLabel>Table *</InputLabel>
-          <Select value={selectedTable} label="Table *" onChange={(e) => setSelectedTable(e.target.value)}>
-            {tables.map((t) => (
-              <MuiMenuItem key={t.id} value={t.id}>
-                {t.name ?? `Table ${t.table_number}`} ({t.capacity} seats)
-              </MuiMenuItem>
-            ))}
+          <Select
+            value={selectedTable}
+            label="Table *"
+            onChange={(e) => {
+              const tableId = e.target.value;
+              setSelectedTable(tableId);
+              // Auto-cap numPeople to table capacity
+              const tbl = tables.find((t) => t.id === tableId);
+              if (tbl && numPeople > tbl.capacity) setNumPeople(tbl.capacity);
+            }}
+          >
+            {tables.map((t) => {
+              const status = t.status ?? 'available';
+              const isAvailable = status === 'available';
+              const statusColors: Record<string, string> = {
+                available: '#4caf50', occupied: '#f44336', dirty: '#ff9800', reserved: '#2196f3', maintenance: '#9e9e9e',
+              };
+              return (
+                <MuiMenuItem key={t.id} value={t.id} disabled={!isAvailable}>
+                  <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%' }}>
+                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: statusColors[status] ?? '#9e9e9e', flexShrink: 0 }} />
+                    <Typography variant="body2" sx={{ flex: 1 }}>
+                      {t.name ?? `Table ${t.table_number}`}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {t.capacity} seats · {status}
+                    </Typography>
+                  </Stack>
+                </MuiMenuItem>
+              );
+            })}
           </Select>
         </FormControl>
 
@@ -382,8 +466,18 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           <TextField
             size="small" label="Seaters *" type="number" sx={{ width: 100 }}
             value={numPeople}
-            onChange={(e) => setNumPeople(Math.max(1, Number(e.target.value)))}
-            inputProps={{ min: 1 }}
+            onChange={(e) => {
+              const val = Math.max(1, Number(e.target.value));
+              const tbl = tables.find((t) => t.id === selectedTable);
+              if (tbl && val > tbl.capacity) {
+                toast.error(`Max capacity for this table is ${tbl.capacity}`);
+                setNumPeople(tbl.capacity);
+              } else {
+                setNumPeople(val);
+              }
+            }}
+            inputProps={{ min: 1, max: tables.find((t) => t.id === selectedTable)?.capacity ?? 99 }}
+            helperText={selectedTable ? `Max: ${tables.find((t) => t.id === selectedTable)?.capacity ?? '?'}` : ''}
           />
           <TextField
             size="small" label="Customer Name" fullWidth
@@ -441,6 +535,144 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           {submitting ? 'Processing…' : `Place Order — ${fmt(subtotal)}`}
         </Button>
       </Paper>
+
+      {/* Meal Detail Dialog — ingredients, extras, print/PDF */}
+      <Dialog open={mealDetailOpen} onClose={() => setMealDetailOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <RestaurantIcon />
+            <Typography variant="h6">Meal Details</Typography>
+          </Stack>
+          <Stack direction="row" spacing={0.5}>
+            <Tooltip title="Print"><IconButton onClick={handlePrintMealDetail} disabled={mealDetailLoading}><PrintIcon /></IconButton></Tooltip>
+            <Tooltip title="Save as PDF"><IconButton onClick={handlePrintMealDetail} disabled={mealDetailLoading}><PictureAsPdfIcon /></IconButton></Tooltip>
+            <Tooltip title="Close"><IconButton onClick={() => setMealDetailOpen(false)}><CloseIcon /></IconButton></Tooltip>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers>
+          {mealDetailLoading ? (
+            <Box sx={{ textAlign: 'center', py: 4 }}><CircularProgress /></Box>
+          ) : mealDetailData ? (
+            <Box id="bar-meal-detail-print">
+              {/* Header: image + name */}
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="flex-start">
+                {mealDetailData.media_url && (
+                  <Avatar
+                    src={mealDetailData.media_url}
+                    variant="rounded"
+                    sx={{ width: 140, height: 140 }}
+                  />
+                )}
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="h5" fontWeight={700}>{mealDetailData.name ?? '—'}</Typography>
+                  {mealDetailData.menu_categories?.name && (
+                    <Chip size="small" label={mealDetailData.menu_categories.name} sx={{ mt: 0.5 }} />
+                  )}
+                  {mealDetailData.description && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      {mealDetailData.description}
+                    </Typography>
+                  )}
+                  <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
+                    {mealDetailData.base_price != null && (
+                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(mealDetailData.base_price, currency)}</Typography>
+                    )}
+                    {mealDetailData.calories != null && (
+                      <Typography variant="body2"><strong>Calories:</strong> {mealDetailData.calories} kcal</Typography>
+                    )}
+                    {mealDetailData.preparation_time_min != null && (
+                      <Typography variant="body2"><strong>Prep Time:</strong> {mealDetailData.preparation_time_min} min</Typography>
+                    )}
+                    {mealDetailData.station && (
+                      <Typography variant="body2"><strong>Station:</strong> {mealDetailData.station}</Typography>
+                    )}
+                  </Stack>
+                  {mealDetailData.tags?.length > 0 && (
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 1 }} flexWrap="wrap">
+                      {mealDetailData.tags.map((t: string) => <Chip key={t} size="small" label={t} variant="outlined" />)}
+                    </Stack>
+                  )}
+                  {mealDetailData.allergens?.length > 0 && (
+                    <Typography variant="body2" color="warning.main" sx={{ mt: 0.5 }}>
+                      <strong>Allergens:</strong> {mealDetailData.allergens.join(', ')}
+                    </Typography>
+                  )}
+                </Box>
+              </Stack>
+
+              {/* Ingredients */}
+              {mealDetailData.menu_item_ingredients?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Ingredients</Typography>
+                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1.5, py: 0.75, fontSize: 13 }, '& th': { bgcolor: 'action.hover', fontWeight: 700 } }}>
+                    <thead>
+                      <tr><th>Ingredient</th><th>Quantity</th><th>Unit</th><th>Cost</th></tr>
+                    </thead>
+                    <tbody>
+                      {mealDetailData.menu_item_ingredients.map((ing: any) => (
+                        <tr key={ing.id}>
+                          <td>{ing.name ?? ing.inventory_items?.name ?? '—'}</td>
+                          <td>{ing.quantity_used}</td>
+                          <td>{ing.unit}</td>
+                          <td>{ing.cost_contribution ? formatCurrency(ing.cost_contribution, currency) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Box>
+                </>
+              )}
+
+              {/* Extras */}
+              {mealDetailData.menu_item_extras?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Extras / Add-ons</Typography>
+                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1.5, py: 0.75, fontSize: 13 }, '& th': { bgcolor: 'action.hover', fontWeight: 700 } }}>
+                    <thead>
+                      <tr><th>Extra</th><th>Price</th><th>Available</th></tr>
+                    </thead>
+                    <tbody>
+                      {mealDetailData.menu_item_extras.map((ext: any) => (
+                        <tr key={ext.id}>
+                          <td>{ext.name}</td>
+                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{ext.is_available ? 'Yes' : 'No'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Box>
+                </>
+              )}
+
+              {/* Variants */}
+              {mealDetailData.menu_variants?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Variants</Typography>
+                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                    {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
+                      <Chip
+                        key={v.id}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${formatCurrency(v.price_adjustment, currency)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        variant="outlined"
+                        size="small"
+                      />
+                    ))}
+                  </Stack>
+                </>
+              )}
+            </Box>
+          ) : (
+            <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No data available</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMealDetailOpen(false)}>Close</Button>
+          <Button variant="outlined" startIcon={<PrintIcon />} onClick={handlePrintMealDetail} disabled={mealDetailLoading || !mealDetailData}>Print</Button>
+          <Button variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={handlePrintMealDetail} disabled={mealDetailLoading || !mealDetailData}>Save as PDF</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
