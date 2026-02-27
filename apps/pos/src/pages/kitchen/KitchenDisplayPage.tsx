@@ -2521,6 +2521,7 @@ function InternalStockView({ branchId }: { branchId: string }) {
   // Disburse dialog state
   const [disburseDialog, setDisburseDialog] = useState<any>(null);
   const [disburseQty, setDisburseQty] = useState('');
+  const [disburseUnit, setDisburseUnit] = useState('');
   const [disburseReason, setDisburseReason] = useState('');
   const [disburseStaff, setDisburseStaff] = useState<{ id: string; name: string; role: string } | null>(null);
   const [disbursing, setDisbursing] = useState(false);
@@ -2557,6 +2558,7 @@ function InternalStockView({ branchId }: { branchId: string }) {
   const openDisburse = (item: any) => {
     setDisburseDialog(item);
     setDisburseQty('');
+    setDisburseUnit(item.unit ?? 'pcs');
     setDisburseReason('');
     setDisburseStaff(null);
     loadStaff();
@@ -2573,6 +2575,7 @@ function InternalStockView({ branchId }: { branchId: string }) {
         body: {
           kitchen_store_item_id: disburseDialog.id,
           quantity: qty,
+          unit: disburseUnit || disburseDialog.unit || 'pcs',
           reason: disburseReason,
           disbursed_to_id: disburseStaff.id,
           disbursed_to_name: disburseStaff.name,
@@ -2671,12 +2674,22 @@ function InternalStockView({ branchId }: { branchId: string }) {
               <Alert severity="info" variant="outlined">
                 <strong>{disburseDialog.item_name}</strong> — Available: {Number(disburseDialog.quantity).toFixed(2)} {disburseDialog.unit}
               </Alert>
-              <TextField
-                fullWidth label="Quantity" type="number" size="small"
-                value={disburseQty} onChange={(e) => setDisburseQty(e.target.value)}
-                inputProps={{ min: 0.01, max: Number(disburseDialog.quantity), step: 0.01 }}
-                helperText={`Max: ${Number(disburseDialog.quantity).toFixed(2)} ${disburseDialog.unit}`}
-              />
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  label="Quantity" type="number" size="small" sx={{ flex: 1 }}
+                  value={disburseQty} onChange={(e) => setDisburseQty(e.target.value)}
+                  inputProps={{ min: 0.01, max: Number(disburseDialog.quantity), step: 0.01 }}
+                  helperText={`Max: ${Number(disburseDialog.quantity).toFixed(2)} ${disburseDialog.unit}`}
+                />
+                <Autocomplete
+                  freeSolo size="small" sx={{ minWidth: 140 }}
+                  options={['kg', 'g', 'lbs', 'oz', 'litres', 'ml', 'pcs', 'bowl', 'cup', 'plate', 'portion', 'slice', 'spoon', 'bag', 'box', 'bottle', 'tin', 'packet']}
+                  value={disburseUnit}
+                  onChange={(_, v) => setDisburseUnit(v ?? '')}
+                  onInputChange={(_, v) => setDisburseUnit(v)}
+                  renderInput={(params) => <TextField {...params} label="Unit" />}
+                />
+              </Stack>
               <TextField
                 fullWidth label="Reason for disbursement *" size="small" multiline rows={2}
                 value={disburseReason} onChange={(e) => setDisburseReason(e.target.value)}
@@ -2787,7 +2800,7 @@ function InternalDisbursementsView({ branchId }: { branchId: string }) {
             <TableBody>
               {items.map((d) => {
                 const itemName = d.kitchen_store_items?.item_name ?? '—';
-                const unit = d.kitchen_store_items?.unit ?? '';
+                const unit = d.unit || d.kitchen_store_items?.unit || '';
                 const isCancelled = !!d.cancelled_at;
 
                 return (

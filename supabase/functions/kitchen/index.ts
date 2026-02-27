@@ -984,6 +984,7 @@ async function disburseFromInternalStore(req: Request, supabase: any, auth: Auth
   if (!body.quantity || Number(body.quantity) <= 0) return errorResponse('Invalid quantity');
   if (!body.reason?.trim()) return errorResponse('Reason is required');
   if (!body.disbursed_to_id || !body.disbursed_to_name?.trim()) return errorResponse('Kitchen staff is required');
+  const disbUnit = body.unit ? sanitizeString(body.unit) : 'pcs';
 
   const service = createServiceClient();
 
@@ -1017,6 +1018,7 @@ async function disburseFromInternalStore(req: Request, supabase: any, auth: Auth
       kitchen_store_item_id: storeItem.id,
       inventory_item_id: storeItem.inventory_item_id,
       quantity: qty,
+      unit: disbUnit,
       reason: sanitizeString(body.reason),
       disbursed_to_id: body.disbursed_to_id,
       disbursed_to_name: sanitizeString(body.disbursed_to_name),
