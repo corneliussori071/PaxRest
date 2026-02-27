@@ -2016,6 +2016,7 @@ function RequisitionsSubTab({ branchId }: { branchId: string }) {
         page: String(page + 1),
         page_size: String(pageSize),
         date_range: dateRange,
+        station: 'kitchen', // Only show kitchen requisitions, not bar/shisha
       };
       if (statusFilter) params.status = statusFilter;
       const data = await api<{ items: any[]; total: number }>('inventory', 'ingredient-requests', {

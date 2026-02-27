@@ -44,13 +44,23 @@ serve(async (req) => {
 
 /* ─── List all tables ─── */
 async function listTables(supabase: any, auth: AuthContext, branchId: string) {
+  // Use !inner hint on the FK name to disambiguate (orders.table_id, not tables.current_order_id)
   const { data, error } = await supabase
     .from('tables')
-    .select('*, orders(id, order_number, total, status, created_at)')
+    .select('*, orders!orders_table_id_fkey(id, order_number, total, status, created_at)')
     .eq('branch_id', branchId)
     .order('table_number', { ascending: true });
 
-  if (error) return errorResponse(error.message);
+  if (error) {
+    // Fallback: if the FK-hint query fails, fetch without orders join
+    const { data: fallback, error: fbErr } = await supabase
+      .from('tables')
+      .select('*')
+      .eq('branch_id', branchId)
+      .order('table_number', { ascending: true });
+    if (fbErr) return errorResponse(fbErr.message);
+    return jsonResponse({ tables: fallback ?? [] });
+  }
 
   const tables = (data ?? []).map((t: any) => {
     const currentOrder = t.current_order_id
@@ -113,6 +123,23 @@ async function upsertTable(req: Request, supabase: any, auth: AuthContext, branc
     if (error) return errorResponse(error.message);
     return jsonResponse({ table: data });
   } else {
+    // Check if table_number already exists for this branch
+    const { data: existing } = await supabase
+      .from('tables')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .eq('branch_id', branchId)
+      .eq('table_number', String(tableNumber))
+      .maybeSingle();
+
+    if (existing) {
+      // Update the existing table instead of inserting a duplicate
+      const { data, error } = await supabase
+        .from('tables').update(record).eq('id', existing.id).select().single();
+      if (error) return errorResponse(error.message);
+      return jsonResponse({ table: data });
+    }
+
     const { data, error } = await supabase
       .from('tables').insert(record).select().single();
     if (error) return errorResponse(error.message);
