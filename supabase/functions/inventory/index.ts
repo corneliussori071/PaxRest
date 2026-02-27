@@ -974,6 +974,76 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
     })
     .eq('id', body.request_id);
 
+  // ── Auto-stock Kitchen Internal Store ──────────────────────────────────
+  // Fetch all items with their actual received (or disbursed) quantities
+  const { data: receivedItems } = await service
+    .from('ingredient_request_items')
+    .select('inventory_item_id, inventory_item_name, unit, quantity_received, quantity_disbursed, quantity_requested')
+    .eq('request_id', body.request_id);
+
+  for (const item of (receivedItems ?? [])) {
+    const qty = Number(item.quantity_received ?? item.quantity_disbursed ?? item.quantity_requested ?? 0);
+    if (qty <= 0) continue;
+
+    // Upsert kitchen store item
+    const { data: existing } = await service
+      .from('kitchen_store_items')
+      .select('id, quantity')
+      .eq('branch_id', branchId)
+      .eq('inventory_item_id', item.inventory_item_id)
+      .maybeSingle();
+
+    let storeItemId: string;
+    let qtyBefore: number;
+    let qtyAfter: number;
+
+    if (existing) {
+      qtyBefore = Number(existing.quantity);
+      qtyAfter = qtyBefore + qty;
+      storeItemId = existing.id;
+      await service
+        .from('kitchen_store_items')
+        .update({ quantity: qtyAfter, updated_at: new Date().toISOString() })
+        .eq('id', existing.id);
+    } else {
+      qtyBefore = 0;
+      qtyAfter = qty;
+      const { data: created } = await service
+        .from('kitchen_store_items')
+        .insert({
+          company_id: auth.companyId,
+          branch_id: branchId,
+          inventory_item_id: item.inventory_item_id,
+          item_name: item.inventory_item_name,
+          unit: item.unit,
+          quantity: qtyAfter,
+        })
+        .select('id')
+        .single();
+      storeItemId = created?.id;
+    }
+
+    if (storeItemId) {
+      await service
+        .from('kitchen_store_movements')
+        .insert({
+          company_id: auth.companyId,
+          branch_id: branchId,
+          kitchen_store_item_id: storeItemId,
+          inventory_item_id: item.inventory_item_id,
+          movement_type: 'received',
+          quantity_change: qty,
+          quantity_before: qtyBefore,
+          quantity_after: qtyAfter,
+          reference_type: 'ingredient_request',
+          reference_id: body.request_id,
+          notes: `Received from inventory request`,
+          performed_by: auth.userId,
+          performed_by_name: auth.name,
+        });
+    }
+  }
+
   return jsonResponse({ received: true });
 }
 
@@ -1075,6 +1145,41 @@ async function acceptReturnIngredientRequest(req: Request, supabase: any, auth: 
         performed_by: auth.userId,
         performed_by_name: auth.name,
       });
+
+    // ── Deduct from Kitchen Internal Store ────────────────────────────────
+    const { data: kitchenItem } = await service
+      .from('kitchen_store_items')
+      .select('id, quantity')
+      .eq('branch_id', branchId)
+      .eq('inventory_item_id', item.inventory_item_id)
+      .maybeSingle();
+
+    if (kitchenItem) {
+      const kBefore = Number(kitchenItem.quantity);
+      const kAfter = Math.max(0, kBefore - returnQty);
+      await service
+        .from('kitchen_store_items')
+        .update({ quantity: kAfter, updated_at: new Date().toISOString() })
+        .eq('id', kitchenItem.id);
+
+      await service
+        .from('kitchen_store_movements')
+        .insert({
+          company_id: auth.companyId,
+          branch_id: branchId,
+          kitchen_store_item_id: kitchenItem.id,
+          inventory_item_id: item.inventory_item_id,
+          movement_type: 'returned_to_inventory',
+          quantity_change: -(Math.min(returnQty, kBefore)),
+          quantity_before: kBefore,
+          quantity_after: kAfter,
+          reference_type: 'ingredient_request',
+          reference_id: body.request_id,
+          notes: body.return_response_notes ? sanitizeString(body.return_response_notes) : 'Returned to inventory',
+          performed_by: auth.userId,
+          performed_by_name: auth.name,
+        });
+    }
   }
 
   await service

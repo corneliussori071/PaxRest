@@ -92,6 +92,26 @@ serve(async (req) => {
       case 'stats':
         return await getKitchenStats(supabase, auth, branchId);
 
+      // ─── Kitchen Internal Store ───
+      case 'internal-store':
+        if (!canKitchen('kitchen_ingredient_requests')) return errorResponse('Forbidden', 403);
+        return await listInternalStore(req, supabase, auth, branchId);
+      case 'internal-store-disburse':
+        if (!canKitchen('kitchen_ingredient_requests')) return errorResponse('Forbidden', 403);
+        return await disburseFromInternalStore(req, supabase, auth, branchId);
+      case 'internal-store-cancel-disburse':
+        if (!canKitchen('kitchen_ingredient_requests')) return errorResponse('Forbidden', 403);
+        return await cancelInternalDisbursement(req, supabase, auth, branchId);
+      case 'internal-store-disbursements':
+        if (!canKitchen('kitchen_ingredient_requests')) return errorResponse('Forbidden', 403);
+        return await listInternalDisbursements(req, supabase, auth, branchId);
+      case 'internal-store-movements':
+        if (!canKitchen('kitchen_ingredient_requests')) return errorResponse('Forbidden', 403);
+        return await listInternalMovements(req, supabase, auth, branchId);
+      case 'internal-store-staff':
+        if (!canKitchen('kitchen_ingredient_requests')) return errorResponse('Forbidden', 403);
+        return await listKitchenStaff(req, supabase, auth, branchId);
+
       default:
         return errorResponse('Unknown kitchen action', 404);
     }
@@ -918,5 +938,302 @@ async function getKitchenStats(supabase: any, auth: AuthContext, branchId: strin
     active_assignments: assignmentsRes.count ?? 0,
     available_meals_count: totalMeals,
     pending_requests: requestsRes.count ?? 0,
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Kitchen Internal Store — isolated stock tracking for ingredients received
+   from the central inventory, with meal-prep disbursements.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// ─── List Internal Store Items (paginated) ──────────────────────────────────
+
+async function listInternalStore(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const url = new URL(req.url);
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+  const search = url.searchParams.get('search') ?? '';
+
+  let query = supabase
+    .from('kitchen_store_items')
+    .select('*', { count: 'exact' })
+    .eq('branch_id', branchId);
+
+  if (search) {
+    query = query.ilike('item_name', `%${search}%`);
+  }
+
+  query = applyPagination(query, page, pageSize, 'item_name', true);
+  const { data, count, error } = await query;
+  if (error) return errorResponse(error.message);
+
+  return jsonResponse({ items: data ?? [], total: count ?? 0, page, pageSize });
+}
+
+// ─── Disburse from Internal Store (for meal preparation) ────────────────────
+
+async function disburseFromInternalStore(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+
+  const body = await req.json();
+  if (!body.kitchen_store_item_id) return errorResponse('Missing kitchen_store_item_id');
+  if (!body.quantity || Number(body.quantity) <= 0) return errorResponse('Invalid quantity');
+  if (!body.reason?.trim()) return errorResponse('Reason is required');
+  if (!body.disbursed_to_id || !body.disbursed_to_name?.trim()) return errorResponse('Kitchen staff is required');
+
+  const service = createServiceClient();
+
+  // Get current stock
+  const { data: storeItem, error: fetchErr } = await service
+    .from('kitchen_store_items')
+    .select('id, quantity, inventory_item_id, item_name, unit')
+    .eq('id', body.kitchen_store_item_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (fetchErr || !storeItem) return errorResponse('Store item not found', 404);
+
+  const qty = Number(body.quantity);
+  const qtyBefore = Number(storeItem.quantity);
+  if (qty > qtyBefore) return errorResponse(`Insufficient stock. Available: ${qtyBefore}`, 400);
+
+  const qtyAfter = qtyBefore - qty;
+
+  // Deduct stock
+  await service
+    .from('kitchen_store_items')
+    .update({ quantity: qtyAfter, updated_at: new Date().toISOString() })
+    .eq('id', storeItem.id);
+
+  // Create disbursement record
+  const { data: disbursement, error: disbErr } = await service
+    .from('kitchen_store_disbursements')
+    .insert({
+      company_id: auth.companyId,
+      branch_id: branchId,
+      kitchen_store_item_id: storeItem.id,
+      inventory_item_id: storeItem.inventory_item_id,
+      quantity: qty,
+      reason: sanitizeString(body.reason),
+      disbursed_to_id: body.disbursed_to_id,
+      disbursed_to_name: sanitizeString(body.disbursed_to_name),
+      disbursed_by: auth.userId,
+      disbursed_by_name: auth.name,
+    })
+    .select('id')
+    .single();
+  if (disbErr) return errorResponse(disbErr.message);
+
+  // Log movement
+  await service
+    .from('kitchen_store_movements')
+    .insert({
+      company_id: auth.companyId,
+      branch_id: branchId,
+      kitchen_store_item_id: storeItem.id,
+      inventory_item_id: storeItem.inventory_item_id,
+      movement_type: 'meal_prep',
+      quantity_change: -qty,
+      quantity_before: qtyBefore,
+      quantity_after: qtyAfter,
+      reference_type: 'disbursement',
+      reference_id: disbursement.id,
+      notes: sanitizeString(body.reason),
+      performed_by: auth.userId,
+      performed_by_name: auth.name,
+    });
+
+  return jsonResponse({ disbursed: true, id: disbursement.id });
+}
+
+// ─── Cancel Internal Disbursement (< 1 hour old) ───────────────────────────
+
+async function cancelInternalDisbursement(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+
+  const body = await req.json();
+  if (!body.disbursement_id) return errorResponse('Missing disbursement_id');
+
+  const service = createServiceClient();
+
+  const { data: disb, error: fetchErr } = await service
+    .from('kitchen_store_disbursements')
+    .select('id, kitchen_store_item_id, quantity, created_at, cancelled_at, inventory_item_id')
+    .eq('id', body.disbursement_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (fetchErr || !disb) return errorResponse('Disbursement not found', 404);
+  if (disb.cancelled_at) return errorResponse('Already cancelled', 400);
+
+  // Check time limit — must be less than 1 hour old
+  const createdAt = new Date(disb.created_at).getTime();
+  const now = Date.now();
+  const oneHour = 60 * 60 * 1000;
+  if (now - createdAt > oneHour) {
+    return errorResponse('Cannot cancel — disbursement is older than 1 hour', 400);
+  }
+
+  // Restore stock
+  const { data: storeItem } = await service
+    .from('kitchen_store_items')
+    .select('id, quantity')
+    .eq('id', disb.kitchen_store_item_id)
+    .single();
+  if (!storeItem) return errorResponse('Store item not found', 404);
+
+  const qtyBefore = Number(storeItem.quantity);
+  const restoreQty = Number(disb.quantity);
+  const qtyAfter = qtyBefore + restoreQty;
+
+  await service
+    .from('kitchen_store_items')
+    .update({ quantity: qtyAfter, updated_at: new Date().toISOString() })
+    .eq('id', storeItem.id);
+
+  // Mark disbursement as cancelled
+  await service
+    .from('kitchen_store_disbursements')
+    .update({
+      cancelled_at: new Date().toISOString(),
+      cancelled_by: auth.userId,
+      cancelled_by_name: auth.name,
+      cancel_reason: body.cancel_reason ? sanitizeString(body.cancel_reason) : 'Cancelled',
+    })
+    .eq('id', disb.id);
+
+  // Log reversal movement
+  await service
+    .from('kitchen_store_movements')
+    .insert({
+      company_id: auth.companyId,
+      branch_id: branchId,
+      kitchen_store_item_id: disb.kitchen_store_item_id,
+      inventory_item_id: disb.inventory_item_id,
+      movement_type: 'cancel_meal_prep',
+      quantity_change: restoreQty,
+      quantity_before: qtyBefore,
+      quantity_after: qtyAfter,
+      reference_type: 'disbursement',
+      reference_id: disb.id,
+      notes: body.cancel_reason ? sanitizeString(body.cancel_reason) : 'Disbursement cancelled',
+      performed_by: auth.userId,
+      performed_by_name: auth.name,
+    });
+
+  return jsonResponse({ cancelled: true });
+}
+
+// ─── List Internal Disbursements (paginated) ────────────────────────────────
+
+async function listInternalDisbursements(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const url = new URL(req.url);
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+  const dateRange = url.searchParams.get('date_range') ?? 'today';
+  const itemId = url.searchParams.get('item_id') ?? '';
+
+  let query = supabase
+    .from('kitchen_store_disbursements')
+    .select('*, kitchen_store_items(item_name, unit)', { count: 'exact' })
+    .eq('branch_id', branchId);
+
+  if (itemId) {
+    query = query.eq('kitchen_store_item_id', itemId);
+  }
+
+  // Date filter
+  const now = new Date();
+  if (dateRange === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    query = query.gte('created_at', start);
+  } else if (dateRange === '7d') {
+    const start = new Date(now.getTime() - 7 * 86400000).toISOString();
+    query = query.gte('created_at', start);
+  } else if (dateRange === '30d') {
+    const start = new Date(now.getTime() - 30 * 86400000).toISOString();
+    query = query.gte('created_at', start);
+  }
+
+  query = applyPagination(query, page, pageSize, 'created_at', false);
+  const { data, count, error } = await query;
+  if (error) return errorResponse(error.message);
+
+  return jsonResponse({ items: data ?? [], total: count ?? 0, page, pageSize });
+}
+
+// ─── List Internal Store Movements (paginated audit log) ────────────────────
+
+async function listInternalMovements(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const url = new URL(req.url);
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+  const dateRange = url.searchParams.get('date_range') ?? 'today';
+  const itemId = url.searchParams.get('item_id') ?? '';
+
+  let query = supabase
+    .from('kitchen_store_movements')
+    .select('*, kitchen_store_items(item_name, unit)', { count: 'exact' })
+    .eq('branch_id', branchId);
+
+  if (itemId) {
+    query = query.eq('kitchen_store_item_id', itemId);
+  }
+
+  // Date filter
+  const now = new Date();
+  if (dateRange === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    query = query.gte('created_at', start);
+  } else if (dateRange === '7d') {
+    const start = new Date(now.getTime() - 7 * 86400000).toISOString();
+    query = query.gte('created_at', start);
+  } else if (dateRange === '30d') {
+    const start = new Date(now.getTime() - 30 * 86400000).toISOString();
+    query = query.gte('created_at', start);
+  }
+
+  query = applyPagination(query, page, pageSize, 'created_at', false);
+  const { data, count, error } = await query;
+  if (error) return errorResponse(error.message);
+
+  return jsonResponse({ items: data ?? [], total: count ?? 0, page, pageSize });
+}
+
+// ─── List Kitchen Staff (for disbursement target) ───────────────────────────
+
+async function listKitchenStaff(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const { data: staff, error } = await supabase
+    .from('profiles')
+    .select('id, name, email, role, branch_ids')
+    .eq('company_id', auth.companyId)
+    .eq('is_active', true)
+    .contains('permissions', ['view_kitchen']);
+
+  if (error) return errorResponse(error.message);
+
+  const branchStaff = (staff ?? []).filter((s: any) => {
+    const ids: string[] = s.branch_ids ?? [];
+    return ids.includes(branchId);
+  });
+
+  return jsonResponse({
+    staff: branchStaff.map((s: any) => ({
+      id: s.id,
+      name: s.name ?? s.email ?? 'Unknown',
+      role: s.role ?? 'staff',
+    })),
   });
 }

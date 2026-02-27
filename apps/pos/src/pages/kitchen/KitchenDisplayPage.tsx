@@ -1967,6 +1967,22 @@ const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
 ];
 
 function IngredientRequestsTab({ branchId }: { branchId: string }) {
+  const [subTab, setSubTab] = useState(0);
+
+  return (
+    <Box>
+      <Tabs value={subTab} onChange={(_, v) => setSubTab(v)} sx={{ mb: 2 }} variant="scrollable">
+        <Tab label="Requisitions" />
+        <Tab label="Internal Store" />
+      </Tabs>
+      {subTab === 0 && <RequisitionsSubTab branchId={branchId} />}
+      {subTab === 1 && <InternalStoreSubTab branchId={branchId} />}
+    </Box>
+  );
+}
+
+/* ─── Requisitions Sub-Tab (moved from original IngredientRequestsTab) ─── */
+function RequisitionsSubTab({ branchId }: { branchId: string }) {
   const { profile } = useAuth();
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2440,6 +2456,512 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
           </Button>
         </DialogActions>
       </Dialog>
+    </Box>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Internal Store Sub-Tab — kitchen's own stock, auto-stocked from received
+   ingredient requests, with meal-prep disbursement + cancel support.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const INTERNAL_VIEW_TABS = ['Current Stock', 'Disbursements', 'Movement Log'] as const;
+
+const DATE_RANGE_OPTS_INTERNAL = [
+  { value: 'today', label: 'Today' },
+  { value: '7d', label: '7 Days' },
+  { value: '30d', label: '30 Days' },
+  { value: 'all', label: 'All' },
+];
+
+const MOVEMENT_TYPE_LABELS: Record<string, string> = {
+  received: 'Received from Inventory',
+  returned_to_inventory: 'Returned to Inventory',
+  meal_prep: 'Meal Preparation',
+  cancel_meal_prep: 'Cancelled Meal Prep',
+};
+
+const MOVEMENT_TYPE_COLORS: Record<string, 'success' | 'error' | 'warning' | 'info' | 'default'> = {
+  received: 'success',
+  returned_to_inventory: 'error',
+  meal_prep: 'warning',
+  cancel_meal_prep: 'info',
+};
+
+function InternalStoreSubTab({ branchId }: { branchId: string }) {
+  const [view, setView] = useState(0);
+
+  return (
+    <Box>
+      <ToggleButtonGroup
+        size="small" value={view} exclusive
+        onChange={(_, v) => { if (v !== null) setView(v); }}
+        sx={{ mb: 2 }}
+      >
+        {INTERNAL_VIEW_TABS.map((label, i) => (
+          <ToggleButton key={label} value={i}>{label}</ToggleButton>
+        ))}
+      </ToggleButtonGroup>
+      {view === 0 && <InternalStockView branchId={branchId} />}
+      {view === 1 && <InternalDisbursementsView branchId={branchId} />}
+      {view === 2 && <InternalMovementsView branchId={branchId} />}
+    </Box>
+  );
+}
+
+/* ─── Current Stock View ─── */
+function InternalStockView({ branchId }: { branchId: string }) {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState('');
+
+  // Disburse dialog state
+  const [disburseDialog, setDisburseDialog] = useState<any>(null);
+  const [disburseQty, setDisburseQty] = useState('');
+  const [disburseReason, setDisburseReason] = useState('');
+  const [disburseStaff, setDisburseStaff] = useState<{ id: string; name: string; role: string } | null>(null);
+  const [disbursing, setDisbursing] = useState(false);
+
+  // Staff list for disburse target
+  const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
+  const [staffLoaded, setStaffLoaded] = useState(false);
+
+  const fetchItems = useCallback(async () => {
+    try {
+      const params: Record<string, string> = {
+        page: String(page + 1),
+        page_size: String(pageSize),
+      };
+      if (search) params.search = search;
+      const data = await api<{ items: any[]; total: number }>('kitchen', 'internal-store', { params, branchId });
+      setItems(data.items ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [branchId, page, pageSize, search]);
+
+  useEffect(() => { setLoading(true); fetchItems(); }, [fetchItems]);
+
+  const loadStaff = useCallback(async () => {
+    if (staffLoaded) return;
+    try {
+      const data = await api<{ staff: any[] }>('kitchen', 'internal-store-staff', { branchId });
+      setStaff(data.staff ?? []);
+      setStaffLoaded(true);
+    } catch (err) { console.error(err); }
+  }, [branchId, staffLoaded]);
+
+  const openDisburse = (item: any) => {
+    setDisburseDialog(item);
+    setDisburseQty('');
+    setDisburseReason('');
+    setDisburseStaff(null);
+    loadStaff();
+  };
+
+  const handleDisburse = async () => {
+    if (!disburseDialog || !disburseStaff) return;
+    const qty = Number(disburseQty);
+    if (!qty || qty <= 0) { toast.error('Enter a valid quantity'); return; }
+    if (!disburseReason.trim()) { toast.error('Reason is required'); return; }
+    setDisbursing(true);
+    try {
+      await api('kitchen', 'internal-store-disburse', {
+        body: {
+          kitchen_store_item_id: disburseDialog.id,
+          quantity: qty,
+          reason: disburseReason,
+          disbursed_to_id: disburseStaff.id,
+          disbursed_to_name: disburseStaff.name,
+        },
+        branchId,
+      });
+      toast.success('Ingredients disbursed for meal prep');
+      setDisburseDialog(null);
+      fetchItems();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setDisbursing(false); }
+  };
+
+  if (loading && items.length === 0) return <LinearProgress />;
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
+        <TextField
+          size="small" placeholder="Search items…" sx={{ minWidth: 220 }}
+          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+          value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+        />
+        <Typography variant="body2" color="text.secondary">{total} item{total !== 1 ? 's' : ''} in store</Typography>
+      </Stack>
+
+      {loading && <LinearProgress sx={{ mb: 1 }} />}
+
+      {items.length === 0 && !loading ? (
+        <Alert severity="info" sx={{ mt: 2 }}>
+          No items in the internal store yet. Items are automatically added when ingredient requests are received from inventory.
+        </Alert>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Item Name</TableCell>
+                <TableCell align="right">Quantity</TableCell>
+                <TableCell>Unit</TableCell>
+                <TableCell width={160}>Last Updated</TableCell>
+                <TableCell width={140} align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.id} hover>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={600}>{item.item_name}</Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography
+                      fontWeight={600}
+                      color={Number(item.quantity) <= 0 ? 'error.main' : Number(item.quantity) < 5 ? 'warning.main' : 'text.primary'}
+                    >
+                      {Number(item.quantity).toFixed(item.unit === 'pcs' ? 0 : 2)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>{item.unit}</TableCell>
+                  <TableCell>
+                    <Typography variant="caption" color="text.secondary">
+                      {new Date(item.updated_at).toLocaleString()}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Button
+                      size="small" variant="contained" color="primary"
+                      onClick={() => openDisburse(item)}
+                      disabled={Number(item.quantity) <= 0}
+                    >
+                      Disburse
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => setPage(p)}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
+      )}
+
+      {/* ─── Disburse Dialog ─── */}
+      <Dialog open={!!disburseDialog} onClose={() => setDisburseDialog(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Disburse for Meal Preparation</DialogTitle>
+        <DialogContent>
+          {disburseDialog && (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Alert severity="info" variant="outlined">
+                <strong>{disburseDialog.item_name}</strong> — Available: {Number(disburseDialog.quantity).toFixed(2)} {disburseDialog.unit}
+              </Alert>
+              <TextField
+                fullWidth label="Quantity" type="number" size="small"
+                value={disburseQty} onChange={(e) => setDisburseQty(e.target.value)}
+                inputProps={{ min: 0.01, max: Number(disburseDialog.quantity), step: 0.01 }}
+                helperText={`Max: ${Number(disburseDialog.quantity).toFixed(2)} ${disburseDialog.unit}`}
+              />
+              <TextField
+                fullWidth label="Reason for disbursement *" size="small" multiline rows={2}
+                value={disburseReason} onChange={(e) => setDisburseReason(e.target.value)}
+                placeholder="e.g. Preparing lunch menu, Special order, etc."
+              />
+              <Autocomplete<{ id: string; name: string; role: string }>
+                options={staff}
+                getOptionLabel={(o) => `${o.name} (${o.role})`}
+                value={disburseStaff}
+                onChange={(_, v) => setDisburseStaff(v)}
+                renderInput={(params) => <TextField {...params} label="Kitchen Staff *" size="small" placeholder="Select staff member" />}
+                isOptionEqualToValue={(o, v) => o.id === v.id}
+                loading={!staffLoaded}
+              />
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDisburseDialog(null)}>Cancel</Button>
+          <Button variant="contained" onClick={handleDisburse} disabled={disbursing || !disburseStaff || !disburseReason.trim() || !disburseQty}>
+            Disburse
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
+
+/* ─── Disbursements View ─── */
+function InternalDisbursementsView({ branchId }: { branchId: string }) {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [dateRange, setDateRange] = useState('today');
+  const [cancelLoading, setCancelLoading] = useState<string | null>(null);
+
+  const fetchDisbursements = useCallback(async () => {
+    try {
+      const data = await api<{ items: any[]; total: number }>('kitchen', 'internal-store-disbursements', {
+        params: {
+          page: String(page + 1),
+          page_size: String(pageSize),
+          date_range: dateRange,
+        },
+        branchId,
+      });
+      setItems(data.items ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [branchId, page, pageSize, dateRange]);
+
+  useEffect(() => { setLoading(true); fetchDisbursements(); }, [fetchDisbursements]);
+
+  const handleCancel = async (id: string) => {
+    const reason = window.prompt('Reason for cancellation:');
+    if (reason === null) return; // user pressed Cancel
+    setCancelLoading(id);
+    try {
+      await api('kitchen', 'internal-store-cancel-disburse', {
+        body: { disbursement_id: id, cancel_reason: reason || undefined },
+        branchId,
+      });
+      toast.success('Disbursement cancelled — stock restored');
+      fetchDisbursements();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setCancelLoading(null); }
+  };
+
+  const canCancel = (d: any) => {
+    if (d.cancelled_at) return false;
+    const created = new Date(d.created_at).getTime();
+    return Date.now() - created < 60 * 60 * 1000; // < 1 hour
+  };
+
+  if (loading && items.length === 0) return <LinearProgress />;
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
+        <ToggleButtonGroup size="small" value={dateRange} exclusive onChange={(_, v) => { if (v) { setDateRange(v); setPage(0); } }}>
+          {DATE_RANGE_OPTS_INTERNAL.map((o) => <ToggleButton key={o.value} value={o.value}>{o.label}</ToggleButton>)}
+        </ToggleButtonGroup>
+        <Typography variant="body2" color="text.secondary">{total} disbursement{total !== 1 ? 's' : ''}</Typography>
+      </Stack>
+
+      {loading && <LinearProgress sx={{ mb: 1 }} />}
+
+      {items.length === 0 && !loading ? (
+        <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No disbursements found</Typography>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Item</TableCell>
+                <TableCell align="right">Qty</TableCell>
+                <TableCell>Reason</TableCell>
+                <TableCell>Disbursed To</TableCell>
+                <TableCell>Disbursed By</TableCell>
+                <TableCell width={160}>Date & Time</TableCell>
+                <TableCell width={100}>Status</TableCell>
+                <TableCell width={100} align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {items.map((d) => {
+                const itemName = d.kitchen_store_items?.item_name ?? '—';
+                const unit = d.kitchen_store_items?.unit ?? '';
+                const isCancelled = !!d.cancelled_at;
+
+                return (
+                  <TableRow key={d.id} hover sx={{ opacity: isCancelled ? 0.6 : 1 }}>
+                    <TableCell>
+                      <Typography variant="body2" fontWeight={600}>{itemName}</Typography>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Typography fontWeight={600} sx={{ textDecoration: isCancelled ? 'line-through' : 'none' }}>
+                        {Number(d.quantity).toFixed(unit === 'pcs' ? 0 : 2)} {unit}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ maxWidth: 200 }} noWrap>{d.reason}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">{d.disbursed_to_name}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">{d.disbursed_by_name}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">{new Date(d.created_at).toLocaleDateString()}</Typography>
+                      <Typography variant="caption" color="text.secondary">{new Date(d.created_at).toLocaleTimeString()}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      {isCancelled ? (
+                        <Tooltip title={`Cancelled by ${d.cancelled_by_name ?? '—'}${d.cancel_reason ? `: ${d.cancel_reason}` : ''}`}>
+                          <Chip size="small" label="Cancelled" color="error" variant="outlined" />
+                        </Tooltip>
+                      ) : (
+                        <Chip size="small" label="Active" color="success" variant="outlined" />
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      {!isCancelled && canCancel(d) && (
+                        <Tooltip title="Cancel (within 1 hour)">
+                          <IconButton
+                            size="small" color="error"
+                            onClick={() => handleCancel(d.id)}
+                            disabled={cancelLoading === d.id}
+                          >
+                            <UndoIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => setPage(p)}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
+      )}
+    </Box>
+  );
+}
+
+/* ─── Movement Log View ─── */
+function InternalMovementsView({ branchId }: { branchId: string }) {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [dateRange, setDateRange] = useState('today');
+
+  const fetchMovements = useCallback(async () => {
+    try {
+      const data = await api<{ items: any[]; total: number }>('kitchen', 'internal-store-movements', {
+        params: {
+          page: String(page + 1),
+          page_size: String(pageSize),
+          date_range: dateRange,
+        },
+        branchId,
+      });
+      setItems(data.items ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [branchId, page, pageSize, dateRange]);
+
+  useEffect(() => { setLoading(true); fetchMovements(); }, [fetchMovements]);
+
+  if (loading && items.length === 0) return <LinearProgress />;
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
+        <ToggleButtonGroup size="small" value={dateRange} exclusive onChange={(_, v) => { if (v) { setDateRange(v); setPage(0); } }}>
+          {DATE_RANGE_OPTS_INTERNAL.map((o) => <ToggleButton key={o.value} value={o.value}>{o.label}</ToggleButton>)}
+        </ToggleButtonGroup>
+        <Typography variant="body2" color="text.secondary">{total} movement{total !== 1 ? 's' : ''}</Typography>
+      </Stack>
+
+      {loading && <LinearProgress sx={{ mb: 1 }} />}
+
+      {items.length === 0 && !loading ? (
+        <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No movements found</Typography>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Item</TableCell>
+                <TableCell width={180}>Type</TableCell>
+                <TableCell align="right">Change</TableCell>
+                <TableCell align="right">Before</TableCell>
+                <TableCell align="right">After</TableCell>
+                <TableCell>Notes</TableCell>
+                <TableCell>By</TableCell>
+                <TableCell width={160}>Date & Time</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {items.map((m) => {
+                const itemName = m.kitchen_store_items?.item_name ?? '—';
+                const change = Number(m.quantity_change);
+                const isPositive = change > 0;
+                return (
+                  <TableRow key={m.id} hover>
+                    <TableCell>
+                      <Typography variant="body2" fontWeight={600}>{itemName}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        size="small" variant="outlined"
+                        label={MOVEMENT_TYPE_LABELS[m.movement_type] ?? m.movement_type?.replace(/_/g, ' ')}
+                        color={MOVEMENT_TYPE_COLORS[m.movement_type] ?? 'default'}
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      <Typography color={isPositive ? 'success.main' : 'error.main'} fontWeight={600}>
+                        {isPositive ? '+' : ''}{change}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right">{Number(m.quantity_before).toFixed(2)}</TableCell>
+                    <TableCell align="right">{Number(m.quantity_after).toFixed(2)}</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>{m.notes ?? '—'}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">{m.performed_by_name}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">{new Date(m.created_at).toLocaleDateString()}</Typography>
+                      <Typography variant="caption" color="text.secondary">{new Date(m.created_at).toLocaleTimeString()}</Typography>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => setPage(p)}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
+      )}
     </Box>
   );
 }
