@@ -7,7 +7,7 @@ import {
   Badge, Stack, Divider, Avatar, Alert, InputAdornment,
   LinearProgress, List, ListItem, ListItemText, ListItemSecondaryAction,
   Switch, FormControlLabel, Tooltip, Checkbox, Radio, RadioGroup,
-  Autocomplete, CircularProgress,
+  Autocomplete, CircularProgress, TablePagination,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -28,6 +28,7 @@ import PrintIcon from '@mui/icons-material/Print';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import CloseIcon from '@mui/icons-material/Close';
 import LocalDiningIcon from '@mui/icons-material/LocalDining';
+import BlockIcon from '@mui/icons-material/Block';
 import { KDSOrderCard, DataTable, type Column } from '@paxrest/ui';
 import {
   formatCurrency,
@@ -35,6 +36,7 @@ import {
   MEAL_ASSIGNMENT_STATUS_LABELS,
   AVAILABLE_MEAL_STATUS_OPTIONS,
   AVAILABLE_MEAL_STATUS_LABELS,
+  AVAILABLE_MEAL_STATUS_COLORS,
 } from '@paxrest/shared-utils';
 import type { MealAvailability, MealAssignmentStatus, AvailableMealStatus } from '@paxrest/shared-types';
 import { usePaginated, useApi, useRealtime } from '@/hooks';
@@ -75,6 +77,8 @@ function KitchenDisplayContent() {
       all.push({ key: 'make_dish', label: 'Make a Dish', icon: <PlayArrowIcon />, component: <MakeDishTab branchId={activeBranchId!} currency={currency} /> });
     if (can('kitchen_available_meals'))
       all.push({ key: 'available', label: 'Available Meals', icon: <ShoppingCartIcon />, component: <AvailableMealsTab branchId={activeBranchId!} currency={currency} /> });
+    if (can('kitchen_available_meals'))
+      all.push({ key: 'sold_out', label: 'Sold Out', icon: <BlockIcon />, component: <SoldOutTab branchId={activeBranchId!} currency={currency} /> });
     if (can('kitchen_ingredient_requests'))
       all.push({ key: 'requests', label: 'Ingredient Requests', icon: <InventoryIcon />, component: <IngredientRequestsTab branchId={activeBranchId!} /> });
     return all;
@@ -114,16 +118,23 @@ function PendingOrdersTab({ branchId }: { branchId: string }) {
   const [station, setStation] = useState('');
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
 
   const fetchOrders = useCallback(async () => {
     try {
-      const params: Record<string, string> = {};
+      const params: Record<string, string> = {
+        page: String(page + 1),
+        page_size: String(pageSize),
+      };
       if (station) params.station = station;
-      const data = await api<{ orders: any[] }>('kitchen', 'orders', { params, branchId });
+      const data = await api<{ orders: any[]; total: number }>('kitchen', 'orders', { params, branchId });
       setOrders(data.orders ?? []);
+      setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [station, branchId]);
+  }, [station, branchId, page, pageSize]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
   useEffect(() => {
@@ -194,6 +205,15 @@ function PendingOrdersTab({ branchId }: { branchId: string }) {
           })}
         </Box>
       )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
+      )}
     </Box>
   );
 }
@@ -213,6 +233,9 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [now, setNow] = useState(Date.now());
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
 
   // Edit dialog
   const [editDialog, setEditDialog] = useState(false);
@@ -273,13 +296,17 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
 
   const fetchAssignments = useCallback(async () => {
     try {
-      const params: Record<string, string> = { page_size: '200' };
+      const params: Record<string, string> = {
+        page: String(page + 1),
+        page_size: String(pageSize),
+      };
       if (statusFilter) params.status = statusFilter;
-      const data = await api<{ items: any[] }>('kitchen', 'assignments', { params, branchId });
+      const data = await api<{ items: any[]; total: number }>('kitchen', 'assignments', { params, branchId });
       setAssignments(data.items ?? []);
+      setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [branchId, statusFilter]);
+  }, [branchId, statusFilter, page, pageSize]);
 
   useEffect(() => { fetchAssignments(); }, [fetchAssignments]);
   useRealtime('meal_assignments', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchAssignments());
@@ -391,7 +418,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
         <Typography variant="subtitle2">Filter:</Typography>
         <ToggleButtonGroup
           value={statusFilter} exclusive size="small"
-          onChange={(_, v) => { setStatusFilter(v ?? ''); setLoading(true); }}
+          onChange={(_, v) => { setStatusFilter(v ?? ''); setPage(0); setLoading(true); }}
         >
           <ToggleButton value="">All</ToggleButton>
           <ToggleButton value="pending">Pending</ToggleButton>
@@ -482,12 +509,24 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                         Make Available
                       </Button>
                     )}
+                    {a.status === 'available' && (
+                      <Chip size="small" label="Meal is Available" color="success" icon={<CheckCircleIcon />} />
+                    )}
                   </Box>
                 </CardContent>
               </Card>
             );
           })}
         </Box>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
       )}
 
       {/* Edit Dialog */}
@@ -1208,6 +1247,9 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
 
   const [meals, setMeals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
 
   // Meal detail dialog
   const [mealDetailOpen, setMealDetailOpen] = useState(false);
@@ -1216,11 +1258,19 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
 
   const fetchMeals = useCallback(async () => {
     try {
-      const data = await api<{ meals: any[] }>('kitchen', 'available-meals', { params: {}, branchId });
+      const data = await api<{ meals: any[]; total: number }>('kitchen', 'available-meals', {
+        params: {
+          exclude_status: 'unavailable',
+          page: String(page + 1),
+          page_size: String(pageSize),
+        },
+        branchId,
+      });
       setMeals(data.meals ?? []);
+      setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [branchId]);
+  }, [branchId, page, pageSize]);
 
   useEffect(() => { fetchMeals(); }, [fetchMeals]);
   useRealtime('available_meals', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchMeals());
@@ -1346,6 +1396,15 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
             );
           })}
         </Box>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
       )}
 
       {/* Meal Detail Dialog (food info only) */}
@@ -1490,22 +1549,338 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
 }
 
 /* ═══════════════════════════════════════════════════════
+   Tab 3b — Sold Out (unavailable meals)
+   ═══════════════════════════════════════════════════════ */
+function SoldOutTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { profile } = useAuth();
+  const perms = profile?.permissions ?? [];
+  const canEditStatus = perms.includes('kitchen_make_dish' as any) || perms.includes('kitchen_ingredient_requests' as any) || perms.includes('manage_menu' as any);
+
+  const [meals, setMeals] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+
+  // Meal detail dialog
+  const [mealDetailOpen, setMealDetailOpen] = useState(false);
+  const [mealDetailData, setMealDetailData] = useState<any>(null);
+  const [mealDetailLoading, setMealDetailLoading] = useState(false);
+
+  const fetchMeals = useCallback(async () => {
+    try {
+      const data = await api<{ meals: any[]; total: number }>('kitchen', 'available-meals', {
+        params: {
+          status: 'unavailable',
+          page: String(page + 1),
+          page_size: String(pageSize),
+        },
+        branchId,
+      });
+      setMeals(data.meals ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [branchId, page, pageSize]);
+
+  useEffect(() => { fetchMeals(); }, [fetchMeals]);
+  useRealtime('available_meals', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchMeals());
+
+  const handleStatusChange = async (meal: any, newStatus: string) => {
+    try {
+      await api('kitchen', 'available-meals', {
+        body: { meal_id: meal.id, action: 'update-status', availability_status: newStatus },
+        branchId,
+      });
+      toast.success(`Status updated to ${AVAILABLE_MEAL_STATUS_LABELS[newStatus as AvailableMealStatus] ?? newStatus}`);
+      fetchMeals();
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const openMealDetail = async (menuItemId: string) => {
+    setMealDetailOpen(true);
+    setMealDetailLoading(true);
+    setMealDetailData(null);
+    try {
+      const data = await api<{ menu_item: any }>('kitchen', 'meal-detail', {
+        params: { menu_item_id: menuItemId },
+        branchId,
+      });
+      setMealDetailData(data.menu_item);
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to load details');
+      setMealDetailOpen(false);
+    } finally {
+      setMealDetailLoading(false);
+    }
+  };
+
+  const handlePrintMealDetail = () => {
+    const el = document.getElementById('soldout-detail-print');
+    if (!el) return;
+    const w = window.open('', '_blank', 'width=800,height=600');
+    if (!w) return;
+    w.document.write(`<html><head><title>Meal Details</title>
+      <style>body{font-family:Arial,sans-serif;padding:20px}
+      img{max-width:200px;border-radius:8px}
+      table{border-collapse:collapse;width:100%;margin-top:10px}
+      th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}
+      th{background:#f5f5f5}
+      .section{margin-top:16px;font-weight:700;font-size:14px;border-bottom:1px solid #ccc;padding-bottom:4px}
+      </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+    w.close();
+  };
+
+  if (loading) return <LinearProgress />;
+
+  // Status options excluding 'unavailable' (since they are already sold out)
+  const restoreStatusOptions = AVAILABLE_MEAL_STATUS_OPTIONS.filter((o) => o.value !== 'unavailable');
+
+  return (
+    <Box>
+      <Alert severity="warning" sx={{ mb: 2 }}>
+        Meals marked as sold out. Change the status to move them back to Available Meals.
+      </Alert>
+
+      {meals.length === 0 ? (
+        <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+          No sold-out meals. Meals set to "Not Available" from the Available Meals tab will appear here.
+        </Typography>
+      ) : (
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          {meals.map((meal) => {
+            const qtyDisplay = meal.quantity_label || `${meal.quantity_available}`;
+            return (
+              <Card key={meal.id} sx={{ width: 260, textAlign: 'center', borderTop: '3px solid', borderTopColor: 'error.main', opacity: 0.85 }}>
+                <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  {(meal.menu_items?.media_url || meal.menu_items?.image_url) && (
+                    <Avatar
+                      src={meal.menu_items.media_url ?? meal.menu_items.image_url}
+                      variant="rounded"
+                      sx={{ width: 80, height: 80, mx: 'auto', mb: 1 }}
+                    />
+                  )}
+                  <Typography fontWeight={700}>{meal.menu_item_name ?? meal.menu_items?.name ?? '—'}</Typography>
+
+                  <Stack direction="row" spacing={0.5} justifyContent="center" sx={{ my: 1 }}>
+                    <Chip size="small" label={qtyDisplay} variant="outlined" />
+                    <Chip size="small" label="Sold Out" color="error" />
+                  </Stack>
+
+                  {meal.prepared_by_name && (
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Prepared by: {meal.prepared_by_name}
+                    </Typography>
+                  )}
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Updated: {new Date(meal.updated_at).toLocaleString()}
+                  </Typography>
+
+                  {canEditStatus && (
+                    <FormControl fullWidth size="small" sx={{ mt: 1.5 }}>
+                      <InputLabel>Restore Status</InputLabel>
+                      <Select
+                        value=""
+                        label="Restore Status"
+                        displayEmpty
+                        onChange={(e) => {
+                          if (e.target.value) handleStatusChange(meal, e.target.value);
+                        }}
+                      >
+                        <MuiMenuItem value="" disabled>Select to restore…</MuiMenuItem>
+                        {restoreStatusOptions.map((opt) => (
+                          <MuiMenuItem key={opt.value} value={opt.value}>{opt.label}</MuiMenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  )}
+
+                  <Box sx={{ mt: 1.5, display: 'flex', justifyContent: 'center' }}>
+                    <Button size="small" variant="outlined" startIcon={<VisibilityIcon />} onClick={() => openMealDetail(meal.menu_item_id)}>
+                      Details
+                    </Button>
+                  </Box>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </Box>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
+      )}
+
+      {/* Sold Out Meal Detail Dialog */}
+      <Dialog open={mealDetailOpen} onClose={() => setMealDetailOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <LocalDiningIcon />
+            <Typography variant="h6">Meal Details</Typography>
+          </Stack>
+          <Stack direction="row" spacing={0.5}>
+            <Tooltip title="Print"><IconButton onClick={handlePrintMealDetail} disabled={mealDetailLoading}><PrintIcon /></IconButton></Tooltip>
+            <Tooltip title="Close"><IconButton onClick={() => setMealDetailOpen(false)}><CloseIcon /></IconButton></Tooltip>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers>
+          {mealDetailLoading ? (
+            <Box sx={{ textAlign: 'center', py: 4 }}><CircularProgress /></Box>
+          ) : mealDetailData ? (
+            <Box id="soldout-detail-print">
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="flex-start">
+                {(mealDetailData.media_url || mealDetailData.image_url) && (
+                  <Avatar
+                    src={mealDetailData.media_url ?? mealDetailData.image_url}
+                    variant="rounded"
+                    sx={{ width: 140, height: 140 }}
+                  />
+                )}
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="h5" fontWeight={700}>{mealDetailData.name ?? '—'}</Typography>
+                  {mealDetailData.menu_categories?.name && (
+                    <Chip size="small" label={mealDetailData.menu_categories.name} sx={{ mt: 0.5 }} />
+                  )}
+                  {mealDetailData.description && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      {mealDetailData.description}
+                    </Typography>
+                  )}
+                  <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
+                    {mealDetailData.base_price != null && (
+                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(mealDetailData.base_price, currency)}</Typography>
+                    )}
+                    {mealDetailData.calories != null && (
+                      <Typography variant="body2"><strong>Calories:</strong> {mealDetailData.calories} kcal</Typography>
+                    )}
+                    {mealDetailData.preparation_time_min != null && (
+                      <Typography variant="body2"><strong>Prep Time:</strong> {mealDetailData.preparation_time_min} min</Typography>
+                    )}
+                    {mealDetailData.station && (
+                      <Typography variant="body2"><strong>Station:</strong> {mealDetailData.station}</Typography>
+                    )}
+                  </Stack>
+                  {mealDetailData.tags?.length > 0 && (
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 1 }} flexWrap="wrap">
+                      {mealDetailData.tags.map((t: string) => <Chip key={t} size="small" label={t} variant="outlined" />)}
+                    </Stack>
+                  )}
+                  {mealDetailData.allergens?.length > 0 && (
+                    <Typography variant="body2" color="warning.main" sx={{ mt: 0.5 }}>
+                      <strong>Allergens:</strong> {mealDetailData.allergens.join(', ')}
+                    </Typography>
+                  )}
+                </Box>
+              </Stack>
+
+              {mealDetailData.menu_item_ingredients?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Ingredients</Typography>
+                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1.5, py: 0.75, fontSize: 13 }, '& th': { bgcolor: 'action.hover', fontWeight: 700 } }}>
+                    <thead>
+                      <tr><th>Ingredient</th><th>Quantity</th><th>Unit</th><th>Cost</th></tr>
+                    </thead>
+                    <tbody>
+                      {mealDetailData.menu_item_ingredients.map((ing: any) => (
+                        <tr key={ing.id}>
+                          <td>{ing.name ?? ing.inventory_items?.name ?? '—'}</td>
+                          <td>{ing.quantity_used}</td>
+                          <td>{ing.unit}</td>
+                          <td>{ing.cost_contribution ? formatCurrency(ing.cost_contribution, currency) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Box>
+                </>
+              )}
+
+              {mealDetailData.menu_item_extras?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Extras / Add-ons</Typography>
+                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1.5, py: 0.75, fontSize: 13 }, '& th': { bgcolor: 'action.hover', fontWeight: 700 } }}>
+                    <thead>
+                      <tr><th>Extra</th><th>Price</th><th>Available</th></tr>
+                    </thead>
+                    <tbody>
+                      {mealDetailData.menu_item_extras.map((ext: any) => (
+                        <tr key={ext.id}>
+                          <td>{ext.name}</td>
+                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{ext.is_available ? 'Yes' : 'No'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Box>
+                </>
+              )}
+
+              {mealDetailData.menu_variants?.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Variants</Typography>
+                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                    {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
+                      <Chip
+                        key={v.id}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${formatCurrency(v.price_adjustment, currency)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        variant="outlined"
+                        size="small"
+                      />
+                    ))}
+                  </Stack>
+                </>
+              )}
+            </Box>
+          ) : (
+            <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No data available</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMealDetailOpen(false)}>Close</Button>
+          <Button variant="outlined" startIcon={<PrintIcon />} onClick={handlePrintMealDetail} disabled={mealDetailLoading || !mealDetailData}>
+            Print
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    Tab 4 — Completed Orders
    ═══════════════════════════════════════════════════════ */
 function CompletedOrdersTab({ branchId }: { branchId: string }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
 
   const fetchOrders = useCallback(async () => {
     try {
-      const data = await api<{ orders: any[] }>('kitchen', 'orders', {
-        params: { status: 'completed,delivered' },
+      const data = await api<{ orders: any[]; total: number }>('kitchen', 'orders', {
+        params: {
+          status: 'completed,delivered',
+          page: String(page + 1),
+          page_size: String(pageSize),
+        },
         branchId,
       });
       setOrders(data.orders ?? []);
+      setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [branchId]);
+  }, [branchId, page, pageSize]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
@@ -1541,6 +1916,15 @@ function CompletedOrdersTab({ branchId }: { branchId: string }) {
           ))}
         </Box>
       )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
+      )}
     </Box>
   );
 }
@@ -1551,6 +1935,9 @@ function CompletedOrdersTab({ branchId }: { branchId: string }) {
 function IngredientRequestsTab({ branchId }: { branchId: string }) {
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState({ notes: '', items: [{ inventory_item_id: '', quantity_requested: 1 }] });
   const [saving, setSaving] = useState(false);
@@ -1561,11 +1948,18 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
 
   const fetchRequests = useCallback(async () => {
     try {
-      const data = await api<{ requests: any[] }>('inventory', 'ingredient-requests', { params: {}, branchId });
-      setRequests(data.requests ?? []);
+      const data = await api<{ items: any[]; total: number }>('inventory', 'ingredient-requests', {
+        params: {
+          page: String(page + 1),
+          page_size: String(pageSize),
+        },
+        branchId,
+      });
+      setRequests(data.items ?? []);
+      setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [branchId]);
+  }, [branchId, page, pageSize]);
 
   useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
@@ -1636,6 +2030,15 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
             </Card>
           ))}
         </Box>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
       )}
 
       {/* New Request Dialog */}

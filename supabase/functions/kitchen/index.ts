@@ -107,23 +107,30 @@ async function getKitchenOrders(req: Request, supabase: any, auth: AuthContext, 
   const url = new URL(req.url);
   const station = url.searchParams.get('station') ?? 'kitchen';
   const statusFilter = url.searchParams.get('status'); // 'active' or 'completed'
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
 
   const orderStatuses = statusFilter === 'completed'
     ? ['completed', 'ready', 'served']
-    : ['pending', 'confirmed', 'preparing'];
+    : statusFilter
+      ? statusFilter.split(',')
+      : ['pending', 'confirmed', 'preparing'];
 
-  const { data: orders, error } = await supabase
+  let query = supabase
     .from('orders')
     .select(`
       id, order_number, order_type, table_id, customer_name, notes, created_at, status, source,
       order_items(id, menu_item_name, variant_name, quantity, special_instructions, station, status, modifiers, removed_ingredients, selected_extras),
       tables(name)
-    `)
+    `, { count: 'exact' })
     .eq('branch_id', branchId)
-    .in('status', orderStatuses)
-    .order('created_at', { ascending: statusFilter !== 'completed' })
-    .limit(statusFilter === 'completed' ? 50 : 100);
+    .in('status', orderStatuses);
 
+  query = applyPagination(query, page, pageSize, 'created_at', statusFilter !== 'completed');
+
+  const { data: orders, count, error } = await query;
   if (error) return errorResponse(error.message);
 
   // Filter orders that have items for this station
@@ -151,7 +158,13 @@ async function getKitchenOrders(req: Request, supabase: any, auth: AuthContext, 
     }))
     .filter((order: any) => order.items.length > 0);
 
-  return jsonResponse({ orders: filtered });
+  return jsonResponse({
+    orders: filtered,
+    total: count,
+    page,
+    page_size: pageSize,
+    total_pages: Math.ceil((count ?? 0) / pageSize),
+  });
 }
 
 // ─── Update Individual Item Status ──────────────────────────────────────────
@@ -692,14 +705,34 @@ async function listChefs(req: Request, supabase: any, auth: AuthContext, branchI
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function listAvailableMeals(req: Request, supabase: any, auth: AuthContext, branchId: string) {
-  const { data, error } = await supabase
+  const url = new URL(req.url);
+  const statusFilter = url.searchParams.get('status'); // e.g. 'unavailable' for sold-out tab
+  const excludeStatus = url.searchParams.get('exclude_status'); // e.g. 'unavailable' for available meals tab
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+
+  let query = supabase
     .from('available_meals')
-    .select('*, menu_items(name, description, image_url, media_url, media_type, base_price, calories, allergens, tags, station, preparation_time_min)')
-    .eq('branch_id', branchId)
-    .order('menu_item_name', { ascending: true });
+    .select('*, menu_items(name, description, image_url, media_url, media_type, base_price, calories, allergens, tags, station, preparation_time_min)', { count: 'exact' })
+    .eq('branch_id', branchId);
+
+  if (statusFilter) query = query.eq('availability_status', statusFilter);
+  if (excludeStatus) query = query.neq('availability_status', excludeStatus);
+
+  query = applyPagination(query, page, pageSize, 'menu_item_name', true);
+
+  const { data, count, error } = await query;
 
   if (error) return errorResponse(error.message);
-  return jsonResponse({ meals: data });
+  return jsonResponse({
+    meals: data,
+    total: count,
+    page,
+    page_size: pageSize,
+    total_pages: Math.ceil((count ?? 0) / pageSize),
+  });
 }
 
 // ─── Meal Detail (food info only, for available meals tab) ──────────────────
