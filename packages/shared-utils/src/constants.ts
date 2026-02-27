@@ -173,6 +173,22 @@ export const INGREDIENT_REQUEST_STATUS_LABELS: Record<IngredientRequestStatus, s
   rejected: 'Rejected',
   fulfilled: 'Fulfilled',
   cancelled: 'Cancelled',
+  in_transit: 'In Transit',
+  disbursed: 'Disbursed',
+  received: 'Received',
+  returned: 'Returned',
+};
+
+export const INGREDIENT_REQUEST_STATUS_COLORS: Record<IngredientRequestStatus, string> = {
+  pending: 'warning',
+  approved: 'info',
+  rejected: 'error',
+  fulfilled: 'success',
+  cancelled: 'default',
+  in_transit: 'info',
+  disbursed: 'primary',
+  received: 'success',
+  returned: 'secondary',
 };
 
 // ─── Packaging Type Labels ──────────────────────────────────────────────────

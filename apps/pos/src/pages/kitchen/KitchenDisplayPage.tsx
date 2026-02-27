@@ -8,6 +8,8 @@ import {
   LinearProgress, List, ListItem, ListItemText, ListItemSecondaryAction,
   Switch, FormControlLabel, Tooltip, Checkbox, Radio, RadioGroup,
   Autocomplete, CircularProgress, TablePagination,
+  Table, TableHead, TableBody, TableRow, TableCell, TableContainer, Paper,
+  Accordion, AccordionSummary, AccordionDetails, Collapse,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -29,6 +31,9 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import CloseIcon from '@mui/icons-material/Close';
 import LocalDiningIcon from '@mui/icons-material/LocalDining';
 import BlockIcon from '@mui/icons-material/Block';
+import CallReceivedIcon from '@mui/icons-material/CallReceived';
+import UndoIcon from '@mui/icons-material/Undo';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { KDSOrderCard, DataTable, type Column } from '@paxrest/ui';
 import {
   formatCurrency,
@@ -37,8 +42,10 @@ import {
   AVAILABLE_MEAL_STATUS_OPTIONS,
   AVAILABLE_MEAL_STATUS_LABELS,
   AVAILABLE_MEAL_STATUS_COLORS,
+  INGREDIENT_REQUEST_STATUS_LABELS,
+  INGREDIENT_REQUEST_STATUS_COLORS,
 } from '@paxrest/shared-utils';
-import type { MealAvailability, MealAssignmentStatus, AvailableMealStatus } from '@paxrest/shared-types';
+import type { MealAvailability, MealAssignmentStatus, AvailableMealStatus, IngredientRequestStatus } from '@paxrest/shared-types';
 import { usePaginated, useApi, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
@@ -257,6 +264,9 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
   const [detailData, setDetailData] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // Track IDs currently being made available (optimistic UI)
+  const [makingAvailable, setMakingAvailable] = useState<Set<string>>(new Set());
+
   const openDetail = async (a: any) => {
     setDetailDialog(true);
     setDetailLoading(true);
@@ -358,11 +368,15 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
   };
 
   const handleMakeAvailable = async (id: string) => {
+    setMakingAvailable((prev) => new Set(prev).add(id));
     try {
       await api('kitchen', 'assignment-make-available', { body: { assignment_id: id }, branchId });
       toast.success('Dish added to Available Meals!');
       fetchAssignments();
-    } catch (err: any) { toast.error(err.message); }
+    } catch (err: any) {
+      toast.error(err.message);
+      setMakingAvailable((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    }
   };
 
   const openEdit = (a: any) => {
@@ -504,12 +518,12 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                         Mark Complete
                       </Button>
                     )}
-                    {a.status === 'completed' && isPrivileged && (
+                    {a.status === 'completed' && isPrivileged && !makingAvailable.has(a.id) && (
                       <Button size="small" variant="contained" color="primary" onClick={() => handleMakeAvailable(a.id)}>
                         Make Available
                       </Button>
                     )}
-                    {a.status === 'available' && (
+                    {(a.status === 'available' || makingAvailable.has(a.id)) && (
                       <Chip size="small" label="Meal is Available" color="success" icon={<CheckCircleIcon />} />
                     )}
                   </Box>
@@ -1930,17 +1944,46 @@ function CompletedOrdersTab({ branchId }: { branchId: string }) {
 }
 
 /* ═══════════════════════════════════════════════════════
-   Tab 5 — Ingredient Requests
+   Tab 5 — Ingredient Requests (redesigned as list/table)
    ═══════════════════════════════════════════════════════ */
+const DATE_RANGE_OPTIONS = [
+  { value: 'today', label: 'Today' },
+  { value: '7d', label: '7 Days' },
+  { value: '30d', label: '30 Days' },
+  { value: 'all', label: 'All' },
+];
+
+const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'All' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'in_transit', label: 'In Transit' },
+  { value: 'disbursed', label: 'Disbursed' },
+  { value: 'received', label: 'Received' },
+  { value: 'returned', label: 'Returned' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
 function IngredientRequestsTab({ branchId }: { branchId: string }) {
+  const { profile } = useAuth();
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
+  const [dateRange, setDateRange] = useState('today');
+  const [statusFilter, setStatusFilter] = useState('');
+
+  // Dialog states
   const [dialog, setDialog] = useState(false);
+  const [editingRequest, setEditingRequest] = useState<any>(null);
   const [form, setForm] = useState({ notes: '', items: [{ inventory_item_id: '', quantity_requested: 1 }] });
   const [saving, setSaving] = useState(false);
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [returnDialog, setReturnDialog] = useState<string | null>(null);
+  const [returnNotes, setReturnNotes] = useState('');
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   // Quick list of inventory items for the selector
   const { data: invData } = useApi<{ items: any[] }>('inventory', 'items', { page_size: '200' }, [branchId]);
@@ -1948,33 +1991,63 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
 
   const fetchRequests = useCallback(async () => {
     try {
+      const params: Record<string, string> = {
+        page: String(page + 1),
+        page_size: String(pageSize),
+        date_range: dateRange,
+      };
+      if (statusFilter) params.status = statusFilter;
       const data = await api<{ items: any[]; total: number }>('inventory', 'ingredient-requests', {
-        params: {
-          page: String(page + 1),
-          page_size: String(pageSize),
-        },
+        params,
         branchId,
       });
       setRequests(data.items ?? []);
       setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [branchId, page, pageSize]);
+  }, [branchId, page, pageSize, dateRange, statusFilter]);
 
-  useEffect(() => { fetchRequests(); }, [fetchRequests]);
+  useEffect(() => { setLoading(true); fetchRequests(); }, [fetchRequests]);
 
-  const handleCreate = async () => {
+  // ─── Create / Edit ─────────────────────────────────────────────────────
+  const openNew = () => {
+    setEditingRequest(null);
+    setForm({ notes: '', items: [{ inventory_item_id: '', quantity_requested: 1 }] });
+    setDialog(true);
+  };
+
+  const openEdit = (req: any) => {
+    setEditingRequest(req);
+    const items = (req.ingredient_request_items ?? []).map((i: any) => ({
+      inventory_item_id: i.inventory_item_id,
+      quantity_requested: i.quantity_requested,
+    }));
+    setForm({ notes: req.notes ?? '', items: items.length ? items : [{ inventory_item_id: '', quantity_requested: 1 }] });
+    setDialog(true);
+  };
+
+  const handleSave = async () => {
     const validItems = form.items.filter((i) => i.inventory_item_id);
     if (validItems.length === 0) { toast.error('Add at least one item'); return; }
     setSaving(true);
     try {
-      await api('inventory', 'ingredient-requests', {
-        body: { notes: form.notes || undefined, items: validItems },
-        branchId,
-      });
-      toast.success('Request sent to inventory');
+      if (editingRequest) {
+        // Update existing
+        await api('inventory', 'ingredient-request-update', {
+          body: { request_id: editingRequest.id, notes: form.notes || undefined, items: validItems },
+          branchId,
+        });
+        toast.success('Request updated');
+      } else {
+        // Create new
+        await api('inventory', 'ingredient-requests', {
+          body: { notes: form.notes || undefined, items: validItems },
+          branchId,
+        });
+        toast.success('Request sent to inventory');
+      }
       setDialog(false);
-      setForm({ notes: '', items: [{ inventory_item_id: '', quantity_requested: 1 }] });
+      setEditingRequest(null);
       fetchRequests();
     } catch (err: any) { toast.error(err.message); }
     finally { setSaving(false); }
@@ -1988,62 +2061,235 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
   };
   const removeItem = (idx: number) => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) });
 
-  if (loading) return <LinearProgress />;
+  // ─── Actions ─────────────────────────────────────────────────────────────
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Delete this request?')) return;
+    setActionLoading(id);
+    try {
+      await api('inventory', 'ingredient-request-delete', { body: { request_id: id }, branchId });
+      toast.success('Request deleted');
+      fetchRequests();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setActionLoading(null); }
+  };
+
+  const handleReceive = async (id: string) => {
+    setActionLoading(id);
+    try {
+      await api('inventory', 'ingredient-request-receive', { body: { request_id: id }, branchId });
+      toast.success('Items received!');
+      fetchRequests();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setActionLoading(null); }
+  };
+
+  const handleReturn = async () => {
+    if (!returnDialog) return;
+    setActionLoading(returnDialog);
+    try {
+      await api('inventory', 'ingredient-request-return', {
+        body: { request_id: returnDialog, return_notes: returnNotes || undefined },
+        branchId,
+      });
+      toast.success('Items returned to inventory');
+      setReturnDialog(null);
+      setReturnNotes('');
+      fetchRequests();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setActionLoading(null); }
+  };
+
+  const getStatusColor = (status: string) =>
+    (INGREDIENT_REQUEST_STATUS_COLORS as Record<string, string>)[status] ?? 'default';
+
+  if (loading && requests.length === 0) return <LinearProgress />;
 
   return (
     <Box>
-      <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDialog(true)}>
-          New Request
-        </Button>
-      </Box>
+      {/* ─── Toolbar ─── */}
+      <Stack direction="row" spacing={2} sx={{ mb: 2, flexWrap: 'wrap', alignItems: 'center' }} justifyContent="space-between">
+        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
+          <ToggleButtonGroup size="small" value={dateRange} exclusive onChange={(_, v) => { if (v) { setDateRange(v); setPage(0); } }}>
+            {DATE_RANGE_OPTIONS.map((o) => <ToggleButton key={o.value} value={o.value}>{o.label}</ToggleButton>)}
+          </ToggleButtonGroup>
+          <FormControl size="small" sx={{ minWidth: 130 }}>
+            <InputLabel>Status</InputLabel>
+            <Select value={statusFilter} label="Status" onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}>
+              {STATUS_FILTER_OPTIONS.map((o) => <MuiMenuItem key={o.value} value={o.value}>{o.label}</MuiMenuItem>)}
+            </Select>
+          </FormControl>
+        </Stack>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={openNew}>New Request</Button>
+      </Stack>
 
-      {requests.length === 0 ? (
+      {loading && <LinearProgress sx={{ mb: 1 }} />}
+
+      {/* ─── Requests Table ─── */}
+      {requests.length === 0 && !loading ? (
         <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-          No ingredient requests
+          No ingredient requests found
         </Typography>
       ) : (
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-          {requests.map((req) => (
-            <Card key={req.id} sx={{ width: 300 }}>
-              <CardContent>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                  <Typography fontWeight={700}>Request</Typography>
-                  <Chip
-                    size="small"
-                    label={req.status}
-                    color={req.status === 'approved' ? 'success' : req.status === 'rejected' ? 'error' : 'warning'}
-                  />
-                </Box>
-                {req.notes && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{req.notes}</Typography>}
-                <Divider sx={{ my: 1 }} />
-                {(req.items ?? req.ingredient_request_items ?? []).map((item: any, idx: number) => (
-                  <Typography key={idx} variant="body2">
-                    {item.quantity_requested}× {item.inventory_items?.name ?? item.inventory_item_name ?? 'Item'}
-                    {item.quantity_approved != null && ` (approved: ${item.quantity_approved})`}
-                  </Typography>
-                ))}
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-                  {new Date(req.created_at).toLocaleString()} · by {req.requested_by_name ?? '—'}
-                </Typography>
-              </CardContent>
-            </Card>
-          ))}
-        </Box>
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell width={40} />
+                <TableCell>Items</TableCell>
+                <TableCell width={160}>Requested By</TableCell>
+                <TableCell width={160}>Date &amp; Time</TableCell>
+                <TableCell width={120}>Status</TableCell>
+                <TableCell width={180} align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {requests.map((req) => {
+                const items = req.ingredient_request_items ?? [];
+                const isExpanded = expandedRow === req.id;
+                const itemSummary = items.map((i: any) =>
+                  `${i.quantity_requested}× ${i.inventory_items?.name ?? i.inventory_item_name ?? 'Item'}`
+                ).join(', ');
+                const status = req.status as IngredientRequestStatus;
+                const isPending = status === 'pending';
+                const canReceive = status === 'in_transit' || status === 'disbursed';
+                const canReturn = status === 'received';
+                const isOwner = req.requested_by === profile?.id;
+
+                return (
+                  <React.Fragment key={req.id}>
+                    <TableRow
+                      hover
+                      sx={{ cursor: 'pointer', '& td': { borderBottom: isExpanded ? 'none' : undefined } }}
+                      onClick={() => setExpandedRow(isExpanded ? null : req.id)}
+                    >
+                      <TableCell>
+                        <IconButton size="small">
+                          <ExpandMoreIcon sx={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: '0.2s' }} />
+                        </IconButton>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" noWrap sx={{ maxWidth: 300 }}>{itemSummary || '—'}</Typography>
+                        {req.notes && <Typography variant="caption" color="text.secondary" noWrap sx={{ maxWidth: 300, display: 'block' }}>{req.notes}</Typography>}
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={600}>{req.requested_by_name ?? '—'}</Typography>
+                        <Typography variant="caption" color="text.secondary">{req.station ?? ''}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{new Date(req.created_at).toLocaleDateString()}</Typography>
+                        <Typography variant="caption" color="text.secondary">{new Date(req.created_at).toLocaleTimeString()}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" label={INGREDIENT_REQUEST_STATUS_LABELS[status] ?? status} color={getStatusColor(status) as any} />
+                      </TableCell>
+                      <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                          {isPending && isOwner && (
+                            <>
+                              <Tooltip title="Edit"><IconButton size="small" onClick={() => openEdit(req)} disabled={actionLoading === req.id}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                              <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => handleDelete(req.id)} disabled={actionLoading === req.id}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
+                            </>
+                          )}
+                          {canReceive && (
+                            <Button size="small" variant="contained" color="success" startIcon={<CallReceivedIcon />}
+                              onClick={() => handleReceive(req.id)} disabled={actionLoading === req.id}>
+                              Receive
+                            </Button>
+                          )}
+                          {canReturn && (
+                            <Button size="small" variant="outlined" color="warning" startIcon={<UndoIcon />}
+                              onClick={() => { setReturnDialog(req.id); setReturnNotes(''); }}
+                              disabled={actionLoading === req.id}>
+                              Return
+                            </Button>
+                          )}
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                    {/* Expanded detail row */}
+                    <TableRow>
+                      <TableCell colSpan={6} sx={{ py: 0, px: 0 }}>
+                        <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                          <Box sx={{ p: 2, bgcolor: 'action.hover' }}>
+                            <Typography variant="subtitle2" sx={{ mb: 1 }}>Request Items</Typography>
+                            <Table size="small">
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell>Item Name</TableCell>
+                                  <TableCell align="right">Qty Requested</TableCell>
+                                  <TableCell align="right">Qty Approved</TableCell>
+                                  <TableCell align="right">Qty Disbursed</TableCell>
+                                  <TableCell>Unit</TableCell>
+                                  <TableCell>Notes</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {items.map((item: any) => (
+                                  <TableRow key={item.id}>
+                                    <TableCell>{item.inventory_items?.name ?? item.inventory_item_name ?? '—'}</TableCell>
+                                    <TableCell align="right">{item.quantity_requested}</TableCell>
+                                    <TableCell align="right">{item.quantity_approved ?? '—'}</TableCell>
+                                    <TableCell align="right">{item.quantity_disbursed ?? '—'}</TableCell>
+                                    <TableCell>{item.unit}</TableCell>
+                                    <TableCell>{item.disbursement_notes ?? '—'}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                            {/* Timeline info */}
+                            <Stack direction="row" spacing={3} sx={{ mt: 1.5 }} flexWrap="wrap">
+                              {req.approved_by_name && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Responded by: <strong>{req.approved_by_name}</strong>
+                                  {req.responded_at && ` at ${new Date(req.responded_at).toLocaleString()}`}
+                                </Typography>
+                              )}
+                              {req.response_notes && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Response notes: {req.response_notes}
+                                </Typography>
+                              )}
+                              {req.disbursed_at && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Disbursed: {new Date(req.disbursed_at).toLocaleString()}
+                                </Typography>
+                              )}
+                              {req.received_at && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Received: {new Date(req.received_at).toLocaleString()}
+                                </Typography>
+                              )}
+                              {req.returned_at && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Returned: {new Date(req.returned_at).toLocaleString()}
+                                  {req.return_notes && ` — ${req.return_notes}`}
+                                </Typography>
+                              )}
+                            </Stack>
+                          </Box>
+                        </Collapse>
+                      </TableCell>
+                    </TableRow>
+                  </React.Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
 
       {total > 0 && (
         <TablePagination
           component="div" count={total} page={page} rowsPerPage={pageSize}
-          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
-          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
+          onPageChange={(_, p) => setPage(p)}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
           rowsPerPageOptions={[10, 25, 50]}
         />
       )}
 
-      {/* New Request Dialog */}
+      {/* ─── Create/Edit Request Dialog ─── */}
       <Dialog open={dialog} onClose={() => setDialog(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Request Ingredients</DialogTitle>
+        <DialogTitle>{editingRequest ? 'Edit Request' : 'Request Ingredients'}</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth label="Notes (optional)" sx={{ mt: 1, mb: 2 }}
@@ -2079,7 +2325,30 @@ function IngredientRequestsTab({ branchId }: { branchId: string }) {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={saving}>Send Request</Button>
+          <Button variant="contained" onClick={handleSave} disabled={saving}>
+            {editingRequest ? 'Update' : 'Send Request'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ─── Return Dialog ─── */}
+      <Dialog open={!!returnDialog} onClose={() => setReturnDialog(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Return Items to Inventory</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            All disbursed items will be returned to inventory stock.
+          </Typography>
+          <TextField
+            fullWidth label="Return Notes (optional)" multiline rows={2}
+            value={returnNotes}
+            onChange={(e) => setReturnNotes(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReturnDialog(null)}>Cancel</Button>
+          <Button variant="contained" color="warning" onClick={handleReturn} disabled={actionLoading === returnDialog}>
+            Confirm Return
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

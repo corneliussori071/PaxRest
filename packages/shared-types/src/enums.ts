@@ -110,7 +110,9 @@ export type StockMovementType =
   | 'transfer_in'
   | 'transfer_out'
   | 'return'
-  | 'opening_stock';
+  | 'opening_stock'
+  | 'kitchen_request'
+  | 'kitchen_return';
 
 export type WastageType = 'expired' | 'damaged' | 'spillage' | 'other';
 
@@ -242,4 +244,8 @@ export type IngredientRequestStatus =
   | 'approved'
   | 'rejected'
   | 'fulfilled'
-  | 'cancelled';
+  | 'cancelled'
+  | 'in_transit'
+  | 'disbursed'
+  | 'received'
+  | 'returned';

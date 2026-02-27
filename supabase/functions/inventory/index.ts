@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import {
   corsResponse, jsonResponse, errorResponse,
-  createUserClient, requireAuth, hasPermission, resolveBranchId,
+  createUserClient, createServiceClient, requireAuth, hasPermission, resolveBranchId,
   validatePagination, applyPagination, sanitizeString,
 } from '../_shared/index.ts';
 import type { AuthContext } from '../_shared/index.ts';
@@ -53,6 +53,16 @@ serve(async (req) => {
           : await createIngredientRequest(req, supabase, auth, branchId);
       case 'ingredient-request-respond':
         return await respondIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-disburse':
+        return await disburseIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-receive':
+        return await receiveIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-return':
+        return await returnIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-update':
+        return await updateIngredientRequest(req, supabase, auth, branchId);
+      case 'ingredient-request-delete':
+        return await deleteIngredientRequest(req, supabase, auth, branchId);
       default:
         return errorResponse('Unknown inventory action', 404);
     }
@@ -614,13 +624,35 @@ async function listIngredientRequests(req: Request, supabase: any, auth: AuthCon
   });
 
   const status = url.searchParams.get('status');
+  const dateRange = url.searchParams.get('date_range'); // 'today','7d','30d','all'
 
   let query = supabase
     .from('ingredient_requests')
-    .select('*, ingredient_request_items(*)', { count: 'exact' })
+    .select('*, ingredient_request_items(*, inventory_items(name, unit, quantity))', { count: 'exact' })
     .eq('branch_id', branchId);
 
-  if (status) query = query.eq('status', status);
+  if (status) {
+    // Support comma-separated statuses for multi-tab filtering
+    const statuses = status.split(',');
+    if (statuses.length === 1) query = query.eq('status', statuses[0]);
+    else query = query.in('status', statuses);
+  }
+
+  // Date range filtering
+  if (dateRange && dateRange !== 'all') {
+    const now = new Date();
+    let since: Date;
+    if (dateRange === 'today') {
+      since = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    } else if (dateRange === '7d') {
+      since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (dateRange === '30d') {
+      since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    } else {
+      since = new Date(0);
+    }
+    query = query.gte('created_at', since.toISOString());
+  }
 
   query = applyPagination(query, page, pageSize, 'created_at', false);
   const { data, count, error } = await query;
@@ -647,13 +679,16 @@ async function createIngredientRequest(req: Request, supabase: any, auth: AuthCo
     return errorResponse('No items in request');
   }
 
+  // Use auth name (profile name), not email
+  const requesterName = auth.name ?? auth.email;
+
   const { data: request, error } = await supabase
     .from('ingredient_requests')
     .insert({
       company_id: auth.companyId,
       branch_id: branchId,
       requested_by: auth.userId,
-      requested_by_name: body.requested_by_name ?? auth.email,
+      requested_by_name: sanitizeString(requesterName),
       status: 'pending',
       notes: body.notes ? sanitizeString(body.notes) : null,
       station: body.station ?? 'kitchen',
@@ -663,12 +698,21 @@ async function createIngredientRequest(req: Request, supabase: any, auth: AuthCo
 
   if (error) return errorResponse(error.message);
 
+  // Resolve item names from inventory_items
+  const itemIds = body.items.map((i: any) => i.inventory_item_id);
+  const { data: invItems } = await supabase
+    .from('inventory_items')
+    .select('id, name, unit')
+    .in('id', itemIds);
+  const nameMap: Record<string, { name: string; unit: string }> = {};
+  (invItems ?? []).forEach((i: any) => { nameMap[i.id] = { name: i.name, unit: i.unit }; });
+
   const items = body.items.map((item: any) => ({
     request_id: request.id,
     inventory_item_id: item.inventory_item_id,
-    inventory_item_name: item.inventory_item_name ?? '',
+    inventory_item_name: nameMap[item.inventory_item_id]?.name ?? item.inventory_item_name ?? '',
     quantity_requested: item.quantity_requested,
-    unit: item.unit ?? 'pcs',
+    unit: nameMap[item.inventory_item_id]?.unit ?? item.unit ?? 'pcs',
   }));
 
   const { error: itemsError } = await supabase
@@ -679,7 +723,88 @@ async function createIngredientRequest(req: Request, supabase: any, auth: AuthCo
   return jsonResponse({ request }, 201);
 }
 
-// ─── Respond to Ingredient Request ──────────────────────────────────────────
+// ─── Update Ingredient Request (edit, kitchen side) ─────────────────────────
+
+async function updateIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.request_id) return errorResponse('Missing request_id');
+
+  const service = createServiceClient();
+
+  // Only pending requests can be edited
+  const { data: existing } = await service
+    .from('ingredient_requests')
+    .select('status, requested_by')
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!existing) return errorResponse('Request not found', 404);
+  if (existing.status !== 'pending') return errorResponse('Only pending requests can be edited', 400);
+
+  // Only the requester or privileged users can edit
+  const isOwner = existing.requested_by === auth.userId;
+  const isPrivileged = hasPermission(auth, 'manage_inventory') || hasPermission(auth, 'kitchen_ingredient_requests');
+  if (!isOwner && !isPrivileged) return errorResponse('Forbidden', 403);
+
+  const updates: Record<string, unknown> = {};
+  if (body.notes !== undefined) updates.notes = body.notes ? sanitizeString(body.notes) : null;
+  if (Object.keys(updates).length > 0) {
+    await service.from('ingredient_requests').update(updates).eq('id', body.request_id);
+  }
+
+  // Update items if provided
+  if (body.items) {
+    // Delete existing items and re-insert
+    await service.from('ingredient_request_items').delete().eq('request_id', body.request_id);
+
+    const itemIds = body.items.map((i: any) => i.inventory_item_id);
+    const { data: invItems } = await service.from('inventory_items').select('id, name, unit').in('id', itemIds);
+    const nameMap: Record<string, { name: string; unit: string }> = {};
+    (invItems ?? []).forEach((i: any) => { nameMap[i.id] = { name: i.name, unit: i.unit }; });
+
+    const items = body.items.map((item: any) => ({
+      request_id: body.request_id,
+      inventory_item_id: item.inventory_item_id,
+      inventory_item_name: nameMap[item.inventory_item_id]?.name ?? '',
+      quantity_requested: item.quantity_requested,
+      unit: nameMap[item.inventory_item_id]?.unit ?? item.unit ?? 'pcs',
+    }));
+    await service.from('ingredient_request_items').insert(items);
+  }
+
+  return jsonResponse({ updated: true });
+}
+
+// ─── Delete Ingredient Request ──────────────────────────────────────────────
+
+async function deleteIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.request_id) return errorResponse('Missing request_id');
+
+  const service = createServiceClient();
+
+  const { data: existing } = await service
+    .from('ingredient_requests')
+    .select('status, requested_by')
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!existing) return errorResponse('Request not found', 404);
+  if (existing.status !== 'pending') return errorResponse('Only pending requests can be deleted', 400);
+
+  const isOwner = existing.requested_by === auth.userId;
+  const isPrivileged = hasPermission(auth, 'manage_inventory') || hasPermission(auth, 'kitchen_ingredient_requests');
+  if (!isOwner && !isPrivileged) return errorResponse('Forbidden', 403);
+
+  await service.from('ingredient_request_items').delete().eq('request_id', body.request_id);
+  await service.from('ingredient_requests').delete().eq('id', body.request_id);
+
+  return jsonResponse({ deleted: true });
+}
+
+// ─── Respond to Ingredient Request (approve/reject from Inventory) ──────────
 
 async function respondIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
@@ -690,31 +815,228 @@ async function respondIngredientRequest(req: Request, supabase: any, auth: AuthC
     return errorResponse('Missing request_id or status');
   }
 
-  if (!['approved', 'rejected', 'fulfilled', 'cancelled'].includes(body.status)) {
-    return errorResponse('Invalid status');
+  if (!['approved', 'rejected', 'cancelled'].includes(body.status)) {
+    return errorResponse('Invalid status. Use: approved, rejected, cancelled');
   }
 
-  const { error } = await supabase
+  const service = createServiceClient();
+
+  const updates: Record<string, unknown> = {
+    status: body.status,
+    approved_by: auth.userId,
+    approved_by_name: auth.name ?? auth.email,
+    responded_at: new Date().toISOString(),
+  };
+  if (body.response_notes) updates.response_notes = sanitizeString(body.response_notes);
+
+  const { error } = await service
     .from('ingredient_requests')
-    .update({
-      status: body.status,
-      approved_by: auth.userId,
-      approved_by_name: body.approved_by_name ?? auth.email,
-    })
+    .update(updates)
     .eq('id', body.request_id)
     .eq('branch_id', branchId);
 
   if (error) return errorResponse(error.message);
+  return jsonResponse({ updated: true, status: body.status });
+}
 
-  // If approved with quantities, update the request items
-  if (body.status === 'approved' && body.items) {
-    for (const item of body.items) {
-      await supabase
-        .from('ingredient_request_items')
-        .update({ quantity_approved: item.quantity_approved })
-        .eq('id', item.id);
-    }
+// ─── Disburse Ingredient Request (inventory deducts stock & marks in_transit) ─
+
+async function disburseIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_inventory')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  if (!body.request_id) return errorResponse('Missing request_id');
+  if (!body.items || body.items.length === 0) return errorResponse('Missing items with disbursement quantities');
+
+  const service = createServiceClient();
+
+  // Verify request exists and is approved
+  const { data: request } = await service
+    .from('ingredient_requests')
+    .select('status')
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!request) return errorResponse('Request not found', 404);
+  if (request.status !== 'approved') return errorResponse('Only approved requests can be disbursed', 400);
+
+  // Process each item: update disbursed quantity, deduct from inventory, log movement
+  for (const item of body.items) {
+    if (!item.id || item.quantity_disbursed == null) continue;
+
+    // Get the request item details
+    const { data: reqItem } = await service
+      .from('ingredient_request_items')
+      .select('inventory_item_id, quantity_requested')
+      .eq('id', item.id)
+      .single();
+    if (!reqItem) continue;
+
+    // Update request item with disbursed quantity
+    await service
+      .from('ingredient_request_items')
+      .update({
+        quantity_disbursed: item.quantity_disbursed,
+        disbursement_notes: item.disbursement_notes ? sanitizeString(item.disbursement_notes) : null,
+      })
+      .eq('id', item.id);
+
+    // Deduct from inventory
+    const { data: invItem } = await service
+      .from('inventory_items')
+      .select('id, quantity')
+      .eq('id', reqItem.inventory_item_id)
+      .single();
+    if (!invItem) continue;
+
+    const qtyBefore = Number(invItem.quantity);
+    const qtyAfter = Math.max(0, qtyBefore - Number(item.quantity_disbursed));
+
+    await service
+      .from('inventory_items')
+      .update({ quantity: qtyAfter })
+      .eq('id', invItem.id);
+
+    // Log stock movement
+    await service
+      .from('stock_movements')
+      .insert({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        inventory_item_id: invItem.id,
+        movement_type: 'kitchen_request',
+        quantity_change: -Number(item.quantity_disbursed),
+        quantity_before: qtyBefore,
+        quantity_after: qtyAfter,
+        unit_cost: 0,
+        reference_type: 'ingredient_request',
+        reference_id: body.request_id,
+        notes: `Disbursed for kitchen request`,
+        performed_by: auth.userId,
+        performed_by_name: auth.name ?? auth.email,
+      });
   }
 
-  return jsonResponse({ updated: true });
+  // Update request status to in_transit
+  await service
+    .from('ingredient_requests')
+    .update({
+      status: 'in_transit',
+      disbursed_at: new Date().toISOString(),
+    })
+    .eq('id', body.request_id);
+
+  return jsonResponse({ disbursed: true });
+}
+
+// ─── Receive Ingredient Request (kitchen confirms receipt) ──────────────────
+
+async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+
+  const body = await req.json();
+  if (!body.request_id) return errorResponse('Missing request_id');
+
+  const service = createServiceClient();
+
+  const { data: request } = await service
+    .from('ingredient_requests')
+    .select('status')
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!request) return errorResponse('Request not found', 404);
+  if (request.status !== 'in_transit' && request.status !== 'disbursed') {
+    return errorResponse('Only in-transit or disbursed requests can be received', 400);
+  }
+
+  await service
+    .from('ingredient_requests')
+    .update({
+      status: 'received',
+      received_at: new Date().toISOString(),
+    })
+    .eq('id', body.request_id);
+
+  return jsonResponse({ received: true });
+}
+
+// ─── Return Ingredient Request (kitchen returns items to inventory) ─────────
+
+async function returnIngredientRequest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+
+  const body = await req.json();
+  if (!body.request_id) return errorResponse('Missing request_id');
+
+  const service = createServiceClient();
+
+  // Verify request exists and is received/disbursed
+  const { data: request } = await service
+    .from('ingredient_requests')
+    .select('status')
+    .eq('id', body.request_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (!request) return errorResponse('Request not found', 404);
+  if (request.status !== 'received') {
+    return errorResponse('Only received requests can be returned', 400);
+  }
+
+  // Get all disbursed items for this request
+  const { data: reqItems } = await service
+    .from('ingredient_request_items')
+    .select('inventory_item_id, quantity_disbursed')
+    .eq('request_id', body.request_id);
+
+  // Return stock to inventory for each item
+  for (const item of (reqItems ?? [])) {
+    if (!item.quantity_disbursed || Number(item.quantity_disbursed) <= 0) continue;
+
+    const { data: invItem } = await service
+      .from('inventory_items')
+      .select('id, quantity')
+      .eq('id', item.inventory_item_id)
+      .single();
+    if (!invItem) continue;
+
+    const qtyBefore = Number(invItem.quantity);
+    const qtyAfter = qtyBefore + Number(item.quantity_disbursed);
+
+    await service
+      .from('inventory_items')
+      .update({ quantity: qtyAfter })
+      .eq('id', invItem.id);
+
+    // Log stock movement (positive = return)
+    await service
+      .from('stock_movements')
+      .insert({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        inventory_item_id: invItem.id,
+        movement_type: 'kitchen_return',
+        quantity_change: Number(item.quantity_disbursed),
+        quantity_before: qtyBefore,
+        quantity_after: qtyAfter,
+        unit_cost: 0,
+        reference_type: 'ingredient_request',
+        reference_id: body.request_id,
+        notes: body.return_notes ? sanitizeString(body.return_notes) : 'Returned from kitchen',
+        performed_by: auth.userId,
+        performed_by_name: auth.name ?? auth.email,
+      });
+  }
+
+  await service
+    .from('ingredient_requests')
+    .update({
+      status: 'returned',
+      returned_at: new Date().toISOString(),
+      return_notes: body.return_notes ? sanitizeString(body.return_notes) : null,
+    })
+    .eq('id', body.request_id);
+
+  return jsonResponse({ returned: true });
 }

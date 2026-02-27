@@ -6,6 +6,8 @@ import {
   InputLabel, IconButton, Tooltip, Alert, LinearProgress,
   InputAdornment, FormControlLabel, RadioGroup, Radio,
   Stack, Divider, Badge,
+  Table, TableHead, TableBody, TableRow, TableCell, TableContainer, Paper,
+  ToggleButtonGroup, ToggleButton, Collapse, TablePagination,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -14,9 +16,18 @@ import WarningIcon from '@mui/icons-material/Warning';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import InventoryIcon from '@mui/icons-material/Inventory';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
+import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import { DataTable, type Column } from '@paxrest/ui';
-import { formatCurrency, INVENTORY_CATEGORIES } from '@paxrest/shared-utils';
-import type { InventoryUnit, PackagingType } from '@paxrest/shared-types';
+import {
+  formatCurrency,
+  INVENTORY_CATEGORIES,
+  INGREDIENT_REQUEST_STATUS_LABELS,
+  INGREDIENT_REQUEST_STATUS_COLORS,
+} from '@paxrest/shared-utils';
+import type { InventoryUnit, PackagingType, IngredientRequestStatus } from '@paxrest/shared-types';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
@@ -541,9 +552,29 @@ function CSVImportDialog({ open, onClose, branchId, onComplete }: {
 }
 
 /* ═══════════════════════════════════════════════════════
-   Movements Tab
+   Movements Tab — sub-tabs: Stock Movements, Pending, Completed, Rejected
    ═══════════════════════════════════════════════════════ */
 function MovementsTab({ branchId }: { branchId: string }) {
+  const [subTab, setSubTab] = useState(0);
+
+  return (
+    <Box>
+      <Tabs value={subTab} onChange={(_, v) => setSubTab(v)} sx={{ mb: 2 }} variant="scrollable">
+        <Tab label="Stock Movements" />
+        <Tab label="Pending Requests" />
+        <Tab label="Completed Requests" />
+        <Tab label="Rejected Requests" />
+      </Tabs>
+      {subTab === 0 && <StockMovementsSubTab branchId={branchId} />}
+      {subTab === 1 && <RequestsSubTab branchId={branchId} statusFilter="pending,approved" title="Pending & Approved Requests" />}
+      {subTab === 2 && <RequestsSubTab branchId={branchId} statusFilter="in_transit,disbursed,received,returned,fulfilled" title="Completed Requests" />}
+      {subTab === 3 && <RequestsSubTab branchId={branchId} statusFilter="rejected,cancelled" title="Rejected & Cancelled Requests" />}
+    </Box>
+  );
+}
+
+/* ─── Stock Movements (original) ─── */
+function StockMovementsSubTab({ branchId }: { branchId: string }) {
   const { items, total, loading, page, pageSize, setPage, setPageSize, setSearch } = usePaginated<any>('inventory', 'movements');
 
   const columns: Column[] = [
@@ -571,6 +602,374 @@ function MovementsTab({ branchId }: { branchId: string }) {
       searchable onSearchChange={setSearch}
       rowKey={(r) => r.id}
     />
+  );
+}
+
+/* ─── Ingredient Requests Sub Tab (for Pending / Completed / Rejected) ─── */
+const DATE_RANGE_OPTS = [
+  { value: 'today', label: 'Today' },
+  { value: '7d', label: '7 Days' },
+  { value: '30d', label: '30 Days' },
+  { value: 'all', label: 'All' },
+];
+
+function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; statusFilter: string; title: string }) {
+  const { profile } = useAuth();
+  const [requests, setRequests] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [dateRange, setDateRange] = useState('today');
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Disbursement state
+  const [disburseDialog, setDisburseDialog] = useState<any>(null);
+  const [disburseItems, setDisburseItems] = useState<any[]>([]);
+  const [respondDialog, setRespondDialog] = useState<{ id: string; action: 'approved' | 'rejected' } | null>(null);
+  const [responseNotes, setResponseNotes] = useState('');
+
+  const fetchRequests = useCallback(async () => {
+    try {
+      const data = await api<{ items: any[]; total: number }>('inventory', 'ingredient-requests', {
+        params: {
+          page: String(page + 1),
+          page_size: String(pageSize),
+          status: statusFilter,
+          date_range: dateRange,
+        },
+        branchId,
+      });
+      setRequests(data.items ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [branchId, page, pageSize, statusFilter, dateRange]);
+
+  useEffect(() => { setLoading(true); fetchRequests(); }, [fetchRequests]);
+
+  // ─── Approve / Reject ─────────────────────────────────────────────────
+  const handleRespond = async () => {
+    if (!respondDialog) return;
+    setActionLoading(respondDialog.id);
+    try {
+      await api('inventory', 'ingredient-request-respond', {
+        body: {
+          request_id: respondDialog.id,
+          status: respondDialog.action,
+          response_notes: responseNotes || undefined,
+        },
+        branchId,
+      });
+      toast.success(respondDialog.action === 'approved' ? 'Request approved' : 'Request rejected');
+      setRespondDialog(null);
+      setResponseNotes('');
+      fetchRequests();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setActionLoading(null); }
+  };
+
+  // ─── Disburse ─────────────────────────────────────────────────────────
+  const openDisburse = (req: any) => {
+    const items = (req.ingredient_request_items ?? []).map((i: any) => ({
+      id: i.id,
+      name: i.inventory_items?.name ?? i.inventory_item_name ?? 'Item',
+      quantity_requested: i.quantity_requested,
+      quantity_approved: i.quantity_approved ?? i.quantity_requested,
+      quantity_disbursed: i.quantity_approved ?? i.quantity_requested,
+      disbursement_notes: '',
+      unit: i.unit,
+      stock_available: i.inventory_items?.quantity ?? '?',
+    }));
+    setDisburseItems(items);
+    setDisburseDialog(req);
+  };
+
+  const handleDisburse = async () => {
+    if (!disburseDialog) return;
+    setActionLoading(disburseDialog.id);
+    try {
+      await api('inventory', 'ingredient-request-disburse', {
+        body: {
+          request_id: disburseDialog.id,
+          items: disburseItems.map((i) => ({
+            id: i.id,
+            quantity_disbursed: Number(i.quantity_disbursed),
+            disbursement_notes: i.disbursement_notes || undefined,
+          })),
+        },
+        branchId,
+      });
+      toast.success('Items disbursed and sent to kitchen');
+      setDisburseDialog(null);
+      fetchRequests();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setActionLoading(null); }
+  };
+
+  const getStatusColor = (status: string) =>
+    (INGREDIENT_REQUEST_STATUS_COLORS as Record<string, string>)[status] ?? 'default';
+
+  if (loading && requests.length === 0) return <LinearProgress />;
+
+  return (
+    <Box>
+      {/* ─── Date Range Filter ─── */}
+      <Stack direction="row" spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
+        <ToggleButtonGroup size="small" value={dateRange} exclusive onChange={(_, v) => { if (v) { setDateRange(v); setPage(0); } }}>
+          {DATE_RANGE_OPTS.map((o) => <ToggleButton key={o.value} value={o.value}>{o.label}</ToggleButton>)}
+        </ToggleButtonGroup>
+        <Typography variant="body2" color="text.secondary">{total} request{total !== 1 ? 's' : ''}</Typography>
+      </Stack>
+
+      {loading && <LinearProgress sx={{ mb: 1 }} />}
+
+      {requests.length === 0 && !loading ? (
+        <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No {title.toLowerCase()}</Typography>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell width={40} />
+                <TableCell>Items</TableCell>
+                <TableCell width={140}>Requested By</TableCell>
+                <TableCell width={100}>Station</TableCell>
+                <TableCell width={150}>Date &amp; Time</TableCell>
+                <TableCell width={120}>Status</TableCell>
+                <TableCell width={220} align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {requests.map((req) => {
+                const items = req.ingredient_request_items ?? [];
+                const isExpanded = expandedRow === req.id;
+                const status = req.status as IngredientRequestStatus;
+                const itemSummary = items.map((i: any) =>
+                  `${i.quantity_requested}× ${i.inventory_items?.name ?? i.inventory_item_name ?? 'Item'}`
+                ).join(', ');
+
+                return (
+                  <React.Fragment key={req.id}>
+                    <TableRow
+                      hover sx={{ cursor: 'pointer', '& td': { borderBottom: isExpanded ? 'none' : undefined } }}
+                      onClick={() => setExpandedRow(isExpanded ? null : req.id)}
+                    >
+                      <TableCell>
+                        <IconButton size="small">
+                          <ExpandMoreIcon sx={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: '0.2s' }} />
+                        </IconButton>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" noWrap sx={{ maxWidth: 280 }}>{itemSummary || '—'}</Typography>
+                        {req.notes && <Typography variant="caption" color="text.secondary" noWrap sx={{ maxWidth: 280, display: 'block' }}>{req.notes}</Typography>}
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={600}>{req.requested_by_name ?? '—'}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" label={req.station || 'kitchen'} variant="outlined" />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{new Date(req.created_at).toLocaleDateString()}</Typography>
+                        <Typography variant="caption" color="text.secondary">{new Date(req.created_at).toLocaleTimeString()}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" label={INGREDIENT_REQUEST_STATUS_LABELS[status] ?? status} color={getStatusColor(status) as any} />
+                      </TableCell>
+                      <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                          {status === 'pending' && (
+                            <>
+                              <Button size="small" variant="contained" color="success"
+                                startIcon={<CheckCircleIcon />}
+                                onClick={() => { setRespondDialog({ id: req.id, action: 'approved' }); setResponseNotes(''); }}
+                                disabled={actionLoading === req.id}>
+                                Approve
+                              </Button>
+                              <Button size="small" variant="outlined" color="error"
+                                startIcon={<CancelIcon />}
+                                onClick={() => { setRespondDialog({ id: req.id, action: 'rejected' }); setResponseNotes(''); }}
+                                disabled={actionLoading === req.id}>
+                                Reject
+                              </Button>
+                            </>
+                          )}
+                          {status === 'approved' && (
+                            <Button size="small" variant="contained" color="primary"
+                              startIcon={<LocalShippingIcon />}
+                              onClick={() => openDisburse(req)}
+                              disabled={actionLoading === req.id}>
+                              Disburse
+                            </Button>
+                          )}
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                    {/* Expanded detail */}
+                    <TableRow>
+                      <TableCell colSpan={7} sx={{ py: 0, px: 0 }}>
+                        <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                          <Box sx={{ p: 2, bgcolor: 'action.hover' }}>
+                            <Typography variant="subtitle2" sx={{ mb: 1 }}>Request Items</Typography>
+                            <Table size="small">
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell>Item Name</TableCell>
+                                  <TableCell align="right">Qty Requested</TableCell>
+                                  <TableCell align="right">Qty Approved</TableCell>
+                                  <TableCell align="right">Qty Disbursed</TableCell>
+                                  <TableCell>Unit</TableCell>
+                                  <TableCell>In Stock</TableCell>
+                                  <TableCell>Disburse Notes</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {items.map((item: any) => (
+                                  <TableRow key={item.id}>
+                                    <TableCell>{item.inventory_items?.name ?? item.inventory_item_name ?? '—'}</TableCell>
+                                    <TableCell align="right">{item.quantity_requested}</TableCell>
+                                    <TableCell align="right">{item.quantity_approved ?? '—'}</TableCell>
+                                    <TableCell align="right">{item.quantity_disbursed ?? '—'}</TableCell>
+                                    <TableCell>{item.unit}</TableCell>
+                                    <TableCell>{item.inventory_items?.quantity ?? '—'} {item.inventory_items?.unit ?? ''}</TableCell>
+                                    <TableCell>{item.disbursement_notes ?? '—'}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                            {/* Timeline */}
+                            <Stack direction="row" spacing={3} sx={{ mt: 1.5 }} flexWrap="wrap">
+                              {req.approved_by_name && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Responded by: <strong>{req.approved_by_name}</strong>
+                                  {req.responded_at && ` at ${new Date(req.responded_at).toLocaleString()}`}
+                                </Typography>
+                              )}
+                              {req.response_notes && (
+                                <Typography variant="caption" color="text.secondary">Notes: {req.response_notes}</Typography>
+                              )}
+                              {req.disbursed_at && (
+                                <Typography variant="caption" color="text.secondary">Disbursed: {new Date(req.disbursed_at).toLocaleString()}</Typography>
+                              )}
+                              {req.received_at && (
+                                <Typography variant="caption" color="text.secondary">Received: {new Date(req.received_at).toLocaleString()}</Typography>
+                              )}
+                              {req.returned_at && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Returned: {new Date(req.returned_at).toLocaleString()}
+                                  {req.return_notes && ` — ${req.return_notes}`}
+                                </Typography>
+                              )}
+                            </Stack>
+                          </Box>
+                        </Collapse>
+                      </TableCell>
+                    </TableRow>
+                  </React.Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {total > 0 && (
+        <TablePagination
+          component="div" count={total} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => setPage(p)}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
+          rowsPerPageOptions={[10, 25, 50]}
+        />
+      )}
+
+      {/* ─── Approve/Reject Dialog ─── */}
+      <Dialog open={!!respondDialog} onClose={() => setRespondDialog(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>{respondDialog?.action === 'approved' ? 'Approve Request' : 'Reject Request'}</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth label="Notes (optional)" multiline rows={2} sx={{ mt: 1 }}
+            value={responseNotes}
+            onChange={(e) => setResponseNotes(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRespondDialog(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color={respondDialog?.action === 'approved' ? 'success' : 'error'}
+            onClick={handleRespond}
+            disabled={actionLoading === respondDialog?.id}
+          >
+            {respondDialog?.action === 'approved' ? 'Approve' : 'Reject'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ─── Disburse Dialog ─── */}
+      <Dialog open={!!disburseDialog} onClose={() => setDisburseDialog(null)} maxWidth="md" fullWidth>
+        <DialogTitle>Disburse Items</DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Set the actual quantity to disburse for each item. Stock will be deducted from inventory.
+          </Alert>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Item</TableCell>
+                <TableCell align="right">Requested</TableCell>
+                <TableCell align="right">In Stock</TableCell>
+                <TableCell align="right" width={120}>Disburse Qty</TableCell>
+                <TableCell width={200}>Notes</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {disburseItems.map((item, idx) => (
+                <TableRow key={item.id}>
+                  <TableCell>{item.name} <Typography variant="caption" color="text.secondary">({item.unit})</Typography></TableCell>
+                  <TableCell align="right">{item.quantity_requested}</TableCell>
+                  <TableCell align="right">
+                    <Typography color={Number(item.stock_available) < Number(item.quantity_disbursed) ? 'error.main' : 'text.primary'}>
+                      {item.stock_available}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <TextField
+                      size="small" type="number" sx={{ width: 100 }}
+                      value={item.quantity_disbursed}
+                      onChange={(e) => {
+                        const updated = [...disburseItems];
+                        updated[idx] = { ...updated[idx], quantity_disbursed: e.target.value };
+                        setDisburseItems(updated);
+                      }}
+                      inputProps={{ min: 0 }}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <TextField
+                      size="small" fullWidth placeholder="Optional note"
+                      value={item.disbursement_notes}
+                      onChange={(e) => {
+                        const updated = [...disburseItems];
+                        updated[idx] = { ...updated[idx], disbursement_notes: e.target.value };
+                        setDisburseItems(updated);
+                      }}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDisburseDialog(null)}>Cancel</Button>
+          <Button variant="contained" onClick={handleDisburse} disabled={actionLoading === disburseDialog?.id}>
+            Disburse &amp; Send to Kitchen
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 }
 
