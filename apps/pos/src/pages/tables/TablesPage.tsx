@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Grid, Paper, Typography, Chip, Button, Dialog,
   DialogTitle, DialogContent, DialogActions, TextField,
-  Tabs, Tab, IconButton, Avatar, MenuItem,
+  Tabs, Tab, IconButton, Avatar, MenuItem, TablePagination,
 } from '@mui/material';
 import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
 import PeopleIcon from '@mui/icons-material/People';
@@ -84,6 +84,9 @@ function TablesContent() {
   const [sections, setSections] = useState<LayoutSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const [totalForStatus, setTotalForStatus] = useState(0);
 
   // Add/Edit dialog state
   const [editDialog, setEditDialog] = useState(false);
@@ -104,12 +107,21 @@ function TablesContent() {
   /* ─── Fetch ─── */
   const fetchLayout = async () => {
     try {
-      const data = await api<{ sections: LayoutSection[] }>('tables', 'layout', { branchId: activeBranchId! });
+      const currentStatus = STATUS_KEYS[tab];
+      const data = await api<{ sections: LayoutSection[]; totalForStatus: number }>('tables', 'layout', {
+        params: {
+          status: currentStatus,
+          page: String(page + 1),
+          page_size: String(pageSize),
+        },
+        branchId: activeBranchId!,
+      });
       setSections(data.sections ?? []);
+      setTotalForStatus(data.totalForStatus ?? 0);
     } catch { /* ignore */ } finally { setLoading(false); }
   };
 
-  useEffect(() => { if (activeBranchId) fetchLayout(); }, [activeBranchId]);
+  useEffect(() => { if (activeBranchId) { setLoading(true); fetchLayout(); } }, [activeBranchId, tab, page, pageSize]);
 
   useRealtime('tables', activeBranchId ? { column: 'branch_id', value: activeBranchId } : undefined, () => {
     fetchLayout();
@@ -224,7 +236,7 @@ function TablesContent() {
       {/* Status tabs */}
       <Tabs
         value={tab}
-        onChange={(_, v) => setTab(v)}
+        onChange={(_, v) => { setTab(v); setPage(0); }}
         variant="scrollable"
         scrollButtons="auto"
         sx={{ mb: 2 }}
@@ -351,6 +363,16 @@ function TablesContent() {
             </Grid>
           ))}
         </Grid>
+      )}
+
+      {/* Pagination */}
+      {totalForStatus > 0 && (
+        <TablePagination
+          component="div" count={totalForStatus} page={page} rowsPerPage={pageSize}
+          onPageChange={(_, p) => setPage(p)}
+          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
+          rowsPerPageOptions={[10, 20, 50]}
+        />
       )}
 
       {/* ─── Add / Edit Table Dialog ─── */}

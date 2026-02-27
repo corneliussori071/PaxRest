@@ -12,6 +12,19 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import PersonIcon from '@mui/icons-material/Person';
 import RestaurantIcon from '@mui/icons-material/Restaurant';
+import PaymentIcon from '@mui/icons-material/Payment';
+import PrintIcon from '@mui/icons-material/Print';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import CloseIcon from '@mui/icons-material/Close';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import CircularProgress from '@mui/material/CircularProgress';
+import LinearProgress from '@mui/material/LinearProgress';
+import Table from '@mui/material/Table';
+import TableHead from '@mui/material/TableHead';
+import TableBody from '@mui/material/TableBody';
+import TableRow from '@mui/material/TableRow';
+import TableCell from '@mui/material/TableCell';
+import TableContainer from '@mui/material/TableContainer';
 import toast from 'react-hot-toast';
 import { formatCurrency, MEAL_AVAILABILITY_LABELS } from '@paxrest/shared-utils';
 import type { MealAvailability } from '@paxrest/shared-types';
@@ -43,6 +56,16 @@ function POSTerminalContent() {
   const [submitting, setSubmitting] = useState(false);
   const [showMeals, setShowMeals] = useState(false);
 
+  // Awaiting payment orders (from bar/kitchen departments)
+  const [awaitingPaymentDialog, setAwaitingPaymentDialog] = useState(false);
+  const [awaitingOrders, setAwaitingOrders] = useState<any[]>([]);
+  const [awaitingLoading, setAwaitingLoading] = useState(false);
+  const [awaitingCount, setAwaitingCount] = useState(0);
+  const [awaitingDetailDialog, setAwaitingDetailDialog] = useState(false);
+  const [awaitingDetailOrder, setAwaitingDetailOrder] = useState<any>(null);
+  const [awaitingDetailLoading, setAwaitingDetailLoading] = useState(false);
+  const [checkoutProcessing, setCheckoutProcessing] = useState<string | null>(null);
+
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const fmt = (n: number) => formatCurrency(n, currency);
 
@@ -57,6 +80,79 @@ function POSTerminalContent() {
   useRealtime('available_meals', activeBranchId ? { column: 'branch_id', value: activeBranchId } : undefined, () => {
     if (activeBranchId) fetchMeals(activeBranchId);
   });
+
+  // Fetch awaiting payment orders count on mount + realtime
+  const fetchAwaitingCount = useCallback(async () => {
+    if (!activeBranchId) return;
+    try {
+      const data = await api<{ orders: any[]; total: number }>('orders', 'list', {
+        params: { status: 'awaiting_payment', page: '1', page_size: '1' },
+        branchId: activeBranchId,
+      });
+      setAwaitingCount(data.total ?? 0);
+    } catch { /* ignore */ }
+  }, [activeBranchId]);
+
+  useEffect(() => { fetchAwaitingCount(); }, [fetchAwaitingCount]);
+  useRealtime('orders', activeBranchId ? { column: 'branch_id', value: activeBranchId } : undefined, () => fetchAwaitingCount());
+
+  const openAwaitingPayment = async () => {
+    setAwaitingPaymentDialog(true);
+    setAwaitingLoading(true);
+    try {
+      const data = await api<{ orders: any[]; total: number }>('orders', 'list', {
+        params: { status: 'awaiting_payment', page: '1', page_size: '50' },
+        branchId: activeBranchId ?? undefined,
+      });
+      setAwaitingOrders(data.orders ?? []);
+    } catch (err: any) { toast.error(err.message); }
+    finally { setAwaitingLoading(false); }
+  };
+
+  const openAwaitingDetail = async (orderId: string) => {
+    setAwaitingDetailDialog(true);
+    setAwaitingDetailLoading(true);
+    setAwaitingDetailOrder(null);
+    try {
+      const data = await api<{ order: any }>('orders', 'get', {
+        params: { id: orderId },
+        branchId: activeBranchId ?? undefined,
+      });
+      setAwaitingDetailOrder(data.order);
+    } catch (err: any) {
+      toast.error(err.message);
+      setAwaitingDetailDialog(false);
+    } finally {
+      setAwaitingDetailLoading(false);
+    }
+  };
+
+  const handleCheckout = async (orderId: string, method: string) => {
+    setCheckoutProcessing(orderId);
+    try {
+      // Find order total
+      const order = awaitingOrders.find((o) => o.id === orderId);
+      const total = order?.total ?? 0;
+
+      // Add payment
+      await api('orders', 'add-payment', {
+        body: { order_id: orderId, method, amount: total },
+        branchId: activeBranchId ?? undefined,
+      });
+
+      // Update order status to completed
+      await api('orders', 'update-status', {
+        body: { order_id: orderId, status: 'completed' },
+        branchId: activeBranchId ?? undefined,
+      });
+
+      toast.success('Payment processed — order completed!');
+      setAwaitingOrders((prev) => prev.filter((o) => o.id !== orderId));
+      setAwaitingCount((c) => Math.max(0, c - 1));
+      setAwaitingDetailDialog(false);
+    } catch (err: any) { toast.error(err.message); }
+    finally { setCheckoutProcessing(null); }
+  };
 
   useEffect(() => {
     if (categories.length && !activeCat) setActiveCat(categories[0].id);
@@ -178,6 +274,21 @@ function POSTerminalContent() {
               >
                 <Badge badgeContent={meals.reduce((s, m) => s + m.quantity_available, 0)} color="info" max={99}>
                   Meals
+                </Badge>
+              </Button>
+            </Tooltip>
+          )}
+          {awaitingCount > 0 && (
+            <Tooltip title="Orders awaiting payment from Bar / Kitchen">
+              <Button
+                variant="outlined"
+                color="warning"
+                onClick={openAwaitingPayment}
+                startIcon={<PaymentIcon />}
+                sx={{ flexShrink: 0 }}
+              >
+                <Badge badgeContent={awaitingCount} color="error" max={99}>
+                  Awaiting
                 </Badge>
               </Button>
             </Tooltip>
@@ -446,6 +557,261 @@ function POSTerminalContent() {
 
       {/* Customer search dialog */}
       <CustomerSearchDialog open={customerDialog} onClose={() => setCustomerDialog(false)} />
+
+      {/* Awaiting Payment Orders Dialog */}
+      <Dialog open={awaitingPaymentDialog} onClose={() => setAwaitingPaymentDialog(false)} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <PaymentIcon color="warning" />
+            <Typography variant="h6">Orders Awaiting Payment</Typography>
+          </Stack>
+          <IconButton onClick={() => setAwaitingPaymentDialog(false)}><CloseIcon /></IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          {awaitingLoading ? (
+            <LinearProgress />
+          ) : awaitingOrders.length === 0 ? (
+            <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+              No orders awaiting payment
+            </Typography>
+          ) : (
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Order #</TableCell>
+                    <TableCell>Items</TableCell>
+                    <TableCell>Department</TableCell>
+                    <TableCell>Created By</TableCell>
+                    <TableCell>Customer</TableCell>
+                    <TableCell>Served At</TableCell>
+                    <TableCell align="right">Total</TableCell>
+                    <TableCell width={240} align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {awaitingOrders.map((order) => (
+                    <TableRow key={order.id} hover>
+                      <TableCell>
+                        <Typography fontWeight={700}>#{order.order_number}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
+                          {(order.order_items ?? []).map((i: any) => `${i.quantity}× ${i.menu_item_name}`).join(', ') || '—'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" label={order.department ?? order.source ?? 'pos'} color={
+                          order.department === 'bar' ? 'primary' : order.department === 'kitchen' ? 'warning' : 'default'
+                        } variant="outlined" />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{order.created_by_name ?? '—'}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{order.customer_name ?? '—'}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="caption">{order.served_at ? new Date(order.served_at).toLocaleString() : '—'}</Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography fontWeight={700}>{fmt(order.total)}</Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                          <Button size="small" variant="outlined" onClick={() => openAwaitingDetail(order.id)}>
+                            Details
+                          </Button>
+                          <Button
+                            size="small" variant="contained" color="success"
+                            disabled={checkoutProcessing === order.id}
+                            onClick={() => handleCheckout(order.id, 'cash')}
+                          >
+                            {checkoutProcessing === order.id ? '…' : 'Cash'}
+                          </Button>
+                          <Button
+                            size="small" variant="contained" color="primary"
+                            disabled={checkoutProcessing === order.id}
+                            onClick={() => handleCheckout(order.id, 'card')}
+                          >
+                            {checkoutProcessing === order.id ? '…' : 'Card'}
+                          </Button>
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Awaiting Payment Detail Dialog (printable + PDF) */}
+      <Dialog open={awaitingDetailDialog} onClose={() => setAwaitingDetailDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Typography variant="h6">Order #{awaitingDetailOrder?.order_number ?? ''}</Typography>
+          <Stack direction="row" spacing={0.5}>
+            <Tooltip title="Print">
+              <IconButton onClick={() => {
+                const el = document.getElementById('pos-awaiting-detail-print');
+                if (!el) return;
+                const w = window.open('', '_blank', 'width=800,height=600');
+                if (!w) return;
+                w.document.write(`<html><head><title>Order #${awaitingDetailOrder?.order_number ?? ''}</title>
+                  <style>body{font-family:Arial,sans-serif;padding:20px}
+                  table{border-collapse:collapse;width:100%;margin-top:10px}
+                  th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}
+                  th{background:#f5f5f5}
+                  .total{font-size:18px;font-weight:bold;margin-top:12px}
+                  </style></head><body>${el.innerHTML}</body></html>`);
+                w.document.close(); w.focus(); w.print(); w.close();
+              }} disabled={awaitingDetailLoading}><PrintIcon /></IconButton>
+            </Tooltip>
+            <Tooltip title="Download PDF">
+              <IconButton onClick={() => {
+                const el = document.getElementById('pos-awaiting-detail-print');
+                if (!el) return;
+                const w = window.open('', '_blank', 'width=800,height=600');
+                if (!w) return;
+                w.document.write(`<html><head><title>Order #${awaitingDetailOrder?.order_number ?? ''}</title>
+                  <style>body{font-family:Arial,sans-serif;padding:20px}
+                  table{border-collapse:collapse;width:100%;margin-top:10px}
+                  th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}
+                  th{background:#f5f5f5}
+                  </style></head><body>${el.innerHTML}</body></html>`);
+                w.document.close(); w.focus(); w.print(); w.close();
+              }} disabled={awaitingDetailLoading}><PictureAsPdfIcon /></IconButton>
+            </Tooltip>
+            <IconButton onClick={() => setAwaitingDetailDialog(false)}><CloseIcon /></IconButton>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers>
+          {awaitingDetailLoading ? (
+            <Box sx={{ textAlign: 'center', py: 4 }}><CircularProgress /></Box>
+          ) : awaitingDetailOrder ? (
+            <Box id="pos-awaiting-detail-print">
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 6 }}>
+                  <Typography variant="body2"><strong>Order #:</strong> {awaitingDetailOrder.order_number}</Typography>
+                  <Typography variant="body2"><strong>Status:</strong> {awaitingDetailOrder.status?.replace(/_/g, ' ')}</Typography>
+                  <Typography variant="body2"><strong>Type:</strong> {awaitingDetailOrder.order_type?.replace(/_/g, ' ')}</Typography>
+                  <Typography variant="body2"><strong>Department:</strong> {awaitingDetailOrder.department ?? '—'}</Typography>
+                  <Typography variant="body2"><strong>Source:</strong> {awaitingDetailOrder.source ?? '—'}</Typography>
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <Typography variant="body2"><strong>Created By:</strong> {awaitingDetailOrder.created_by_name ?? '—'}</Typography>
+                  <Typography variant="body2"><strong>Created:</strong> {new Date(awaitingDetailOrder.created_at).toLocaleString()}</Typography>
+                  {awaitingDetailOrder.served_at && (
+                    <Typography variant="body2"><strong>Served:</strong> {new Date(awaitingDetailOrder.served_at).toLocaleString()}</Typography>
+                  )}
+                  {awaitingDetailOrder.customer_name && (
+                    <Typography variant="body2"><strong>Customer:</strong> {awaitingDetailOrder.customer_name}</Typography>
+                  )}
+                </Grid>
+              </Grid>
+
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Items</Typography>
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Item</TableCell>
+                      <TableCell align="right">Qty</TableCell>
+                      <TableCell align="right">Unit Price</TableCell>
+                      <TableCell align="right">Total</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(awaitingDetailOrder.order_items ?? []).map((item: any) => (
+                      <TableRow key={item.id}>
+                        <TableCell>{item.menu_item_name}</TableCell>
+                        <TableCell align="right">{item.quantity}</TableCell>
+                        <TableCell align="right">{fmt(item.unit_price)}</TableCell>
+                        <TableCell align="right">{fmt(item.item_total ?? item.unit_price * item.quantity)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              <Divider sx={{ my: 2 }} />
+              <Stack direction="row" justifyContent="flex-end" spacing={3}>
+                {awaitingDetailOrder.discount_amount > 0 && (
+                  <Typography variant="body1" color="error.main">
+                    Discount: -{fmt(awaitingDetailOrder.discount_amount)}
+                  </Typography>
+                )}
+                <Typography variant="h6" fontWeight={700}>Total: {fmt(awaitingDetailOrder.total)}</Typography>
+              </Stack>
+
+              {awaitingDetailOrder.notes && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="body2"><strong>Notes:</strong> {awaitingDetailOrder.notes}</Typography>
+                </>
+              )}
+
+              {(awaitingDetailOrder.order_payments ?? []).length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Payments</Typography>
+                  {awaitingDetailOrder.order_payments.map((p: any) => (
+                    <Typography key={p.id} variant="body2">
+                      {p.method}: {fmt(p.amount)} — {new Date(p.created_at).toLocaleString()}
+                    </Typography>
+                  ))}
+                </>
+              )}
+
+              {(awaitingDetailOrder.order_status_history ?? []).length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Status History</Typography>
+                  {awaitingDetailOrder.order_status_history.map((h: any) => (
+                    <Typography key={h.id} variant="body2">
+                      {h.old_status} → {h.new_status} — by {h.changed_by_name ?? '—'} · {new Date(h.created_at).toLocaleString()}
+                      {h.notes && ` (${h.notes})`}
+                    </Typography>
+                  ))}
+                </>
+              )}
+            </Box>
+          ) : (
+            <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No data</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAwaitingDetailDialog(false)}>Close</Button>
+          <Button variant="outlined" startIcon={<PrintIcon />} disabled={!awaitingDetailOrder} onClick={() => {
+            const el = document.getElementById('pos-awaiting-detail-print');
+            if (!el) return;
+            const w = window.open('', '_blank', 'width=800,height=600');
+            if (!w) return;
+            w.document.write(`<html><head><title>Order</title><style>body{font-family:Arial,sans-serif;padding:20px}table{border-collapse:collapse;width:100%;margin-top:10px}th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}th{background:#f5f5f5}</style></head><body>${el.innerHTML}</body></html>`);
+            w.document.close(); w.focus(); w.print(); w.close();
+          }}>Print</Button>
+          {awaitingDetailOrder && (
+            <Stack direction="row" spacing={1}>
+              <Button
+                variant="contained" color="success"
+                disabled={checkoutProcessing === awaitingDetailOrder.id}
+                onClick={() => handleCheckout(awaitingDetailOrder.id, 'cash')}
+              >
+                Pay Cash — {fmt(awaitingDetailOrder.total)}
+              </Button>
+              <Button
+                variant="contained" color="primary"
+                disabled={checkoutProcessing === awaitingDetailOrder.id}
+                onClick={() => handleCheckout(awaitingDetailOrder.id, 'card')}
+              >
+                Pay Card — {fmt(awaitingDetailOrder.total)}
+              </Button>
+            </Stack>
+          )}
+        </DialogActions>
+      </Dialog>
 
       {/* Customize item dialog (ingredients & extras) */}
       {customizeItem && (

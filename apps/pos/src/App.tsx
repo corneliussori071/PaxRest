@@ -13,6 +13,7 @@ import POSTerminalPage from '@/pages/pos/POSTerminalPage';
 import OrdersPage from '@/pages/orders/OrdersPage';
 import KitchenDisplayPage from '@/pages/kitchen/KitchenDisplayPage';
 import MenuManagementPage from '@/pages/menu/MenuManagementPage';
+import BarPage from '@/pages/bar/BarPage';
 import InventoryPage from '@/pages/inventory/InventoryPage';
 import TablesPage from '@/pages/tables/TablesPage';
 import DeliveryPage from '@/pages/delivery/DeliveryPage';
@@ -58,6 +59,7 @@ export default function App() {
               <Route path="/kitchen" element={<KitchenDisplayPage />} />
               <Route path="/tables" element={<TablesPage />} />
               <Route path="/menu" element={<MenuManagementPage />} />
+              <Route path="/bar" element={<BarPage />} />
               <Route path="/inventory" element={<InventoryPage />} />
               <Route path="/suppliers" element={<SuppliersPage />} />
               <Route path="/delivery" element={<DeliveryPage />} />

@@ -2,6 +2,7 @@ import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import {
   corsResponse, jsonResponse, errorResponse,
   createUserClient, requireAuth, hasPermission, resolveBranchId,
+  validatePagination, applyPagination,
 } from '../_shared/index.ts';
 import type { AuthContext } from '../_shared/index.ts';
 
@@ -31,7 +32,7 @@ serve(async (req) => {
       case 'assign':
         return await assignTable(req, supabase, auth, branchId);
       case 'layout':
-        return await getTableLayout(supabase, auth, branchId);
+        return await getTableLayout(req, supabase, auth, branchId);
       default:
         return errorResponse('Unknown tables action', 404);
     }
@@ -192,41 +193,60 @@ async function assignTable(req: Request, supabase: any, auth: AuthContext, branc
   return jsonResponse({ table: data });
 }
 
-/* ─── Layout – grouped by status for tabs ─── */
-async function getTableLayout(supabase: any, auth: AuthContext, branchId: string) {
-  const { data, error } = await supabase
+/* ─── Layout – grouped by status for tabs (paginated per status) ─── */
+async function getTableLayout(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  const url = new URL(req.url);
+  const statusFilter = url.searchParams.get('status') ?? '';
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+
+  // Get counts per status (always lightweight)
+  const { data: allTables, error: cntErr } = await supabase
     .from('tables')
-    .select('id, table_number, name, capacity, section, status, image_url, notes, assigned_customer_name, num_people, position_x, position_y, current_order_id, is_active')
+    .select('status')
     .eq('branch_id', branchId)
-    .eq('is_active', true)
-    .order('table_number', { ascending: true });
+    .eq('is_active', true);
 
-  if (error) return errorResponse(error.message);
+  if (cntErr) return errorResponse(cntErr.message);
 
-  const allTables = data ?? [];
-
-  // Build sections array (grouped by status) for the frontend tabs
   const statusOrder = ['available', 'occupied', 'reserved', 'dirty', 'maintenance'];
-  const byStatus = new Map<string, any[]>();
-  for (const s of statusOrder) byStatus.set(s, []);
-
-  for (const table of allTables) {
-    const bucket = byStatus.get(table.status);
-    if (bucket) bucket.push(table);
-    else byStatus.set(table.status, [table]);
+  const countMap: Record<string, number> = {};
+  for (const s of statusOrder) countMap[s] = 0;
+  for (const t of allTables ?? []) {
+    if (countMap[t.status] !== undefined) countMap[t.status]++;
+    else countMap[t.status] = 1;
   }
 
+  // Fetch paginated tables for the requested status
+  const targetStatus = statusFilter && statusOrder.includes(statusFilter) ? statusFilter : 'available';
+  let query = supabase
+    .from('tables')
+    .select('id, table_number, name, capacity, section, status, image_url, notes, assigned_customer_name, num_people, position_x, position_y, current_order_id, is_active', { count: 'exact' })
+    .eq('branch_id', branchId)
+    .eq('is_active', true)
+    .eq('status', targetStatus);
+
+  query = applyPagination(query, page, pageSize, 'table_number', true);
+  const { data, count, error } = await query;
+  if (error) return errorResponse(error.message);
+
+  // Build sections summary with counts, only the requested status gets actual tables
   const sections = statusOrder.map((s) => ({
     section: s,
-    tables: byStatus.get(s) ?? [],
-    available: s === 'available' ? (byStatus.get(s)?.length ?? 0) : 0,
-    total: byStatus.get(s)?.length ?? 0,
+    tables: s === targetStatus ? (data ?? []) : [],
+    available: s === 'available' ? countMap['available'] : 0,
+    total: countMap[s] ?? 0,
   }));
 
   return jsonResponse({
     sections,
-    total_tables: allTables.length,
-    available: byStatus.get('available')?.length ?? 0,
-    occupied: byStatus.get('occupied')?.length ?? 0,
+    total_tables: (allTables ?? []).length,
+    available: countMap['available'] ?? 0,
+    occupied: countMap['occupied'] ?? 0,
+    page,
+    pageSize,
+    totalForStatus: count ?? 0,
   });
 }

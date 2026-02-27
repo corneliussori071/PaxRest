@@ -5,6 +5,7 @@ import ListAltIcon from '@mui/icons-material/ListAlt';
 import KitchenIcon from '@mui/icons-material/Kitchen';
 import RestaurantMenuIcon from '@mui/icons-material/RestaurantMenu';
 import InventoryIcon from '@mui/icons-material/Inventory';
+import LocalBarIcon from '@mui/icons-material/LocalBar';
 import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import TableBarIcon from '@mui/icons-material/TableBar';
@@ -33,6 +34,7 @@ const NAV_ITEMS: NavItemWithPermission[] = [
   { id: 'kitchen',    label: 'Kitchen Display',    icon: <KitchenIcon />,          path: '/kitchen',    permission: 'view_kitchen' },
   { id: 'tables',     label: 'Tables',             icon: <TableBarIcon />,         path: '/tables',     permission: 'manage_tables',    dividerAfter: true },
   { id: 'menu',       label: 'Menu',               icon: <RestaurantMenuIcon />,   path: '/menu',       permission: 'manage_menu' },
+  { id: 'bar',        label: 'Bar',                icon: <LocalBarIcon />,         path: '/bar',        permission: 'view_bar' },
   { id: 'inventory',  label: 'Inventory',          icon: <InventoryIcon />,        path: '/inventory',  permission: 'manage_inventory' },
   { id: 'suppliers',  label: 'Suppliers',          icon: <ShoppingCartIcon />,     path: '/suppliers',  permission: 'manage_suppliers', dividerAfter: true },
   { id: 'delivery',   label: 'Delivery',           icon: <LocalShippingIcon />,    path: '/delivery',   permission: 'manage_delivery' },
