@@ -232,7 +232,7 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
       order_type: body.order_type ?? 'dine_in',
       status: 'pending',
       table_id: body.table_id,
-      customer_name: body.customer_name ?? null,
+      customer_name: body.customer_name?.trim() || 'Walk In Customer',
       notes: body.notes ?? null,
       source: 'bar',
       department: 'bar',
@@ -384,18 +384,32 @@ async function getOrderDetail(req: Request, supabase: any, auth: AuthContext, br
 
   // Enrich order items with ingredient & extra details from menu_items
   if (data?.order_items?.length) {
-    const menuItemIds = [...new Set(data.order_items.filter((i: any) => i.menu_item_id).map((i: any) => i.menu_item_id))];
+    const ZERO_UUID = '00000000-0000-0000-0000-000000000000';
+    const menuItemIds = [...new Set(
+      data.order_items
+        .filter((i: any) => i.menu_item_id && i.menu_item_id !== ZERO_UUID)
+        .map((i: any) => i.menu_item_id)
+    )];
     if (menuItemIds.length > 0) {
       const { data: menuItems } = await service
         .from('menu_items')
-        .select('id, name, menu_item_ingredients(id, ingredient_name, quantity, unit), menu_item_extras(id, name, price)')
+        .select('id, name, base_price, menu_item_ingredients(id, quantity_used, unit, inventory_items:ingredient_id(id, name, cost_per_unit)), menu_item_extras(id, name, price)')
         .in('id', menuItemIds);
       const menuMap = new Map((menuItems ?? []).map((m: any) => [m.id, m]));
       data.order_items = data.order_items.map((item: any) => {
         const mi: any = menuMap.get(item.menu_item_id);
+        // Flatten ingredient data for frontend rendering
+        const ingredients = (mi?.menu_item_ingredients ?? []).map((ig: any) => ({
+          name: ig.inventory_items?.name ?? 'Unknown',
+          quantity_used: ig.quantity_used,
+          unit: ig.unit,
+          cost_contribution: ig.inventory_items?.cost_per_unit
+            ? Number(ig.inventory_items.cost_per_unit) * Number(ig.quantity_used)
+            : null,
+        }));
         return {
           ...item,
-          ingredients: mi?.menu_item_ingredients ?? [],
+          ingredients,
           extras_available: mi?.menu_item_extras ?? [],
         };
       });

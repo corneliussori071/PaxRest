@@ -284,7 +284,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           items,
           table_id: selectedTable,
           num_people: numPeople,
-          customer_name: customerName || undefined,
+          customer_name: customerName.trim() || 'Walk In Customer',
           notes: notes || undefined,
           order_type: 'dine_in',
         },
@@ -838,6 +838,9 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
                 {order.customer_name && (
                   <Typography variant="body2" color="text.secondary">Customer: {order.customer_name}</Typography>
                 )}
+                {!order.customer_name && (
+                  <Typography variant="body2" color="text.secondary">Customer: Walk In Customer</Typography>
+                )}
 
                 <Divider sx={{ my: 0.5 }} />
 
@@ -997,6 +1000,11 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
                     Customer: {order.customer_name}
                   </Typography>
                 )}
+                {!order.customer_name && (
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                    Customer: Walk In Customer
+                  </Typography>
+                )}
 
                 <Typography variant="body2" color="text.secondary">
                   Created by: {order.created_by_name ?? '—'} · {order.department ?? 'bar'}
@@ -1111,10 +1119,17 @@ function OrderDetailDialog({
           <Box sx={{ textAlign: 'center', py: 4 }}><CircularProgress /></Box>
         ) : order ? (
           <Box id="bar-order-detail-print">
-            <Grid container spacing={2}>
+            {/* Order Header */}
+            <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: 'grey.50' }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                <Typography variant="h5" fontWeight={700}>Order #{order.order_number}</Typography>
+                <Chip label={order.status?.replace(/_/g, ' ')} color={ORDER_STATUS_COLORS[order.status] ?? 'default'} />
+              </Stack>
+            </Paper>
+
+            <Grid container spacing={2} sx={{ mb: 2 }}>
               <Grid size={{ xs: 6 }}>
-                <Typography variant="body2"><strong>Order #:</strong> {order.order_number}</Typography>
-                <Typography variant="body2"><strong>Status:</strong> {order.status?.replace(/_/g, ' ')}</Typography>
+                <Typography variant="body2"><strong>Customer:</strong> {order.customer_name || 'Walk In Customer'}</Typography>
                 <Typography variant="body2"><strong>Type:</strong> {order.order_type?.replace(/_/g, ' ')}</Typography>
                 <Typography variant="body2"><strong>Department:</strong> {order.department ?? 'bar'}</Typography>
                 <Typography variant="body2"><strong>Source:</strong> {order.source ?? 'bar'}</Typography>
@@ -1125,98 +1140,144 @@ function OrderDetailDialog({
                 {order.served_at && (
                   <Typography variant="body2"><strong>Served:</strong> {new Date(order.served_at).toLocaleString()}</Typography>
                 )}
-                {order.customer_name && (
-                  <Typography variant="body2"><strong>Customer:</strong> {order.customer_name}</Typography>
-                )}
               </Grid>
             </Grid>
 
             <Divider sx={{ my: 2 }} />
 
-            {/* Items Table */}
-            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Items</Typography>
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Item</TableCell>
-                    <TableCell align="right">Qty</TableCell>
-                    <TableCell align="right">Unit Price</TableCell>
-                    <TableCell align="right">Extras</TableCell>
-                    <TableCell align="right">Total</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(order.order_items ?? []).map((item: any) => {
-                    const extras = Array.isArray(item.selected_extras) ? item.selected_extras : [];
-                    const removed = Array.isArray(item.removed_ingredients) ? item.removed_ingredients : [];
-                    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
-                    return (
-                      <React.Fragment key={item.id}>
-                        <TableRow>
-                          <TableCell>
-                            <Typography variant="body2" fontWeight={600}>{item.menu_item_name}</Typography>
-                            {item.variant_name && (
-                              <Typography variant="caption" color="text.secondary">Variant: {item.variant_name}</Typography>
-                            )}
-                          </TableCell>
-                          <TableCell align="right">{item.quantity}</TableCell>
-                          <TableCell align="right">{fmt(item.unit_price)}</TableCell>
-                          <TableCell align="right">{item.modifiers_total > 0 ? fmt(item.modifiers_total) : '—'}</TableCell>
-                          <TableCell align="right">{fmt(item.item_total ?? item.unit_price * item.quantity)}</TableCell>
-                        </TableRow>
-                        {/* Detail sub-row: ingredients, removed ingredients, extras, instructions */}
-                        {(ingredients.length > 0 || removed.length > 0 || extras.length > 0 || item.special_instructions) && (
-                          <TableRow>
-                            <TableCell colSpan={5} sx={{ py: 0.5, pl: 4, borderBottom: 'none', bgcolor: 'action.hover' }}>
-                              {ingredients.length > 0 && (
-                                <Typography variant="caption" display="block" color="text.secondary">
-                                  <strong>Ingredients:</strong> {ingredients.map((ig: any) => ig.name ?? ig.ingredient_name ?? ig).join(', ')}
-                                </Typography>
-                              )}
-                              {removed.length > 0 && (
-                                <Typography variant="caption" display="block" color="error.main">
-                                  <strong>Removed:</strong> {removed.map((r: any) => typeof r === 'string' ? r : r.name ?? r.ingredient_name ?? JSON.stringify(r)).join(', ')}
-                                </Typography>
-                              )}
-                              {extras.length > 0 && (
-                                <Typography variant="caption" display="block" color="success.main">
-                                  <strong>Extras:</strong> {extras.map((ex: any) => {
-                                    const n = typeof ex === 'string' ? ex : ex.name ?? ex.extra_name ?? '';
-                                    const p = typeof ex === 'object' && ex.price ? ` (+${fmt(ex.price)})` : '';
-                                    return n + p;
-                                  }).join(', ')}
-                                </Typography>
-                              )}
-                              {item.special_instructions && (
-                                <Typography variant="caption" display="block" sx={{ fontStyle: 'italic' }}>
-                                  Note: {item.special_instructions}
-                                </Typography>
-                              )}
-                            </TableCell>
-                          </TableRow>
+            {/* ── Items Breakdown ── */}
+            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Order Items Breakdown</Typography>
+
+            {(order.order_items ?? []).map((item: any, idx: number) => {
+              const ZERO_UUID = '00000000-0000-0000-0000-000000000000';
+              const isBarStore = item.menu_item_id === ZERO_UUID || (!item.menu_item_id);
+              const extras = Array.isArray(item.selected_extras) ? item.selected_extras : [];
+              const removed = Array.isArray(item.removed_ingredients) ? item.removed_ingredients : [];
+              const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+              const extrasTotal = extras.reduce((s: number, ex: any) => s + (typeof ex === 'object' && ex.price ? Number(ex.price) : 0), 0);
+
+              return (
+                <Paper key={item.id} variant="outlined" sx={{ p: 1.5, mb: 1.5 }}>
+                  {/* Item header */}
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography fontWeight={700}>{idx + 1}.</Typography>
+                      <Box>
+                        <Typography variant="body1" fontWeight={600}>{item.menu_item_name}</Typography>
+                        {item.variant_name && (
+                          <Typography variant="caption" color="text.secondary">Variant: {item.variant_name}</Typography>
                         )}
-                      </React.Fragment>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                      </Box>
+                      <Chip size="small" label={isBarStore ? 'Internal Store' : 'Menu'}
+                        color={isBarStore ? 'primary' : 'success'} variant="outlined" />
+                    </Stack>
+                    <Typography variant="body1" fontWeight={700}>{fmt(item.item_total ?? item.unit_price * item.quantity)}</Typography>
+                  </Stack>
 
+                  {/* Price computation */}
+                  <Box sx={{ pl: 3, mt: 0.5 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      {fmt(item.unit_price)} × {item.quantity} = {fmt(item.unit_price * item.quantity)}
+                    </Typography>
+
+                    {/* Ingredients */}
+                    {ingredients.length > 0 && (
+                      <Box sx={{ mt: 0.5 }}>
+                        <Typography variant="caption" fontWeight={700} color="text.secondary">Ingredients:</Typography>
+                        {ingredients.map((ig: any, i: number) => (
+                          <Stack key={i} direction="row" justifyContent="space-between" sx={{ pl: 1 }}>
+                            <Typography variant="caption" color="text.secondary">
+                              • {ig.name ?? ig.ingredient_name ?? ig}{ig.quantity_used ? ` (${ig.quantity_used} ${ig.unit ?? ''})` : ''}
+                            </Typography>
+                            {ig.cost_contribution != null && ig.cost_contribution > 0 && (
+                              <Typography variant="caption" color="text.secondary">{fmt(ig.cost_contribution)}</Typography>
+                            )}
+                          </Stack>
+                        ))}
+                      </Box>
+                    )}
+
+                    {/* Removed ingredients */}
+                    {removed.length > 0 && (
+                      <Box sx={{ mt: 0.5 }}>
+                        <Typography variant="caption" fontWeight={700} color="error.main">Removed Ingredients:</Typography>
+                        {removed.map((r: any, i: number) => (
+                          <Typography key={i} variant="caption" display="block" color="error.main" sx={{ pl: 1 }}>
+                            ✕ {typeof r === 'string' ? r : r.name ?? r.ingredient_name ?? JSON.stringify(r)}
+                          </Typography>
+                        ))}
+                      </Box>
+                    )}
+
+                    {/* Selected extras */}
+                    {extras.length > 0 && (
+                      <Box sx={{ mt: 0.5 }}>
+                        <Typography variant="caption" fontWeight={700} color="success.main">Extras / Add-ons:</Typography>
+                        {extras.map((ex: any, i: number) => {
+                          const n = typeof ex === 'string' ? ex : ex.name ?? ex.extra_name ?? '';
+                          const p = typeof ex === 'object' && ex.price ? Number(ex.price) : 0;
+                          return (
+                            <Stack key={i} direction="row" justifyContent="space-between" sx={{ pl: 1 }}>
+                              <Typography variant="caption" color="success.main">+ {n}</Typography>
+                              {p > 0 && <Typography variant="caption" color="success.main">{fmt(p)}</Typography>}
+                            </Stack>
+                          );
+                        })}
+                        {extrasTotal > 0 && (
+                          <Typography variant="caption" fontWeight={600} color="success.main" sx={{ pl: 1 }}>
+                            Extras subtotal: {fmt(extrasTotal)}
+                          </Typography>
+                        )}
+                      </Box>
+                    )}
+
+                    {/* Special instructions */}
+                    {item.special_instructions && (
+                      <Typography variant="caption" display="block" sx={{ mt: 0.5, fontStyle: 'italic' }}>
+                        📝 {item.special_instructions}
+                      </Typography>
+                    )}
+                  </Box>
+                </Paper>
+              );
+            })}
+
+            {/* ── Totals Breakdown ── */}
             <Divider sx={{ my: 2 }} />
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Price Breakdown</Typography>
 
-            <Stack direction="row" justifyContent="flex-end" spacing={3}>
-              {order.subtotal != null && order.subtotal !== order.total && (
-                <Typography variant="body1">Subtotal: {fmt(order.subtotal)}</Typography>
-              )}
+              {/* Line-by-line totals */}
+              {(order.order_items ?? []).map((item: any) => (
+                <Stack key={item.id} direction="row" justifyContent="space-between" sx={{ py: 0.25 }}>
+                  <Typography variant="body2">{item.quantity}× {item.menu_item_name}</Typography>
+                  <Typography variant="body2">{fmt(item.item_total ?? item.unit_price * item.quantity)}</Typography>
+                </Stack>
+              ))}
+
+              <Divider sx={{ my: 1 }} />
+
+              <Stack direction="row" justifyContent="space-between">
+                <Typography variant="body2">Subtotal</Typography>
+                <Typography variant="body2" fontWeight={600}>{fmt(order.subtotal ?? order.total)}</Typography>
+              </Stack>
+
               {order.discount_amount > 0 && (
-                <Typography variant="body1" color="error.main">
-                  Discount: -{fmt(order.discount_amount)}
-                  {order.discount_reason && ` (${order.discount_reason})`}
-                </Typography>
+                <Stack direction="row" justifyContent="space-between">
+                  <Typography variant="body2" color="error.main">
+                    Discount{order.discount_reason ? ` (${order.discount_reason})` : ''}
+                  </Typography>
+                  <Typography variant="body2" color="error.main">-{fmt(order.discount_amount)}</Typography>
+                </Stack>
               )}
-              <Typography variant="h6" fontWeight={700}>Total: {fmt(order.total)}</Typography>
-            </Stack>
+
+              <Divider sx={{ my: 1 }} />
+
+              <Stack direction="row" justifyContent="space-between">
+                <Typography variant="h6" fontWeight={700}>Total</Typography>
+                <Typography variant="h6" fontWeight={700} color="primary.main">{fmt(order.total)}</Typography>
+              </Stack>
+            </Paper>
 
             {/* Payments */}
             {(order.order_payments ?? []).length > 0 && (
