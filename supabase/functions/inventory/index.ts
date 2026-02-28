@@ -993,9 +993,22 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
   }
 
   // Determine which store/movement tables to use based on department
-  const storeTable = department === 'bar' ? 'bar_store_items' : 'kitchen_store_items';
-  const movementTable = department === 'bar' ? 'bar_store_movements' : 'kitchen_store_movements';
-  const storeFk = department === 'bar' ? 'bar_store_item_id' : 'kitchen_store_item_id';
+  let storeTable: string;
+  let movementTable: string;
+  let storeFk: string;
+  if (department === 'bar') {
+    storeTable = 'bar_store_items';
+    movementTable = 'bar_store_movements';
+    storeFk = 'bar_store_item_id';
+  } else if (department === 'accommodation') {
+    storeTable = 'accom_store_items';
+    movementTable = 'accom_store_movements';
+    storeFk = 'accom_store_item_id';
+  } else {
+    storeTable = 'kitchen_store_items';
+    movementTable = 'kitchen_store_movements';
+    storeFk = 'kitchen_store_item_id';
+  }
 
   const stockErrors: string[] = [];
 
@@ -1038,8 +1051,8 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
         item_name: itemName,
         updated_at: new Date().toISOString(),
       };
-      // bar_store_items always had selling_price & barcode (00028)
-      if (department === 'bar') {
+      // bar_store_items (00028) and accom_store_items (00034) have selling_price & barcode
+      if (department === 'bar' || department === 'accommodation') {
         updateData.selling_price = invItem?.selling_price ?? 0;
         updateData.barcode = invItem?.barcode ?? null;
       }
@@ -1066,8 +1079,8 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
         unit: item.unit,
         quantity: qtyAfter,
       };
-      // bar_store_items always had selling_price & barcode (00028)
-      if (department === 'bar') {
+      // bar_store_items (00028) and accom_store_items (00034) have selling_price & barcode
+      if (department === 'bar' || department === 'accommodation') {
         insertData.selling_price = invItem?.selling_price ?? 0;
         insertData.barcode = invItem?.barcode ?? null;
       }
