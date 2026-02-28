@@ -992,7 +992,8 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
     return errorResponse('Failed to fetch request items: ' + fetchErr.message);
   }
 
-  // Determine which movement table to use based on department
+  // Determine which store/movement tables to use based on department
+  const storeTable = department === 'bar' ? 'bar_store_items' : 'kitchen_store_items';
   const movementTable = department === 'bar' ? 'bar_store_movements' : 'kitchen_store_movements';
   const storeFk = department === 'bar' ? 'bar_store_item_id' : 'kitchen_store_item_id';
 
@@ -1009,30 +1010,80 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
       .eq('id', item.inventory_item_id)
       .single();
 
-    // Upsert internal store item via SQL function (bypasses PostgREST schema cache)
-    const { data: upsertResult, error: upsertErr } = await service.rpc('fn_upsert_internal_store_item', {
-      p_department: department,
-      p_company_id: auth.companyId,
-      p_branch_id: branchId,
-      p_inventory_item_id: item.inventory_item_id,
-      p_item_name: invItem?.name ?? item.inventory_item_name,
-      p_unit: item.unit,
-      p_quantity: qty,
-      p_barcode: invItem?.barcode ?? null,
-      p_selling_price: invItem?.selling_price ?? 0,
-      p_cost_per_unit: invItem?.cost_per_unit ?? 0,
-    });
+    const itemName = invItem?.name ?? item.inventory_item_name;
 
-    if (upsertErr) {
-      console.error(`Failed to upsert store item for ${item.inventory_item_name}:`, upsertErr.message);
-      stockErrors.push(`${item.inventory_item_name}: ${upsertErr.message}`);
-      continue;
+    // Upsert internal store item — use ONLY original columns per table
+    // (bar_store_items already had selling_price & barcode in 00028;
+    //  kitchen_store_items did NOT — those were added later in 00031
+    //  and PostgREST schema cache may not know about them yet)
+    const { data: existing } = await service
+      .from(storeTable)
+      .select('id, quantity')
+      .eq('branch_id', branchId)
+      .eq('inventory_item_id', item.inventory_item_id)
+      .maybeSingle();
+
+    let storeItemId: string | undefined;
+    let qtyBefore: number;
+    let qtyAfter: number;
+
+    if (existing) {
+      qtyBefore = Number(existing.quantity);
+      qtyAfter = qtyBefore + qty;
+      storeItemId = existing.id;
+
+      // Build update with only original columns
+      const updateData: Record<string, unknown> = {
+        quantity: qtyAfter,
+        item_name: itemName,
+        updated_at: new Date().toISOString(),
+      };
+      // bar_store_items always had selling_price & barcode (00028)
+      if (department === 'bar') {
+        updateData.selling_price = invItem?.selling_price ?? 0;
+        updateData.barcode = invItem?.barcode ?? null;
+      }
+
+      const { error: upErr } = await service
+        .from(storeTable)
+        .update(updateData)
+        .eq('id', existing.id);
+      if (upErr) {
+        console.error(`Failed to update ${storeTable}:`, upErr.message);
+        stockErrors.push(`Update ${itemName}: ${upErr.message}`);
+        continue;
+      }
+    } else {
+      qtyBefore = 0;
+      qtyAfter = qty;
+
+      // Build insert with only original columns
+      const insertData: Record<string, unknown> = {
+        company_id: auth.companyId,
+        branch_id: branchId,
+        inventory_item_id: item.inventory_item_id,
+        item_name: itemName,
+        unit: item.unit,
+        quantity: qtyAfter,
+      };
+      // bar_store_items always had selling_price & barcode (00028)
+      if (department === 'bar') {
+        insertData.selling_price = invItem?.selling_price ?? 0;
+        insertData.barcode = invItem?.barcode ?? null;
+      }
+
+      const { data: created, error: insErr } = await service
+        .from(storeTable)
+        .insert(insertData)
+        .select('id')
+        .single();
+      if (insErr) {
+        console.error(`Failed to insert into ${storeTable}:`, insErr.message);
+        stockErrors.push(`Insert ${itemName}: ${insErr.message}`);
+        continue;
+      }
+      storeItemId = created?.id;
     }
-
-    const row = Array.isArray(upsertResult) ? upsertResult[0] : upsertResult;
-    const storeItemId = row?.store_item_id;
-    const qtyBefore = Number(row?.qty_before ?? 0);
-    const qtyAfter = Number(row?.qty_after ?? qty);
 
     if (storeItemId) {
       const { error: mvErr } = await service
