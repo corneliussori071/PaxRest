@@ -40,6 +40,13 @@ const PERMISSION_LABELS: { key: Permission; label: string; group: string }[] = [
   { key: 'bar_pending_orders', label: 'Pending Orders', group: 'Bar' },
   { key: 'bar_pending_payment', label: 'Pending Payment', group: 'Bar' },
   { key: 'bar_request_items', label: 'Request for Items', group: 'Bar' },
+  // Accommodation — own heading with granular sub-permissions
+  { key: 'view_accommodation', label: 'Access Accommodation', group: 'Accommodation' },
+  { key: 'accom_create_order', label: 'Create Order', group: 'Accommodation' },
+  { key: 'accom_pending_orders', label: 'Pending Orders', group: 'Accommodation' },
+  { key: 'accom_pending_payment', label: 'Pending Payment', group: 'Accommodation' },
+  { key: 'accom_create_rooms', label: 'Create Rooms', group: 'Accommodation' },
+  { key: 'accom_request_items', label: 'Request for Items', group: 'Accommodation' },
   // Management
   { key: 'manage_menu', label: 'Manage Menu', group: 'Management' },
   { key: 'manage_inventory', label: 'Inventory', group: 'Management' },

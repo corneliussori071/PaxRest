@@ -47,6 +47,8 @@ const OWNER_PERMISSIONS = [
   'kitchen_orders', 'kitchen_assignments', 'kitchen_make_dish',
   'kitchen_available_meals', 'kitchen_completed', 'kitchen_ingredient_requests',
   'view_bar', 'bar_create_order', 'bar_pending_orders', 'bar_pending_payment', 'bar_request_items',
+  'view_accommodation', 'accom_create_order', 'accom_pending_orders', 'accom_pending_payment',
+  'accom_create_rooms', 'accom_request_items',
 ];
 
 // --- Register: Create company + owner profile (no branch) ---
