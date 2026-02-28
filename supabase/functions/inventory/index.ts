@@ -912,7 +912,7 @@ async function disburseIngredientRequest(req: Request, supabase: any, auth: Auth
       .eq('id', invItem.id);
 
     // Log stock movement
-    await service
+    const { error: mvErr } = await service
       .from('stock_movements')
       .insert({
         company_id: auth.companyId,
@@ -929,16 +929,18 @@ async function disburseIngredientRequest(req: Request, supabase: any, auth: Auth
         performed_by: auth.userId,
         performed_by_name: auth.name ?? auth.email,
       });
+    if (mvErr) console.error(`Failed to log stock movement for ${department}_request:`, mvErr.message);
   }
 
   // Update request status to in_transit
-  await service
+  const { error: transitErr } = await service
     .from('ingredient_requests')
     .update({
       status: 'in_transit',
       disbursed_at: new Date().toISOString(),
     })
     .eq('id', body.request_id);
+  if (transitErr) console.error('Failed to update status to in_transit:', transitErr.message);
 
   return jsonResponse({ disbursed: true });
 }
@@ -953,13 +955,13 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
 
   const service = createServiceClient();
 
-  const { data: request } = await service
+  const { data: request, error: reqErr } = await service
     .from('ingredient_requests')
     .select('status, station')
     .eq('id', body.request_id)
     .eq('branch_id', branchId)
     .single();
-  if (!request) return errorResponse('Request not found', 404);
+  if (reqErr || !request) return errorResponse(reqErr?.message ?? 'Request not found', 404);
   if (request.status !== 'in_transit' && request.status !== 'disbursed') {
     return errorResponse('Only in-transit or disbursed requests can be received', 400);
   }
@@ -970,32 +972,32 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
   if (body.items && Array.isArray(body.items)) {
     for (const item of body.items) {
       if (!item.id || item.quantity_received == null) continue;
-      await service
+      const { error: updErr } = await service
         .from('ingredient_request_items')
         .update({ quantity_received: Number(item.quantity_received) })
         .eq('id', item.id);
+      if (updErr) console.error('Failed to update quantity_received:', updErr.message);
     }
   }
 
-  await service
-    .from('ingredient_requests')
-    .update({
-      status: 'received',
-      received_at: new Date().toISOString(),
-    })
-    .eq('id', body.request_id);
-
   // ── Auto-stock Internal Store based on department ────────────────────────
   // Fetch all items with their actual received (or disbursed) quantities
-  const { data: receivedItems } = await service
+  const { data: receivedItems, error: fetchErr } = await service
     .from('ingredient_request_items')
     .select('inventory_item_id, inventory_item_name, unit, quantity_received, quantity_disbursed, quantity_requested')
     .eq('request_id', body.request_id);
+
+  if (fetchErr) {
+    console.error('Failed to fetch request items for auto-stock:', fetchErr.message);
+    return errorResponse('Failed to fetch request items: ' + fetchErr.message);
+  }
 
   // Determine which store tables to use based on department
   const storeTable = department === 'bar' ? 'bar_store_items' : 'kitchen_store_items';
   const movementTable = department === 'bar' ? 'bar_store_movements' : 'kitchen_store_movements';
   const storeFk = department === 'bar' ? 'bar_store_item_id' : 'kitchen_store_item_id';
+
+  const stockErrors: string[] = [];
 
   for (const item of (receivedItems ?? [])) {
     const qty = Number(item.quantity_received ?? item.quantity_disbursed ?? item.quantity_requested ?? 0);
@@ -1016,7 +1018,7 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
       .eq('inventory_item_id', item.inventory_item_id)
       .maybeSingle();
 
-    let storeItemId: string;
+    let storeItemId: string | undefined;
     let qtyBefore: number;
     let qtyAfter: number;
 
@@ -1033,10 +1035,15 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
         cost_per_unit: invItem?.cost_per_unit ?? 0,
         updated_at: new Date().toISOString(),
       };
-      await service
+      const { error: upErr } = await service
         .from(storeTable)
         .update(updateData)
         .eq('id', existing.id);
+      if (upErr) {
+        console.error(`Failed to update ${storeTable}:`, upErr.message);
+        stockErrors.push(`Update ${item.inventory_item_name}: ${upErr.message}`);
+        continue;
+      }
     } else {
       qtyBefore = 0;
       qtyAfter = qty;
@@ -1051,16 +1058,21 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
         selling_price: invItem?.selling_price ?? 0,
         cost_per_unit: invItem?.cost_per_unit ?? 0,
       };
-      const { data: created } = await service
+      const { data: created, error: insErr } = await service
         .from(storeTable)
         .insert(insertData)
         .select('id')
         .single();
+      if (insErr) {
+        console.error(`Failed to insert into ${storeTable}:`, insErr.message);
+        stockErrors.push(`Insert ${item.inventory_item_name}: ${insErr.message}`);
+        continue;
+      }
       storeItemId = created?.id;
     }
 
     if (storeItemId) {
-      await service
+      const { error: mvErr } = await service
         .from(movementTable)
         .insert({
           company_id: auth.companyId,
@@ -1077,7 +1089,27 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
           performed_by: auth.userId,
           performed_by_name: auth.name,
         });
+      if (mvErr) console.error(`Failed to insert ${movementTable}:`, mvErr.message);
     }
+  }
+
+  if (stockErrors.length > 0) {
+    console.error('Auto-stock errors:', stockErrors);
+    return errorResponse('Failed to stock internal store: ' + stockErrors.join('; '));
+  }
+
+  // Only mark request as received AFTER auto-stock succeeds
+  const { error: statusErr } = await service
+    .from('ingredient_requests')
+    .update({
+      status: 'received',
+      received_at: new Date().toISOString(),
+    })
+    .eq('id', body.request_id);
+
+  if (statusErr) {
+    console.error('Failed to update request status:', statusErr.message);
+    return errorResponse('Items stocked but failed to update request status: ' + statusErr.message);
   }
 
   return jsonResponse({ received: true });
@@ -1175,7 +1207,7 @@ async function acceptReturnIngredientRequest(req: Request, supabase: any, auth: 
         company_id: auth.companyId,
         branch_id: branchId,
         inventory_item_id: invItem.id,
-        movement_type: 'kitchen_return',
+        movement_type: `${department}_return`,
         quantity_change: returnQty,
         quantity_before: qtyBefore,
         quantity_after: qtyAfter,
