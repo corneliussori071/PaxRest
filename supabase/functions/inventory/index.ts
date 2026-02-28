@@ -1001,6 +1001,13 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
     const qty = Number(item.quantity_received ?? item.quantity_disbursed ?? item.quantity_requested ?? 0);
     if (qty <= 0) continue;
 
+    // Fetch full item info from central inventory (name, barcode, prices)
+    const { data: invItem } = await service
+      .from('inventory_items')
+      .select('name, barcode, selling_price, cost_per_unit')
+      .eq('id', item.inventory_item_id)
+      .single();
+
     // Upsert internal store item
     const { data: existing } = await service
       .from(storeTable)
@@ -1017,9 +1024,18 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
       qtyBefore = Number(existing.quantity);
       qtyAfter = qtyBefore + qty;
       storeItemId = existing.id;
+      // Update quantity and sync item info from central inventory
+      const updateData: Record<string, unknown> = {
+        quantity: qtyAfter,
+        item_name: invItem?.name ?? item.inventory_item_name,
+        barcode: invItem?.barcode ?? null,
+        selling_price: invItem?.selling_price ?? 0,
+        cost_per_unit: invItem?.cost_per_unit ?? 0,
+        updated_at: new Date().toISOString(),
+      };
       await service
         .from(storeTable)
-        .update({ quantity: qtyAfter, updated_at: new Date().toISOString() })
+        .update(updateData)
         .eq('id', existing.id);
     } else {
       qtyBefore = 0;
@@ -1028,9 +1044,12 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
         company_id: auth.companyId,
         branch_id: branchId,
         inventory_item_id: item.inventory_item_id,
-        item_name: item.inventory_item_name,
+        item_name: invItem?.name ?? item.inventory_item_name,
         unit: item.unit,
         quantity: qtyAfter,
+        barcode: invItem?.barcode ?? null,
+        selling_price: invItem?.selling_price ?? 0,
+        cost_per_unit: invItem?.cost_per_unit ?? 0,
       };
       const { data: created } = await service
         .from(storeTable)

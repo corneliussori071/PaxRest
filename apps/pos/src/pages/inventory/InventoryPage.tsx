@@ -44,6 +44,7 @@ interface ItemForm {
   quantity: number;
   min_stock_level: number;
   cost_per_unit: number;
+  selling_price: number;
   packaging_type: PackagingType;
   items_per_pack: number;
   category: string;
@@ -54,7 +55,7 @@ interface ItemForm {
 
 const emptyForm: ItemForm = {
   name: '', barcode: '', unit: 'pcs', quantity: 0, min_stock_level: 10,
-  cost_per_unit: 0, packaging_type: 'single',
+  cost_per_unit: 0, selling_price: 0, packaging_type: 'single',
   items_per_pack: 1, category: '', storage_location: '', weight_value: '', weight_unit: '',
 };
 
@@ -111,7 +112,7 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
         setForm({
           id: res.item.id, name: res.item.name, barcode: res.item.barcode ?? '',
           unit: res.item.unit, quantity: res.item.quantity, min_stock_level: res.item.min_stock_level,
-          cost_per_unit: res.item.cost_per_unit,
+          cost_per_unit: res.item.cost_per_unit, selling_price: res.item.selling_price ?? 0,
           packaging_type: res.item.packaging_type, items_per_pack: res.item.items_per_pack,
           category: res.item.category ?? '', storage_location: res.item.storage_location ?? '',
           weight_value: res.item.weight_value?.toString() ?? '', weight_unit: res.item.weight_unit ?? '',
@@ -140,6 +141,7 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
           quantity: form.quantity,
           min_stock_level: form.min_stock_level,
           cost_per_unit: form.cost_per_unit,
+          selling_price: form.selling_price || 0,
           packaging_type: form.packaging_type,
           items_per_pack: form.packaging_type === 'pack' ? form.items_per_pack : 1,
           category: form.category || null,
@@ -177,7 +179,7 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
     setForm({
       id: row.id, name: row.name, barcode: row.barcode ?? '',
       unit: row.unit, quantity: row.quantity, min_stock_level: row.min_stock_level,
-      cost_per_unit: row.cost_per_unit,
+      cost_per_unit: row.cost_per_unit, selling_price: row.selling_price ?? 0,
       packaging_type: row.packaging_type ?? 'single', items_per_pack: row.items_per_pack ?? 1,
       category: row.category ?? '', storage_location: row.storage_location ?? '',
       weight_value: row.weight_value?.toString() ?? '', weight_unit: row.weight_unit ?? '',
@@ -213,6 +215,7 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
     )},
     { id: 'packaging_type', label: 'Type', width: 80, render: (r) => r.packaging_type === 'pack' ? `Pack (${r.items_per_pack})` : 'Single' },
     { id: 'cost_per_unit', label: 'Cost', width: 100, render: (r) => formatCurrency(r.cost_per_unit, currency) },
+    { id: 'selling_price', label: 'Selling Price', width: 120, render: (r) => r.selling_price ? formatCurrency(r.selling_price, currency) : '—' },
     { id: 'actions', label: '', width: 180, sortable: false, render: (r) => (
       <Stack direction="row" spacing={0.5}>
         <Tooltip title="Edit"><IconButton size="small" onClick={(e) => { e.stopPropagation(); openEditItem(r); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
@@ -331,6 +334,15 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
                 />
               </Grid>
             )}
+
+            <Grid size={6}>
+              <TextField
+                fullWidth label="Selling Price (optional)" type="number" value={form.selling_price || ''}
+                onChange={(e) => updateForm({ selling_price: Number(e.target.value) })}
+                slotProps={{ input: { startAdornment: <InputAdornment position="start">{currency}</InputAdornment> }}}
+                helperText="Used by bar & other stations"
+              />
+            </Grid>
 
             {/* Quantity & Threshold */}
             <Grid size={12}><Divider><Typography variant="caption">Stock Levels</Typography></Divider></Grid>
@@ -705,7 +717,7 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
         },
         branchId,
       });
-      toast.success('Items disbursed and sent to kitchen');
+      toast.success(`Items disbursed and sent to ${disburseDialog?.station ?? 'kitchen'}`);
       setDisburseDialog(null);
       fetchRequests();
     } catch (err: any) { toast.error(err.message); }
@@ -992,7 +1004,9 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
 
       {/* ─── Disburse Dialog ─── */}
       <Dialog open={!!disburseDialog} onClose={() => setDisburseDialog(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Disburse Items</DialogTitle>
+        <DialogTitle>
+          Disburse Items to {(disburseDialog?.station ?? 'kitchen').charAt(0).toUpperCase() + (disburseDialog?.station ?? 'kitchen').slice(1)}
+        </DialogTitle>
         <DialogContent>
           <Alert severity="info" sx={{ mb: 2 }}>
             Set the actual quantity to disburse for each item. Stock will be deducted from inventory.
@@ -1048,7 +1062,7 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
         <DialogActions>
           <Button onClick={() => setDisburseDialog(null)}>Cancel</Button>
           <Button variant="contained" onClick={handleDisburse} disabled={actionLoading === disburseDialog?.id}>
-            Disburse &amp; Send to Kitchen
+            Disburse &amp; Send to {(disburseDialog?.station ?? 'kitchen').charAt(0).toUpperCase() + (disburseDialog?.station ?? 'kitchen').slice(1)}
           </Button>
         </DialogActions>
       </Dialog>

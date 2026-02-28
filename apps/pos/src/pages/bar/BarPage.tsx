@@ -1675,12 +1675,6 @@ function BarStockView({ branchId }: { branchId: string }) {
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
 
-  // Price edit dialog
-  const [editDialog, setEditDialog] = useState<any>(null);
-  const [editPrice, setEditPrice] = useState('');
-  const [editBarcode, setEditBarcode] = useState('');
-  const [editSaving, setEditSaving] = useState(false);
-
   const fetchItems = useCallback(async () => {
     try {
       const params: Record<string, string> = {
@@ -1696,31 +1690,6 @@ function BarStockView({ branchId }: { branchId: string }) {
   }, [branchId, page, pageSize, search]);
 
   useEffect(() => { setLoading(true); fetchItems(); }, [fetchItems]);
-
-  const openEdit = (item: any) => {
-    setEditDialog(item);
-    setEditPrice(String(item.selling_price ?? ''));
-    setEditBarcode(item.barcode ?? '');
-  };
-
-  const handleEditSave = async () => {
-    if (!editDialog) return;
-    setEditSaving(true);
-    try {
-      await api('bar', 'internal-store-update-price', {
-        body: {
-          bar_store_item_id: editDialog.id,
-          selling_price: editPrice ? Number(editPrice) : undefined,
-          barcode: editBarcode || undefined,
-        },
-        branchId,
-      });
-      toast.success('Item updated');
-      setEditDialog(null);
-      fetchItems();
-    } catch (err: any) { toast.error(err.message); }
-    finally { setEditSaving(false); }
-  };
 
   if (loading && items.length === 0) return <LinearProgress />;
 
@@ -1749,10 +1718,10 @@ function BarStockView({ branchId }: { branchId: string }) {
                 <TableCell>Item Name</TableCell>
                 <TableCell align="right">Quantity</TableCell>
                 <TableCell>Unit</TableCell>
+                <TableCell align="right">Cost Price</TableCell>
                 <TableCell align="right">Selling Price</TableCell>
                 <TableCell>Barcode</TableCell>
                 <TableCell width={160}>Last Updated</TableCell>
-                <TableCell width={100} align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -1771,6 +1740,11 @@ function BarStockView({ branchId }: { branchId: string }) {
                   </TableCell>
                   <TableCell>{item.unit}</TableCell>
                   <TableCell align="right">
+                    <Typography color="text.secondary">
+                      {item.cost_per_unit ? formatCurrency(item.cost_per_unit, 'USD') : '—'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
                     <Typography fontWeight={600} color="primary.main">
                       {item.selling_price ? formatCurrency(item.selling_price, 'USD') : '—'}
                     </Typography>
@@ -1780,11 +1754,6 @@ function BarStockView({ branchId }: { branchId: string }) {
                     <Typography variant="caption" color="text.secondary">
                       {new Date(item.updated_at).toLocaleString()}
                     </Typography>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Tooltip title="Edit Price / Barcode">
-                      <IconButton size="small" onClick={() => openEdit(item)}><EditIcon fontSize="small" /></IconButton>
-                    </Tooltip>
                   </TableCell>
                 </TableRow>
               ))}
@@ -1801,29 +1770,6 @@ function BarStockView({ branchId }: { branchId: string }) {
           rowsPerPageOptions={[10, 25, 50]}
         />
       )}
-
-      {/* Edit Price / Barcode Dialog */}
-      <Dialog open={!!editDialog} onClose={() => setEditDialog(null)} maxWidth="xs" fullWidth>
-        <DialogTitle>Edit {editDialog?.item_name}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField
-              fullWidth label="Selling Price" type="number" size="small"
-              value={editPrice} onChange={(e) => setEditPrice(e.target.value)}
-              inputProps={{ min: 0, step: 0.01 }}
-            />
-            <TextField
-              fullWidth label="Barcode" size="small"
-              value={editBarcode} onChange={(e) => setEditBarcode(e.target.value)}
-              placeholder="Scan or enter barcode"
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setEditDialog(null)}>Cancel</Button>
-          <Button variant="contained" onClick={handleEditSave} disabled={editSaving}>Save</Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 }
