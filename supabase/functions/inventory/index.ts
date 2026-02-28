@@ -874,6 +874,35 @@ async function disburseIngredientRequest(req: Request, supabase: any, auth: Auth
 
   const department = request.station ?? 'kitchen';
 
+  // ── Pre-validation: ensure every item has sufficient stock before mutating ──
+  const stockErrors: string[] = [];
+  for (const item of body.items) {
+    if (!item.id || item.quantity_disbursed == null) continue;
+
+    const { data: reqItem } = await service
+      .from('ingredient_request_items')
+      .select('inventory_item_id, quantity_requested')
+      .eq('id', item.id)
+      .single();
+    if (!reqItem) continue;
+
+    const { data: invItem } = await service
+      .from('inventory_items')
+      .select('id, name, quantity, unit')
+      .eq('id', reqItem.inventory_item_id)
+      .single();
+    if (!invItem) continue;
+
+    if (Number(item.quantity_disbursed) > Number(invItem.quantity)) {
+      stockErrors.push(
+        `"${invItem.name}": requested ${item.quantity_disbursed} ${invItem.unit ?? ''}, only ${invItem.quantity} ${invItem.unit ?? ''} in stock`.trim()
+      );
+    }
+  }
+  if (stockErrors.length > 0) {
+    return errorResponse(`Insufficient stock:\n${stockErrors.join('\n')}`, 400);
+  }
+
   // Process each item: update disbursed quantity, deduct from inventory, log movement
   for (const item of body.items) {
     if (!item.id || item.quantity_disbursed == null) continue;
@@ -904,7 +933,7 @@ async function disburseIngredientRequest(req: Request, supabase: any, auth: Auth
     if (!invItem) continue;
 
     const qtyBefore = Number(invItem.quantity);
-    const qtyAfter = Math.max(0, qtyBefore - Number(item.quantity_disbursed));
+    const qtyAfter = qtyBefore - Number(item.quantity_disbursed);
 
     await service
       .from('inventory_items')
