@@ -735,7 +735,7 @@ async function listAvailableMeals(req: Request, supabase: any, auth: AuthContext
 
   let query = supabase
     .from('available_meals')
-    .select('*, menu_items(name, description, image_url, media_url, media_type, base_price, calories, allergens, tags, station, preparation_time_min)', { count: 'exact' })
+    .select('*, menu_items(name, description, image_url, media_url, media_type, base_price, calories, allergens, tags, station, preparation_time_min, menu_item_ingredients(id, name, quantity_used, unit, cost_contribution), menu_item_extras(id, name, price, is_available))', { count: 'exact' })
     .eq('branch_id', branchId);
 
   if (statusFilter) query = query.eq('availability_status', statusFilter);

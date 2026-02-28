@@ -83,6 +83,18 @@ function BarContent() {
    Search/scan bar store items + available meals, select table, seaters
    ═══════════════════════════════════════════════════════ */
 
+interface CartIngredient {
+  name: string;
+  quantity_used?: number;
+  unit?: string;
+  cost_contribution?: number;
+}
+
+interface CartExtra {
+  name: string;
+  price: number;
+}
+
 interface BarCartItem {
   id: string;
   name: string;
@@ -92,6 +104,8 @@ interface BarCartItem {
   bar_store_item_id?: string;
   menu_item_id?: string;
   max_qty?: number;
+  ingredients?: CartIngredient[];
+  extras?: CartExtra[];
 }
 
 function CreateOrderTab({ branchId, currency }: { branchId: string; currency: string }) {
@@ -277,6 +291,8 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         source: c.source,
         bar_store_item_id: c.bar_store_item_id,
         menu_item_id: c.menu_item_id,
+        ingredients: c.ingredients ?? [],
+        extras: c.extras ?? [],
       }));
 
       const data = await api<{ order_id: string; order_number: string; total: number }>('bar', 'create-order', {
@@ -373,6 +389,16 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                     quantity: 1,
                     source: 'menu',
                     menu_item_id: meal.menu_item_id,
+                    ingredients: (meal.menu_items?.menu_item_ingredients ?? []).map((ig) => ({
+                      name: ig.name ?? 'Unknown',
+                      quantity_used: ig.quantity_used,
+                      unit: ig.unit,
+                      cost_contribution: ig.cost_contribution,
+                    })),
+                    extras: (meal.menu_items?.menu_item_extras ?? []).filter((ex) => ex.is_available).map((ex) => ({
+                      name: ex.name,
+                      price: ex.price,
+                    })),
                   })}
                 >
                   <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
@@ -1153,7 +1179,11 @@ function OrderDetailDialog({
               const isBarStore = item.menu_item_id === ZERO_UUID || (!item.menu_item_id);
               const extras = Array.isArray(item.selected_extras) ? item.selected_extras : [];
               const removed = Array.isArray(item.removed_ingredients) ? item.removed_ingredients : [];
-              const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+              // Ingredients: prefer backend-enriched `item.ingredients`, fallback to `item.modifiers` (stored at creation)
+              const rawIngredients = Array.isArray(item.ingredients) && item.ingredients.length > 0
+                ? item.ingredients
+                : Array.isArray(item.modifiers) ? item.modifiers : [];
+              const ingredients = rawIngredients.filter((ig: any) => ig && (ig.name || ig.ingredient_name));
               const extrasTotal = extras.reduce((s: number, ex: any) => s + (typeof ex === 'object' && ex.price ? Number(ex.price) : 0), 0);
 
               return (

@@ -179,6 +179,8 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
         unit_price: unitPrice,
         source: 'bar_store',
         bar_store_item_id: storeItem.id,
+        ingredients: [],
+        extras: [],
       });
 
       saleRecords.push({
@@ -214,6 +216,8 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
         unit_price: item.unit_price ?? 0,
         menu_item_id: item.menu_item_id,
         source: 'menu',
+        ingredients: item.ingredients ?? [],
+        extras: item.extras ?? [],
       });
     }
   }
@@ -248,7 +252,7 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
 
   if (orderErr) return errorResponse(orderErr.message);
 
-  // Insert order items
+  // Insert order items — store ingredients in modifiers and extras in selected_extras
   const orderItemRows = orderItems.map((it) => ({
     order_id: order.id,
     menu_item_id: it.menu_item_id ?? '00000000-0000-0000-0000-000000000000',
@@ -258,6 +262,8 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
     item_total: it.unit_price * it.quantity,
     station: 'bar' as const,
     status: 'pending' as const,
+    modifiers: JSON.stringify(it.ingredients ?? []),
+    selected_extras: JSON.stringify(it.extras ?? []),
   }));
 
   await service.from('order_items').insert(orderItemRows);

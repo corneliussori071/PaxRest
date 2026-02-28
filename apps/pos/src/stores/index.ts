@@ -157,12 +157,33 @@ export const useMenuStore = create<MenuState & MenuActions>((set, get) => ({
    Available Meals Store — kitchen-prepared meals
    ═══════════════════════════════════════════════════ */
 
+export interface MealIngredient {
+  id: string;
+  name: string;
+  quantity_used: number;
+  unit: string;
+  cost_contribution: number;
+}
+
+export interface MealExtra {
+  id: string;
+  name: string;
+  price: number;
+  is_available: boolean;
+}
+
 export interface AvailableMeal {
   id: string;
   menu_item_id: string;
   menu_item_name?: string;
   quantity_available: number;
-  menu_items?: { name: string; base_price: number; media_url?: string };
+  menu_items?: {
+    name: string;
+    base_price: number;
+    media_url?: string;
+    menu_item_ingredients?: MealIngredient[];
+    menu_item_extras?: MealExtra[];
+  };
 }
 
 interface AvailableMealsState {
