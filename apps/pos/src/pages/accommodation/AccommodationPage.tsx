@@ -60,6 +60,7 @@ function AccommodationContent() {
     { label: 'Pending Payment',   perm: 'accom_pending_payment', icon: <CheckCircleIcon /> },
     { label: 'Create Rooms',      perm: 'accom_create_rooms',    icon: <MeetingRoomIcon /> },
     { label: 'Request for Items', perm: 'accom_request_items',   icon: <RestaurantIcon /> },
+    { label: 'Guests',            perm: 'accom_guests',          icon: <PeopleIcon /> },
   ];
 
   const visibleTabs = ALL_TABS.filter((t) => userPerms.includes(t.perm));
@@ -78,6 +79,7 @@ function AccommodationContent() {
       {tabs[tab]?.label === 'Pending Payment' && <PendingPaymentTab branchId={activeBranchId!} currency={currency} />}
       {tabs[tab]?.label === 'Create Rooms' && <CreateRoomsTab branchId={activeBranchId!} currency={currency} />}
       {tabs[tab]?.label === 'Request for Items' && <RequestForItemsTab branchId={activeBranchId!} />}
+      {tabs[tab]?.label === 'Guests' && <GuestsTab branchId={activeBranchId!} currency={currency} />}
     </Box>
   );
 }
@@ -615,28 +617,30 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           onChange={(e) => setCustomerName(e.target.value)}
         />
 
-        {/* Room assignment (optional — tags the whole order to a room) */}
-        <FormControl size="small" fullWidth sx={{ mb: 1 }}>
-          <InputLabel>Assign to Room (optional)</InputLabel>
-          <Select
-            value={selectedRoomId}
-            label="Assign to Room (optional)"
-            onChange={(e) => setSelectedRoomId(e.target.value)}
-          >
-            <MuiMenuItem value=""><em>None</em></MuiMenuItem>
-            {rooms.map((r) => (
-              <MuiMenuItem key={r.id} value={r.id}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <MeetingRoomIcon fontSize="small" />
-                  <span>Room {r.room_number}</span>
-                  {r.status !== 'available' && (
-                    <Chip size="small" label={r.status} color="error" sx={{ ml: 0.5 }} />
-                  )}
-                </Stack>
-              </MuiMenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        {/* Room assignment — only shown when NO room item is in the cart */}
+        {!cart.some((c) => c.source === 'room') && (
+          <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+            <InputLabel>Assign to Room (optional)</InputLabel>
+            <Select
+              value={selectedRoomId}
+              label="Assign to Room (optional)"
+              onChange={(e) => setSelectedRoomId(e.target.value)}
+            >
+              <MuiMenuItem value=""><em>None</em></MuiMenuItem>
+              {rooms.map((r) => (
+                <MuiMenuItem key={r.id} value={r.id}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <MeetingRoomIcon fontSize="small" />
+                    <span>Room {r.room_number}</span>
+                    {r.status !== 'available' && (
+                      <Chip size="small" label={r.status} color="error" sx={{ ml: 0.5 }} />
+                    )}
+                  </Stack>
+                </MuiMenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
 
         {/* Table assignment (optional — only available tables shown) */}
         <FormControl size="small" fullWidth sx={{ mb: 1 }}>
@@ -2820,6 +2824,657 @@ function AccomMovementsView({ branchId }: { branchId: string }) {
           rowsPerPageOptions={[10, 25, 50]}
         />
       )}
+    </Box>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tab: Guests
+   Sub-tabs: Check-In (pending_checkin) | In-Stay (checked_in)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function GuestsTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const fmt = (v: number) => formatCurrency(v, currency);
+  const [subTab, setSubTab] = useState<'checkin' | 'instay'>('checkin');
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={0} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}>
+        <Button
+          variant="text"
+          onClick={() => setSubTab('checkin')}
+          startIcon={<HotelIcon />}
+          sx={{
+            borderBottom: subTab === 'checkin' ? '2px solid' : '2px solid transparent',
+            borderColor: subTab === 'checkin' ? 'primary.main' : 'transparent',
+            borderRadius: 0, px: 2, py: 0.75,
+            color: subTab === 'checkin' ? 'primary.main' : 'text.secondary',
+            fontWeight: subTab === 'checkin' ? 700 : 400,
+          }}
+        >
+          Check-In
+        </Button>
+        <Button
+          variant="text"
+          onClick={() => setSubTab('instay')}
+          startIcon={<PeopleIcon />}
+          sx={{
+            borderBottom: subTab === 'instay' ? '2px solid' : '2px solid transparent',
+            borderColor: subTab === 'instay' ? 'success.main' : 'transparent',
+            borderRadius: 0, px: 2, py: 0.75,
+            color: subTab === 'instay' ? 'success.main' : 'text.secondary',
+            fontWeight: subTab === 'instay' ? 700 : 400,
+          }}
+        >
+          In-Stay
+        </Button>
+      </Stack>
+
+      {subTab === 'checkin' && <CheckInSubTab branchId={branchId} />}
+      {subTab === 'instay' && <InStaySubTab branchId={branchId} fmt={fmt} />}
+    </Box>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+   Check-In Sub-Tab
+   Lists pending_checkin guest bookings; staff can check in guests
+   ───────────────────────────────────────────────────────── */
+function CheckInSubTab({ branchId }: { branchId: string }) {
+  const [bookings, setBookings] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Dialog state
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<any>(null);
+  const [actualCheckIn, setActualCheckIn] = useState('');
+  const [numOccupants, setNumOccupants] = useState(1);
+  const [ciNotes, setCiNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchBookings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api<{ bookings: any[]; total: number }>('accommodation', 'list-pending-checkins', {
+        params: { page: String(page + 1), page_size: String(pageSize), search },
+        branchId,
+      });
+      setBookings(data.bookings ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err: any) { toast.error(err.message); }
+    finally { setLoading(false); }
+  }, [branchId, page, pageSize, search]);
+
+  useEffect(() => { fetchBookings(); }, [fetchBookings]);
+  useRealtime('guest_bookings', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchBookings());
+
+  const openDialog = (booking: any) => {
+    setSelectedBooking(booking);
+    const defaultCheckIn = booking.scheduled_check_in
+      ? new Date(booking.scheduled_check_in).toISOString().slice(0, 16)
+      : new Date().toISOString().slice(0, 16);
+    setActualCheckIn(defaultCheckIn);
+    setNumOccupants(booking.num_occupants ?? 1);
+    setCiNotes(booking.notes ?? '');
+    setDialogOpen(true);
+  };
+
+  const handleCheckIn = async () => {
+    if (!selectedBooking) return;
+    setSubmitting(true);
+    try {
+      await api('accommodation', 'checkin-guest', {
+        body: {
+          booking_id: selectedBooking.id,
+          actual_check_in: actualCheckIn ? new Date(actualCheckIn).toISOString() : undefined,
+          num_occupants: numOccupants,
+          notes: ciNotes || undefined,
+        },
+        branchId,
+      });
+      toast.success(`${selectedBooking.customer_name} checked in to Room ${selectedBooking.room_number}`);
+      setDialogOpen(false);
+      fetchBookings();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
+        <TextField
+          size="small" placeholder="Search guest or room…" value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+          slotProps={{ input: { startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
+          sx={{ width: 280 }}
+        />
+        <Typography variant="body2" color="text.secondary">{total} pending check-in{total !== 1 ? 's' : ''}</Typography>
+      </Stack>
+
+      {loading ? <LinearProgress /> : (
+        <>
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Guest</TableCell>
+                  <TableCell>Order #</TableCell>
+                  <TableCell>Room</TableCell>
+                  <TableCell>Occupants</TableCell>
+                  <TableCell>Scheduled Check-In</TableCell>
+                  <TableCell>Scheduled Departure</TableCell>
+                  <TableCell>Duration</TableCell>
+                  <TableCell align="right">Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {bookings.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} align="center">
+                      <Typography color="text.secondary" sx={{ py: 3 }}>No pending check-ins</Typography>
+                    </TableCell>
+                  </TableRow>
+                ) : bookings.map((b) => (
+                  <TableRow key={b.id} hover>
+                    <TableCell>
+                      <Typography variant="body2" fontWeight={600}>{b.customer_name ?? 'Walk In Customer'}</Typography>
+                    </TableCell>
+                    <TableCell><Typography variant="body2">{b.order_number ?? '—'}</Typography></TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <MeetingRoomIcon fontSize="small" color="info" />
+                        <Typography variant="body2" fontWeight={600}>Room {b.room_number}</Typography>
+                        {b.rooms?.category && (
+                          <Chip size="small" label={b.rooms.category} variant="outlined" sx={{ fontSize: 10 }} />
+                        )}
+                      </Stack>
+                    </TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <PeopleIcon fontSize="small" />
+                        <Typography variant="body2">{b.num_occupants}</Typography>
+                      </Stack>
+                    </TableCell>
+                    <TableCell>
+                      {b.scheduled_check_in
+                        ? <><Typography variant="body2">{new Date(b.scheduled_check_in).toLocaleDateString()}</Typography>
+                            <Typography variant="caption" color="text.secondary">{new Date(b.scheduled_check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Typography></>
+                        : <Typography variant="body2" color="text.secondary">—</Typography>}
+                    </TableCell>
+                    <TableCell>
+                      {b.scheduled_check_out
+                        ? <><Typography variant="body2">{new Date(b.scheduled_check_out).toLocaleDateString()}</Typography>
+                            <Typography variant="caption" color="text.secondary">{new Date(b.scheduled_check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Typography></>
+                        : <Typography variant="body2" color="text.secondary">—</Typography>}
+                    </TableCell>
+                    <TableCell>
+                      {b.duration_count ? (
+                        <Typography variant="body2">{b.duration_count} {b.duration_unit}{b.duration_count !== 1 ? 's' : ''}</Typography>
+                      ) : '—'}
+                    </TableCell>
+                    <TableCell align="right">
+                      <Button
+                        size="small" variant="contained" color="success"
+                        startIcon={<CheckCircleIcon />}
+                        onClick={() => openDialog(b)}
+                      >
+                        Check In
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+
+          {total > pageSize && (
+            <TablePagination
+              component="div" count={total} page={page} rowsPerPage={pageSize}
+              onPageChange={(_, p) => setPage(p)}
+              onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
+              rowsPerPageOptions={[10, 25, 50]}
+            />
+          )}
+        </>
+      )}
+
+      {/* Check-In Dialog */}
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CheckCircleIcon color="success" />
+          Check In — {selectedBooking?.customer_name ?? 'Guest'}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <MeetingRoomIcon color="info" />
+              <Typography fontWeight={600}>Room {selectedBooking?.room_number}</Typography>
+              {selectedBooking?.rooms?.category && (
+                <Chip size="small" label={selectedBooking.rooms.category} />
+              )}
+            </Stack>
+            <TextField
+              label="Actual Check-In Date & Time"
+              type="datetime-local"
+              fullWidth size="small"
+              value={actualCheckIn}
+              onChange={(e) => setActualCheckIn(e.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+            />
+            <TextField
+              label="Number of Occupants"
+              type="number"
+              fullWidth size="small"
+              value={numOccupants}
+              onChange={(e) => setNumOccupants(Math.max(1, Number(e.target.value)))}
+              slotProps={{ htmlInput: { min: 1 } }}
+            />
+            <TextField
+              label="Notes (optional)"
+              fullWidth size="small"
+              multiline rows={2}
+              value={ciNotes}
+              onChange={(e) => setCiNotes(e.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+          <Button variant="contained" color="success" disabled={submitting} onClick={handleCheckIn}>
+            {submitting ? 'Checking In…' : 'Confirm Check-In'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+   In-Stay Sub-Tab
+   Lists checked_in guest bookings with countdown timers,
+   actions: Transfer, Depart, Extend Stay
+   ───────────────────────────────────────────────────────── */
+function InStaySubTab({ branchId, fmt }: { branchId: string; fmt: (v: number) => string }) {
+  const [bookings, setBookings] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  const [departDialog, setDepartDialog] = useState<any>(null);
+  const [departCheckOut, setDepartCheckOut] = useState('');
+  const [departNotes, setDepartNotes] = useState('');
+  const [departLoading, setDepartLoading] = useState(false);
+
+  const [transferDialog, setTransferDialog] = useState<any>(null);
+  const [allRooms, setAllRooms] = useState<any[]>([]);
+  const [transferRoomId, setTransferRoomId] = useState('');
+  const [transferNotes, setTransferNotes] = useState('');
+  const [transferLoading, setTransferLoading] = useState(false);
+
+  const [extendDialog, setExtendDialog] = useState<any>(null);
+  const [extendCount, setExtendCount] = useState(1);
+  const [extendUnit, setExtendUnit] = useState('night');
+  const [extendNewCheckOut, setExtendNewCheckOut] = useState('');
+  const [extendNotes, setExtendNotes] = useState('');
+  const [extendLoading, setExtendLoading] = useState(false);
+
+  // Clock tick every minute for countdown
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  const fetchBookings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api<{ bookings: any[]; total: number }>('accommodation', 'list-instay', {
+        params: { page: String(page + 1), page_size: String(pageSize), search },
+        branchId,
+      });
+      setBookings(data.bookings ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err: any) { toast.error(err.message); }
+    finally { setLoading(false); }
+  }, [branchId, page, pageSize, search]);
+
+  useEffect(() => { fetchBookings(); }, [fetchBookings]);
+  useRealtime('guest_bookings', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchBookings());
+
+  useEffect(() => {
+    api<{ rooms: any[] }>('accommodation', 'list-rooms', {
+      params: { page: '1', page_size: '200' },
+      branchId,
+    }).then((d) => setAllRooms(d.rooms ?? [])).catch(() => {});
+  }, [branchId]);
+
+  const countdown = (checkOutStr: string | null) => {
+    if (!checkOutStr) return null;
+    const diff = new Date(checkOutStr).getTime() - now;
+    if (diff <= 0) return { label: 'Overdue', color: 'error' as const };
+    const totalMins = Math.floor(diff / 60000);
+    const days = Math.floor(totalMins / 1440);
+    const hrs = Math.floor((totalMins % 1440) / 60);
+    const mins = totalMins % 60;
+    if (days > 0) return { label: `${days}d ${hrs}h`, color: 'success' as const };
+    if (hrs > 0) return { label: `${hrs}h ${mins}m`, color: hrs < 2 ? 'warning' as const : 'success' as const };
+    return { label: `${mins}m`, color: 'error' as const };
+  };
+
+  const openDepartDialog = (b: any) => {
+    setDepartDialog(b);
+    setDepartCheckOut(new Date().toISOString().slice(0, 16));
+    setDepartNotes('');
+  };
+  const handleDepart = async () => {
+    if (!departDialog) return;
+    setDepartLoading(true);
+    try {
+      await api('accommodation', 'depart-guest', {
+        body: {
+          booking_id: departDialog.id,
+          actual_check_out: departCheckOut ? new Date(departCheckOut).toISOString() : undefined,
+          notes: departNotes || undefined,
+        },
+        branchId,
+      });
+      toast.success(`${departDialog.customer_name} departed Room ${departDialog.room_number}`);
+      setDepartDialog(null);
+      fetchBookings();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setDepartLoading(false); }
+  };
+
+  const openTransferDialog = (b: any) => {
+    setTransferDialog(b);
+    setTransferRoomId('');
+    setTransferNotes('');
+  };
+  const handleTransfer = async () => {
+    if (!transferDialog || !transferRoomId) return;
+    setTransferLoading(true);
+    try {
+      await api('accommodation', 'transfer-guest', {
+        body: {
+          booking_id: transferDialog.id,
+          new_room_id: transferRoomId,
+          notes: transferNotes || undefined,
+        },
+        branchId,
+      });
+      const newRoom = allRooms.find((r) => r.id === transferRoomId);
+      toast.success(`${transferDialog.customer_name} transferred to Room ${newRoom?.room_number ?? 'new room'}`);
+      setTransferDialog(null);
+      fetchBookings();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setTransferLoading(false); }
+  };
+
+  const openExtendDialog = (b: any) => {
+    setExtendDialog(b);
+    setExtendCount(1);
+    setExtendUnit(b.rooms?.cost_duration ?? b.duration_unit ?? 'night');
+    setExtendNewCheckOut('');
+    setExtendNotes('');
+  };
+  const handleExtend = async () => {
+    if (!extendDialog) return;
+    setExtendLoading(true);
+    try {
+      await api('accommodation', 'extend-stay', {
+        body: {
+          booking_id: extendDialog.id,
+          duration_count: extendCount,
+          duration_unit: extendUnit,
+          new_check_out: extendNewCheckOut ? new Date(extendNewCheckOut).toISOString() : undefined,
+          notes: extendNotes || undefined,
+        },
+        branchId,
+      });
+      toast.success(`Stay extended — ${extendCount} ${extendUnit}(s). New order created for payment.`);
+      setExtendDialog(null);
+      fetchBookings();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setExtendLoading(false); }
+  };
+
+  const availableRooms = allRooms.filter((r) => r.status === 'available');
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={1} sx={{ mb: 2 }} alignItems="center">
+        <TextField
+          size="small" placeholder="Search guest or room…" value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+          slotProps={{ input: { startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
+          sx={{ width: 280 }}
+        />
+        <Typography variant="body2" color="text.secondary">{total} guest{total !== 1 ? 's' : ''} in-stay</Typography>
+      </Stack>
+
+      {loading ? <LinearProgress /> : (
+        <>
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Guest</TableCell>
+                  <TableCell>Room</TableCell>
+                  <TableCell>Checked In</TableCell>
+                  <TableCell>Departure</TableCell>
+                  <TableCell>Time Left</TableCell>
+                  <TableCell>Occupants</TableCell>
+                  <TableCell align="right">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {bookings.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} align="center">
+                      <Typography color="text.secondary" sx={{ py: 3 }}>No guests currently in-stay</Typography>
+                    </TableCell>
+                  </TableRow>
+                ) : bookings.map((b) => {
+                  const cd = countdown(b.scheduled_check_out);
+                  return (
+                    <TableRow key={b.id} hover>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={600}>{b.customer_name ?? 'Walk In Customer'}</Typography>
+                        <Typography variant="caption" color="text.secondary">{b.order_number ?? ''}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={0.5} alignItems="center">
+                          <MeetingRoomIcon fontSize="small" color="info" />
+                          <Typography variant="body2" fontWeight={600}>Room {b.room_number}</Typography>
+                        </Stack>
+                        {b.rooms?.category && (
+                          <Chip size="small" label={b.rooms.category} variant="outlined" sx={{ fontSize: 10, mt: 0.3 }} />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {b.actual_check_in
+                          ? <><Typography variant="body2">{new Date(b.actual_check_in).toLocaleDateString()}</Typography>
+                              <Typography variant="caption" color="text.secondary">{new Date(b.actual_check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Typography></>
+                          : <Typography variant="body2" color="text.secondary">—</Typography>}
+                      </TableCell>
+                      <TableCell>
+                        {b.scheduled_check_out
+                          ? <><Typography variant="body2">{new Date(b.scheduled_check_out).toLocaleDateString()}</Typography>
+                              <Typography variant="caption" color="text.secondary">{new Date(b.scheduled_check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Typography></>
+                          : <Typography variant="body2" color="text.secondary">Open-ended</Typography>}
+                      </TableCell>
+                      <TableCell>
+                        {b.scheduled_check_out && cd ? (
+                          <Chip size="small" label={cd.label} color={cd.color} />
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">—</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={0.5} alignItems="center">
+                          <PeopleIcon fontSize="small" />
+                          <Typography variant="body2">{b.num_occupants}</Typography>
+                        </Stack>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                          <Button size="small" variant="outlined" color="info" onClick={() => openTransferDialog(b)} sx={{ fontSize: 11 }}>Transfer</Button>
+                          <Button size="small" variant="outlined" color="primary" onClick={() => openExtendDialog(b)} sx={{ fontSize: 11 }}>Extend</Button>
+                          <Button size="small" variant="contained" color="error" startIcon={<ExitToAppIcon />} onClick={() => openDepartDialog(b)} sx={{ fontSize: 11 }}>Depart</Button>
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+
+          {total > pageSize && (
+            <TablePagination
+              component="div" count={total} page={page} rowsPerPage={pageSize}
+              onPageChange={(_, p) => setPage(p)}
+              onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); }}
+              rowsPerPageOptions={[10, 25, 50]}
+            />
+          )}
+        </>
+      )}
+
+      {/* Depart Dialog */}
+      <Dialog open={!!departDialog} onClose={() => setDepartDialog(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ExitToAppIcon color="error" />
+          Depart — {departDialog?.customer_name}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Typography variant="body2">
+              Room <strong>{departDialog?.room_number}</strong> · {departDialog?.num_occupants} occupant{departDialog?.num_occupants !== 1 ? 's' : ''}
+            </Typography>
+            <TextField
+              label="Actual Check-Out Date & Time" type="datetime-local" fullWidth size="small"
+              value={departCheckOut} onChange={(e) => setDepartCheckOut(e.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+            />
+            <TextField
+              label="Notes (optional)" fullWidth size="small" multiline rows={2}
+              value={departNotes} onChange={(e) => setDepartNotes(e.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDepartDialog(null)}>Cancel</Button>
+          <Button variant="contained" color="error" disabled={departLoading} onClick={handleDepart}>
+            {departLoading ? 'Processing…' : 'Confirm Departure'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Transfer Dialog */}
+      <Dialog open={!!transferDialog} onClose={() => setTransferDialog(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <MeetingRoomIcon color="info" />
+          Transfer Room — {transferDialog?.customer_name}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Typography variant="body2">
+              Currently in Room <strong>{transferDialog?.room_number}</strong>
+            </Typography>
+            <FormControl fullWidth size="small">
+              <InputLabel>New Room</InputLabel>
+              <Select value={transferRoomId} label="New Room" onChange={(e) => setTransferRoomId(e.target.value)}>
+                <MuiMenuItem value=""><em>Select a room…</em></MuiMenuItem>
+                {availableRooms.map((r) => (
+                  <MuiMenuItem key={r.id} value={r.id} disabled={r.id === transferDialog?.room_id}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <MeetingRoomIcon fontSize="small" />
+                      <span>Room {r.room_number}</span>
+                      <Chip size="small" label={r.category} variant="outlined" sx={{ fontSize: 10 }} />
+                    </Stack>
+                  </MuiMenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {availableRooms.length === 0 && (
+              <Alert severity="warning">No available rooms for transfer.</Alert>
+            )}
+            <TextField
+              label="Notes (optional)" fullWidth size="small" multiline rows={2}
+              value={transferNotes} onChange={(e) => setTransferNotes(e.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTransferDialog(null)}>Cancel</Button>
+          <Button variant="contained" color="info" disabled={transferLoading || !transferRoomId} onClick={handleTransfer}>
+            {transferLoading ? 'Transferring…' : 'Confirm Transfer'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Extend Stay Dialog */}
+      <Dialog open={!!extendDialog} onClose={() => setExtendDialog(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CalendarTodayIcon color="primary" />
+          Extend Stay — {extendDialog?.customer_name}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Typography variant="body2">
+              Room <strong>{extendDialog?.room_number}</strong>
+              {extendDialog?.rooms?.cost_amount && (
+                <> · {fmt(Number(extendDialog.rooms.cost_amount))}/{extendDialog.rooms.cost_duration}</>
+              )}
+            </Typography>
+            {extendDialog?.rooms?.cost_amount && (
+              <Alert severity="info">
+                Extension total: <strong>{fmt(Number(extendDialog.rooms.cost_amount) * extendCount)}</strong>
+                {' '}({extendCount} {extendUnit}{extendCount !== 1 ? 's' : ''})
+                — a new pending-payment order will be created.
+              </Alert>
+            )}
+            <Stack direction="row" spacing={1}>
+              <TextField
+                label="Duration" type="number" size="small" sx={{ width: 120 }}
+                value={extendCount}
+                onChange={(e) => setExtendCount(Math.max(1, Number(e.target.value)))}
+                slotProps={{ htmlInput: { min: 1 } }}
+              />
+              <FormControl size="small" sx={{ minWidth: 120 }}>
+                <InputLabel>Unit</InputLabel>
+                <Select value={extendUnit} label="Unit" onChange={(e) => setExtendUnit(e.target.value)}>
+                  <MuiMenuItem value="night">Night(s)</MuiMenuItem>
+                  <MuiMenuItem value="day">Day(s)</MuiMenuItem>
+                  <MuiMenuItem value="hour">Hour(s)</MuiMenuItem>
+                </Select>
+              </FormControl>
+            </Stack>
+            <TextField
+              label="New Departure Date & Time (optional)" type="datetime-local" fullWidth size="small"
+              value={extendNewCheckOut} onChange={(e) => setExtendNewCheckOut(e.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+            />
+            <TextField
+              label="Notes (optional)" fullWidth size="small" multiline rows={2}
+              value={extendNotes} onChange={(e) => setExtendNotes(e.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExtendDialog(null)}>Cancel</Button>
+          <Button variant="contained" color="primary" disabled={extendLoading || extendCount < 1} onClick={handleExtend}>
+            {extendLoading ? 'Processing…' : 'Confirm Extension'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

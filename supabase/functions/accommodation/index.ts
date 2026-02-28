@@ -71,6 +71,20 @@ serve(async (req) => {
       case 'free-room':
         return await freeRoom(req, supabase, auth, branchId);
 
+      // ─── Guest lifecycle ───
+      case 'list-pending-checkins':
+        return await listPendingCheckins(req, supabase, auth, branchId);
+      case 'checkin-guest':
+        return await checkinGuest(req, supabase, auth, branchId);
+      case 'list-instay':
+        return await listInstay(req, supabase, auth, branchId);
+      case 'depart-guest':
+        return await departGuest(req, supabase, auth, branchId);
+      case 'transfer-guest':
+        return await transferGuest(req, supabase, auth, branchId);
+      case 'extend-stay':
+        return await extendStay(req, supabase, auth, branchId);
+
       default:
         return errorResponse('Unknown accommodation action', 404);
     }
@@ -487,6 +501,35 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
     await service.from('accom_store_movements').insert(withRef);
   }
 
+  // Create guest_bookings records for any room items (pending_checkin lifecycle)
+  const roomItems = body.items.filter((i: any) => i.source === 'room');
+  for (const roomItem of roomItems) {
+    const bd = roomItem.booking_details ?? {};
+    if (roomItem.room_id) {
+      const { data: room } = await service
+        .from('rooms')
+        .select('room_number')
+        .eq('id', roomItem.room_id)
+        .single();
+
+      await service.from('guest_bookings').insert({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        room_id: roomItem.room_id,
+        room_number: room?.room_number ?? body.linked_room_number ?? '',
+        order_id: order.id,
+        order_number: order.order_number,
+        customer_name: body.customer_name?.trim() || 'Walk In Customer',
+        num_occupants: Number(bd.num_people ?? 1),
+        scheduled_check_in: bd.check_in ?? null,
+        scheduled_check_out: bd.check_out ?? null,
+        duration_count: Number(bd.duration_count ?? 1),
+        duration_unit: bd.duration_unit ?? 'night',
+        status: 'pending_checkin',
+      });
+    }
+  }
+
   return jsonResponse({
     order_id: order.id,
     order_number: order.order_number,
@@ -721,8 +764,343 @@ async function freeRoom(req: Request, supabase: any, auth: AuthContext, branchId
   return jsonResponse({ room: data });
 }
 
-async function listAccomStaff(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+/* ═══════════════════════════════════════════════════════════════════════════
+   Guest Lifecycle Management
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+async function listPendingCheckins(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+  const url = new URL(req.url);
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+  const search = url.searchParams.get('search') ?? '';
+
+  const service = createServiceClient();
+  let query = service
+    .from('guest_bookings')
+    .select('*, rooms(room_number, category, floor_section, max_occupants)', { count: 'exact' })
+    .eq('branch_id', branchId)
+    .eq('status', 'pending_checkin');
+
+  if (search) {
+    query = query.or(`customer_name.ilike.%${search}%,room_number.ilike.%${search}%,order_number.ilike.%${search}%`);
+  }
+
+  query = applyPagination(query, page, pageSize, 'created_at', false);
+  const { data, count, error } = await query;
+  if (error) return errorResponse(error.message);
+
+  return jsonResponse({ bookings: data ?? [], total: count ?? 0, page, pageSize });
+}
+
+async function checkinGuest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.booking_id) return errorResponse('Missing booking_id');
+
+  const service = createServiceClient();
+
+  // Load the booking
+  const { data: booking, error: bErr } = await service
+    .from('guest_bookings')
+    .select('*')
+    .eq('id', body.booking_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (bErr || !booking) return errorResponse('Booking not found', 404);
+  if (booking.status !== 'pending_checkin') return errorResponse(`Cannot check in — booking is already ${booking.status}`);
+
+  const actualCheckIn = body.actual_check_in ?? new Date().toISOString();
+  const numOccupants = Number(body.num_occupants ?? booking.num_occupants);
+
+  // Update booking to checked_in
+  const { data: updated, error: uErr } = await service
+    .from('guest_bookings')
+    .update({
+      status: 'checked_in',
+      actual_check_in: actualCheckIn,
+      num_occupants: numOccupants,
+      notes: body.notes ?? booking.notes,
+      checked_in_by: auth.userId,
+      checked_in_by_name: auth.name,
+      checked_in_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', body.booking_id)
+    .eq('branch_id', branchId)
+    .select()
+    .single();
+  if (uErr) return errorResponse(uErr.message);
+
+  // Ensure room is marked occupied with correct occupant count
+  await service
+    .from('rooms')
+    .update({ status: 'occupied', current_occupants: numOccupants, updated_at: new Date().toISOString() })
+    .eq('id', booking.room_id)
+    .eq('branch_id', branchId);
+
+  return jsonResponse({ booking: updated });
+}
+
+async function listInstay(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+  const url = new URL(req.url);
+  const { page, pageSize } = validatePagination({
+    page: Number(url.searchParams.get('page')),
+    page_size: Number(url.searchParams.get('page_size')),
+  });
+  const search = url.searchParams.get('search') ?? '';
+
+  const service = createServiceClient();
+  let query = service
+    .from('guest_bookings')
+    .select('*, rooms(room_number, category, floor_section, max_occupants, cost_amount, cost_duration)', { count: 'exact' })
+    .eq('branch_id', branchId)
+    .eq('status', 'checked_in');
+
+  if (search) {
+    query = query.or(`customer_name.ilike.%${search}%,room_number.ilike.%${search}%,order_number.ilike.%${search}%`);
+  }
+
+  query = applyPagination(query, page, pageSize, 'checked_in_at', false);
+  const { data, count, error } = await query;
+  if (error) return errorResponse(error.message);
+
+  return jsonResponse({ bookings: data ?? [], total: count ?? 0, page, pageSize });
+}
+
+async function departGuest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.booking_id) return errorResponse('Missing booking_id');
+
+  const service = createServiceClient();
+
+  const { data: booking, error: bErr } = await service
+    .from('guest_bookings')
+    .select('*')
+    .eq('id', body.booking_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (bErr || !booking) return errorResponse('Booking not found', 404);
+  if (booking.status !== 'checked_in') return errorResponse(`Cannot depart — booking status is ${booking.status}`);
+
+  const actualCheckOut = body.actual_check_out ?? new Date().toISOString();
+
+  // Update booking to departed
+  const { data: updated, error: uErr } = await service
+    .from('guest_bookings')
+    .update({
+      status: 'departed',
+      actual_check_out: actualCheckOut,
+      departed_by: auth.userId,
+      departed_by_name: auth.name,
+      departed_at: new Date().toISOString(),
+      notes: body.notes ?? booking.notes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', body.booking_id)
+    .eq('branch_id', branchId)
+    .select()
+    .single();
+  if (uErr) return errorResponse(uErr.message);
+
+  // Free the room — deduct all occupants
+  const { data: room } = await service
+    .from('rooms')
+    .select('current_occupants')
+    .eq('id', booking.room_id)
+    .single();
+
+  const newOccupants = Math.max(0, Number(room?.current_occupants ?? 0) - Number(booking.num_occupants));
+  await service
+    .from('rooms')
+    .update({
+      current_occupants: newOccupants,
+      status: newOccupants === 0 ? 'available' : 'occupied',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', booking.room_id)
+    .eq('branch_id', branchId);
+
+  return jsonResponse({ booking: updated });
+}
+
+async function transferGuest(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.booking_id) return errorResponse('Missing booking_id');
+  if (!body.new_room_id) return errorResponse('Missing new_room_id');
+
+  const service = createServiceClient();
+
+  const { data: booking, error: bErr } = await service
+    .from('guest_bookings')
+    .select('*')
+    .eq('id', body.booking_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (bErr || !booking) return errorResponse('Booking not found', 404);
+  if (booking.status !== 'checked_in') return errorResponse(`Can only transfer checked-in guests (current: ${booking.status})`);
+
+  // Load new room
+  const { data: newRoom, error: rErr } = await service
+    .from('rooms')
+    .select('id, room_number, status, current_occupants, max_occupants')
+    .eq('id', body.new_room_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (rErr || !newRoom) return errorResponse('New room not found', 404);
+  if (newRoom.status !== 'available') return errorResponse(`Room ${newRoom.room_number} is not available`);
+
+  // Free old room
+  const { data: oldRoom } = await service
+    .from('rooms')
+    .select('current_occupants, room_number')
+    .eq('id', booking.room_id)
+    .single();
+
+  const oldNewOccupants = Math.max(0, Number(oldRoom?.current_occupants ?? 0) - Number(booking.num_occupants));
+  await service.from('rooms').update({
+    current_occupants: oldNewOccupants,
+    status: oldNewOccupants === 0 ? 'available' : 'occupied',
+    updated_at: new Date().toISOString(),
+  }).eq('id', booking.room_id).eq('branch_id', branchId);
+
+  // Occupy new room
+  await service.from('rooms').update({
+    current_occupants: Number(booking.num_occupants),
+    status: 'occupied',
+    updated_at: new Date().toISOString(),
+  }).eq('id', body.new_room_id).eq('branch_id', branchId);
+
+  // Build new transfer history entry
+  const historyEntry = {
+    from_room_id: booking.room_id,
+    from_room_number: oldRoom?.room_number ?? booking.room_number,
+    to_room_id: newRoom.id,
+    to_room_number: newRoom.room_number,
+    transferred_by_name: auth.name,
+    at: new Date().toISOString(),
+    notes: body.notes ?? null,
+  };
+  const updatedHistory = [...(booking.transfer_history ?? []), historyEntry];
+
+  // Update booking
+  const { data: updated, error: uErr } = await service
+    .from('guest_bookings')
+    .update({
+      room_id: newRoom.id,
+      room_number: newRoom.room_number,
+      transfer_history: updatedHistory,
+      notes: body.notes ?? booking.notes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', body.booking_id)
+    .eq('branch_id', branchId)
+    .select()
+    .single();
+  if (uErr) return errorResponse(uErr.message);
+
+  return jsonResponse({ booking: updated });
+}
+
+async function extendStay(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.booking_id) return errorResponse('Missing booking_id');
+  if (!body.duration_count || Number(body.duration_count) < 1) return errorResponse('duration_count must be at least 1');
+
+  const service = createServiceClient();
+
+  // Load current booking
+  const { data: booking, error: bErr } = await service
+    .from('guest_bookings')
+    .select('*')
+    .eq('id', body.booking_id)
+    .eq('branch_id', branchId)
+    .single();
+  if (bErr || !booking) return errorResponse('Booking not found', 404);
+  if (booking.status !== 'checked_in') return errorResponse(`Can only extend checked-in guests`);
+
+  // Load room for cost info
+  const { data: room } = await service
+    .from('rooms')
+    .select('id, room_number, cost_amount, cost_duration')
+    .eq('id', booking.room_id)
+    .single();
+  if (!room) return errorResponse('Room not found', 404);
+
+  const durationCount = Number(body.duration_count);
+  const durationUnit = body.duration_unit ?? room.cost_duration ?? 'night';
+  const unitPrice = Number(room.cost_amount);
+  const total = unitPrice * durationCount;
+
+  // Create a new extension order (pending → awaiting_payment; no stock changes for room)
+  const { data: order, error: oErr } = await service
+    .from('orders')
+    .insert({
+      company_id: auth.companyId,
+      branch_id: branchId,
+      order_type: 'dine_in',
+      status: 'awaiting_payment',
+      linked_room_id: room.id,
+      linked_room_number: room.room_number,
+      customer_name: booking.customer_name ?? 'Walk In Customer',
+      notes: body.notes ?? `Extension from booking ${booking.order_number}`,
+      source: 'accommodation',
+      department: 'accommodation',
+      subtotal: total,
+      total,
+      discount_amount: 0,
+      created_by: auth.userId,
+      created_by_name: auth.name,
+    })
+    .select('id, order_number')
+    .single();
+  if (oErr) return errorResponse(oErr.message);
+
+  // Create the extension order item
+  await service.from('order_items').insert({
+    order_id: order.id,
+    menu_item_id: '00000000-0000-0000-0000-000000000000',
+    menu_item_name: `Room ${room.room_number} — Extension`,
+    quantity: durationCount,
+    unit_price: unitPrice,
+    item_total: total,
+    station: 'accommodation',
+    status: 'pending',
+    modifiers: [{
+      type: 'booking',
+      num_people: booking.num_occupants,
+      duration_count: durationCount,
+      duration_unit: durationUnit,
+      check_in: body.new_check_in ?? null,
+      check_out: body.new_check_out ?? null,
+      extension_of: booking.order_number,
+    }],
+    selected_extras: [],
+  });
+
+  // Update scheduled_check_out on the current booking if provided
+  if (body.new_check_out) {
+    await service.from('guest_bookings')
+      .update({ scheduled_check_out: body.new_check_out, updated_at: new Date().toISOString() })
+      .eq('id', booking.id);
+  }
+
+  return jsonResponse({
+    extension_order_id: order.id,
+    extension_order_number: order.order_number,
+    total,
+    duration_count: durationCount,
+    duration_unit: durationUnit,
+  }, 201);
+}
+
+async function listAccomStaff(req: Request, supabase: any, auth: AuthContext, branchId: string) {  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
 
   const { data: staff, error } = await supabase
     .from('profiles')
