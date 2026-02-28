@@ -67,6 +67,10 @@ serve(async (req) => {
       case 'barcode-lookup':
         return await barcodeLookup(req, supabase, auth, branchId);
 
+      // ─── Room occupancy ───
+      case 'free-room':
+        return await freeRoom(req, supabase, auth, branchId);
+
       default:
         return errorResponse('Unknown accommodation action', 404);
     }
@@ -303,7 +307,7 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
 
   const body = await req.json();
   if (!body.items || body.items.length === 0) return errorResponse('No items in order');
-  if (!body.customer_name?.trim()) return errorResponse('Customer name is required');
+  // customer_name is optional — defaults to 'Walk In Customer'
 
   const service = createServiceClient();
 
@@ -371,22 +375,41 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
         performed_by_name: auth.name,
       });
     } else if (item.source === 'room') {
-      // Room booking item
+      // Room booking item — capture full booking details
+      const bd = item.booking_details ?? {};
+      const numPeople = Number(bd.num_people ?? 1);
+      const durationCount = Number(bd.duration_count ?? item.quantity ?? 1);
+      const durationUnit = bd.duration_unit ?? 'night';
+      const checkIn = bd.check_in ?? null;
+      const checkOut = bd.check_out ?? null;
+
       orderItems.push({
         name: item.name,
-        quantity: item.quantity ?? 1,
+        quantity: durationCount,
         unit_price: item.unit_price ?? 0,
         source: 'room',
         room_id: item.room_id,
-        ingredients: [],
+        // Store booking metadata in ingredients field (mapped to order_items.modifiers)
+        ingredients: [{
+          type: 'booking',
+          num_people: numPeople,
+          duration_count: durationCount,
+          duration_unit: durationUnit,
+          check_in: checkIn,
+          check_out: checkOut,
+        }],
         extras: [],
       });
 
-      // Mark room as occupied
+      // Mark room as occupied and record current occupant count
       if (item.room_id) {
         await service
           .from('rooms')
-          .update({ status: 'occupied', updated_at: new Date().toISOString() })
+          .update({
+            status: 'occupied',
+            current_occupants: numPeople,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', item.room_id)
           .eq('branch_id', branchId);
       }
@@ -418,6 +441,8 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
       order_type: body.order_type ?? 'dine_in',
       status: 'pending',
       table_id: body.table_id ?? null,
+      linked_room_id: body.linked_room_id ?? null,
+      linked_room_number: body.linked_room_number ?? null,
       customer_name: body.customer_name?.trim() || 'Walk In Customer',
       notes: body.notes ?? null,
       source: 'accommodation',
@@ -654,6 +679,46 @@ async function listInternalMovements(req: Request, supabase: any, auth: AuthCont
   if (error) return errorResponse(error.message);
 
   return jsonResponse({ items: data ?? [], total: count ?? 0, page, pageSize });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Free Room (check-out guests, update occupancy)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+async function freeRoom(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.room_id) return errorResponse('Missing room_id');
+  const peopleLeaving = Number(body.people_leaving);
+  if (!peopleLeaving || peopleLeaving < 1) return errorResponse('people_leaving must be at least 1');
+
+  const service = createServiceClient();
+  const { data: room } = await service
+    .from('rooms')
+    .select('id, current_occupants, max_occupants, room_number, status')
+    .eq('id', body.room_id)
+    .eq('branch_id', branchId)
+    .single();
+
+  if (!room) return errorResponse('Room not found', 404);
+
+  const newOccupants = Math.max(0, Number(room.current_occupants) - peopleLeaving);
+  const newStatus = newOccupants === 0 ? 'available' : 'occupied';
+
+  const { data, error } = await service
+    .from('rooms')
+    .update({
+      current_occupants: newOccupants,
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', body.room_id)
+    .eq('branch_id', branchId)
+    .select()
+    .single();
+
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ room: data });
 }
 
 async function listAccomStaff(req: Request, supabase: any, auth: AuthContext, branchId: string) {

@@ -31,6 +31,9 @@ import InventoryIcon from '@mui/icons-material/Inventory';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import BedroomParentIcon from '@mui/icons-material/BedroomParent';
+import TableRestaurantIcon from '@mui/icons-material/TableRestaurant';
+import PeopleIcon from '@mui/icons-material/People';
+import ExitToAppIcon from '@mui/icons-material/ExitToApp';
 import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_STATUS_COLORS } from '@paxrest/shared-utils';
 import type { IngredientRequestStatus, Permission } from '@paxrest/shared-types';
 import { useApi, usePaginated, useRealtime } from '@/hooks';
@@ -96,6 +99,14 @@ interface CartExtra {
   price: number;
 }
 
+interface BookingDetails {
+  num_people: number;
+  check_in: string;
+  check_out?: string;
+  duration_count: number;
+  duration_unit: string;
+}
+
 interface AccomCartItem {
   id: string;
   name: string;
@@ -108,6 +119,7 @@ interface AccomCartItem {
   max_qty?: number;
   ingredients?: CartIngredient[];
   extras?: CartExtra[];
+  booking_details?: BookingDetails;
 }
 
 function CreateOrderTab({ branchId, currency }: { branchId: string; currency: string }) {
@@ -123,13 +135,21 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [storeItems, setStoreItems] = useState<any[]>([]);
   const [storeLoading, setStoreLoading] = useState(true);
 
-  // Rooms
+  // Rooms (all statuses — occupied shown as disabled in picker)
   const [rooms, setRooms] = useState<any[]>([]);
   const [roomsLoading, setRoomsLoading] = useState(true);
 
-  // Customer & order details
+  // Tables (for cart assignment)
+  const [tables, setTables] = useState<any[]>([]);
+
+  // Room booking dialog (opened when user clicks an available room in the picker)
+  const [bookingDialogRoom, setBookingDialogRoom] = useState<any>(null);
+
+  // Order metadata
   const [customerName, setCustomerName] = useState('');
   const [notes, setNotes] = useState('');
+  const [selectedRoomId, setSelectedRoomId] = useState('');
+  const [selectedTableId, setSelectedTableId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Meal detail dialog
@@ -152,12 +172,12 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
     finally { setStoreLoading(false); }
   }, [branchId, search]);
 
-  // Fetch available rooms
+  // Fetch all rooms (all statuses; occupied displayed but not bookable)
   const fetchRooms = useCallback(async () => {
     setRoomsLoading(true);
     try {
       const data = await api<{ rooms: any[]; total: number }>('accommodation', 'list-rooms', {
-        params: { page: '1', page_size: '200', status: 'available' },
+        params: { page: '1', page_size: '200' },
         branchId,
       });
       setRooms(data.rooms ?? []);
@@ -168,6 +188,14 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   useEffect(() => { fetchStore(); }, [fetchStore]);
   useEffect(() => { fetchRooms(); }, [fetchRooms]);
   useEffect(() => { if (branchId) fetchMeals(branchId); }, [branchId]);
+
+  // Fetch all tables for optional cart assignment
+  useEffect(() => {
+    if (!branchId) return;
+    api<{ tables: any[] }>('tables', 'list', { branchId })
+      .then((d) => setTables(d.tables ?? []))
+      .catch(() => {});
+  }, [branchId]);
 
   // Barcode scan
   const handleBarcodeScan = async () => {
@@ -266,10 +294,16 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
   const handleSubmit = async () => {
     if (cart.length === 0) return toast.error('Cart is empty');
-    if (!customerName.trim()) return toast.error('Enter customer name');
+    // Validate any room bookings have required details
+    for (const c of cart.filter((x) => x.source === 'room')) {
+      if (!c.booking_details?.check_in || !c.booking_details?.duration_count) {
+        return toast.error(`Missing booking details for ${c.name}. Remove and re-add it.`);
+      }
+    }
 
     setSubmitting(true);
     try {
+      const linkedRoom = rooms.find((r) => r.id === selectedRoomId);
       const items = cart.map((c) => ({
         name: c.name,
         quantity: c.quantity,
@@ -280,6 +314,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         room_id: c.room_id,
         ingredients: c.ingredients ?? [],
         extras: c.extras ?? [],
+        booking_details: c.booking_details,
       }));
 
       const data = await api<{ order_id: string; order_number: string; total: number }>('accommodation', 'create-order', {
@@ -288,6 +323,9 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           customer_name: customerName.trim() || 'Walk In Customer',
           notes: notes || undefined,
           order_type: 'dine_in',
+          table_id: selectedTableId || undefined,
+          linked_room_id: selectedRoomId || undefined,
+          linked_room_number: linkedRoom?.room_number || undefined,
         },
         branchId,
       });
@@ -296,6 +334,8 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
       setCart([]);
       setCustomerName('');
       setNotes('');
+      setSelectedRoomId('');
+      setSelectedTableId('');
       fetchStore();
       fetchRooms();
     } catch (err: any) { toast.error(err.message); }
@@ -483,25 +523,21 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   const catLC = room.category?.toLowerCase();
                   const catColor = CATEGORY_COLORS[catLC] ?? '#757575';
                   const inCart = cart.some((c) => c.source === 'room' && c.id === room.id);
+                  const isOccupied = room.status !== 'available';
+                  const canBook = !inCart && !isOccupied;
                   return (
                     <Card
                       key={room.id}
                       sx={{
-                        width: 200, cursor: inCart ? 'default' : 'pointer',
-                        opacity: inCart ? 0.6 : 1,
+                        width: 200, cursor: canBook ? 'pointer' : 'default',
+                        opacity: inCart || isOccupied ? 0.65 : 1,
                         borderLeft: `4px solid ${catColor}`,
-                        '&:hover': { boxShadow: inCart ? 1 : 4 }, transition: '0.15s',
+                        '&:hover': { boxShadow: canBook ? 4 : 1 }, transition: '0.15s',
                       }}
                       onClick={() => {
-                        if (inCart) return;
-                        addToCart({
-                          id: room.id,
-                          name: `Room ${room.room_number}`,
-                          unit_price: Number(room.cost_amount),
-                          quantity: 1,
-                          source: 'room',
-                          room_id: room.id,
-                        });
+                        if (inCart) { toast.error('This room is already in your cart'); return; }
+                        if (isOccupied) { toast.error(`Room ${room.room_number} is currently ${room.status}`); return; }
+                        setBookingDialogRoom(room);
                       }}
                     >
                       <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
@@ -518,6 +554,17 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                           <Typography variant="body2" fontWeight={700}>Room {room.room_number}</Typography>
                           <Chip size="small" label={room.category} sx={{ bgcolor: catColor, color: '#fff', fontSize: 10 }} />
                         </Stack>
+                        {/* Status badge for non-available rooms */}
+                        {isOccupied && (
+                          <Chip
+                            size="small"
+                            label={room.status === 'occupied'
+                              ? `Occupied${room.current_occupants ? ` (${room.current_occupants})` : ''}`
+                              : room.status}
+                            color={room.status === 'occupied' ? 'error' : 'warning'}
+                            sx={{ mt: 0.3, width: '100%', justifyContent: 'center' }}
+                          />
+                        )}
                         {room.floor_section && (
                           <Typography variant="caption" color="text.secondary" display="block">{room.floor_section}</Typography>
                         )}
@@ -563,10 +610,54 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         </Typography>
 
         <TextField
-          size="small" label="Customer Name *" fullWidth sx={{ mb: 1 }}
+          size="small" label="Customer Name (optional)" fullWidth sx={{ mb: 1 }}
           value={customerName}
           onChange={(e) => setCustomerName(e.target.value)}
         />
+
+        {/* Room assignment (optional — tags the whole order to a room) */}
+        <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+          <InputLabel>Assign to Room (optional)</InputLabel>
+          <Select
+            value={selectedRoomId}
+            label="Assign to Room (optional)"
+            onChange={(e) => setSelectedRoomId(e.target.value)}
+          >
+            <MuiMenuItem value=""><em>None</em></MuiMenuItem>
+            {rooms.map((r) => (
+              <MuiMenuItem key={r.id} value={r.id}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <MeetingRoomIcon fontSize="small" />
+                  <span>Room {r.room_number}</span>
+                  {r.status !== 'available' && (
+                    <Chip size="small" label={r.status} color="error" sx={{ ml: 0.5 }} />
+                  )}
+                </Stack>
+              </MuiMenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        {/* Table assignment (optional — only available tables shown) */}
+        <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+          <InputLabel>Assign to Table (optional)</InputLabel>
+          <Select
+            value={selectedTableId}
+            label="Assign to Table (optional)"
+            onChange={(e) => setSelectedTableId(e.target.value)}
+          >
+            <MuiMenuItem value=""><em>None</em></MuiMenuItem>
+            {tables.filter((t) => t.status === 'available').map((t) => (
+              <MuiMenuItem key={t.id} value={t.id}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <TableRestaurantIcon fontSize="small" />
+                  <span>{t.name ?? `Table ${t.table_number}`}</span>
+                  <Chip size="small" label="Available" color="success" />
+                </Stack>
+              </MuiMenuItem>
+            ))}
+          </Select>
+        </FormControl>
 
         <TextField
           size="small" label="Notes" fullWidth multiline rows={1} sx={{ mb: 1 }}
@@ -599,6 +690,25 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                       ({item.quantity}/{Number(item.max_qty)} in stock)
                     </Typography>
                   )}
+                  {/* Booking details summary for room items */}
+                  {item.source === 'room' && item.booking_details && (
+                    <Box sx={{ mt: 0.4 }}>
+                      <Typography variant="caption" color="info.main" display="block">
+                        <PeopleIcon sx={{ fontSize: 11, verticalAlign: 'middle', mr: 0.3 }} />
+                        {item.booking_details.num_people} guest{item.booking_details.num_people !== 1 ? 's' : ''}
+                        {' · '}
+                        {item.booking_details.duration_count} {item.booking_details.duration_unit}{item.booking_details.duration_count !== 1 ? 's' : ''}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        📅 Check-in: {new Date(item.booking_details.check_in).toLocaleString()}
+                      </Typography>
+                      {item.booking_details.check_out && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          🚪 Departure: {new Date(item.booking_details.check_out).toLocaleString()}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
                 </Box>
                 <Stack direction="row" alignItems="center" spacing={0}>
                   {item.source !== 'room' && (
@@ -623,12 +733,33 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
         <Button
           variant="contained" fullWidth size="large"
-          disabled={submitting || cart.length === 0 || !customerName.trim()}
+          disabled={submitting || cart.length === 0}
           onClick={handleSubmit}
         >
           {submitting ? 'Processing…' : `Place Order — ${fmt(subtotal)}`}
         </Button>
       </Paper>
+
+      {/* Room Booking Dialog — opened when user clicks an available room in the picker */}
+      <RoomBookingDialog
+        room={bookingDialogRoom}
+        open={!!bookingDialogRoom}
+        onClose={() => setBookingDialogRoom(null)}
+        currency={currency}
+        onConfirm={(details) => {
+          if (!bookingDialogRoom) return;
+          addToCart({
+            id: bookingDialogRoom.id,
+            name: `Room ${bookingDialogRoom.room_number}`,
+            unit_price: Number(bookingDialogRoom.cost_amount),
+            quantity: details.duration_count,
+            source: 'room',
+            room_id: bookingDialogRoom.id,
+            booking_details: details,
+          });
+          setBookingDialogRoom(null);
+        }}
+      />
 
       {/* Meal Detail Dialog */}
       <Dialog open={mealDetailOpen} onClose={() => setMealDetailOpen(false)} maxWidth="md" fullWidth>
@@ -708,6 +839,132 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         </DialogActions>
       </Dialog>
     </Box>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   Room Booking Dialog
+   Opens when a user clicks an available room in the picker.
+   Collects: duration, guests, check-in/out, computes total.
+   ═══════════════════════════════════════════════════════ */
+function RoomBookingDialog({
+  room, open, onClose, onConfirm, currency,
+}: {
+  room: any;
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (details: BookingDetails) => void;
+  currency: string;
+}) {
+  const [numPeople, setNumPeople] = useState(1);
+  const [checkIn, setCheckIn] = useState('');
+  const [checkOut, setCheckOut] = useState('');
+  const [durationCount, setDurationCount] = useState(1);
+
+  // Reset when a new room is selected
+  useEffect(() => {
+    if (room) {
+      setNumPeople(1);
+      setCheckIn('');
+      setCheckOut('');
+      setDurationCount(1);
+    }
+  }, [room]);
+
+  const durationUnit = room?.cost_duration ?? 'night';
+  const durationLabel = durationUnit === 'hour' ? 'hour' : durationUnit === 'day' ? 'day' : 'night';
+  const total = Number(room?.cost_amount ?? 0) * durationCount;
+
+  const handleConfirm = () => {
+    if (!checkIn) return toast.error('Check-in date & time is required');
+    if (durationCount < 1) return toast.error(`Number of ${durationLabel}s must be at least 1`);
+    if (numPeople < 1) return toast.error('At least 1 guest required');
+    if (numPeople > (room?.max_occupants ?? 99)) {
+      return toast.error(`Max ${room?.max_occupants} occupants allowed for this room`);
+    }
+    onConfirm({
+      num_people: numPeople,
+      check_in: checkIn,
+      check_out: checkOut || undefined,
+      duration_count: durationCount,
+      duration_unit: durationUnit,
+    });
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <MeetingRoomIcon />
+          <Typography variant="h6">Book Room {room?.room_number}</Typography>
+        </Stack>
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          {/* Room summary */}
+          <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
+            <Typography variant="body2"><strong>Category:</strong> {room?.category}</Typography>
+            <Typography variant="body2"><strong>Rate:</strong> {formatCurrency(room?.cost_amount ?? 0, currency)} / {durationLabel}</Typography>
+            <Typography variant="body2"><strong>Max occupants:</strong> {room?.max_occupants}</Typography>
+            {room?.floor_section && (
+              <Typography variant="body2"><strong>Section:</strong> {room.floor_section}</Typography>
+            )}
+          </Paper>
+
+          <TextField
+            label={`Number of ${durationLabel}s *`}
+            type="number"
+            fullWidth
+            value={durationCount}
+            onChange={(e) => setDurationCount(Math.max(1, Number(e.target.value)))}
+            inputProps={{ min: 1 }}
+            helperText={`Sub-total: ${formatCurrency(total, currency)}`}
+          />
+
+          <TextField
+            label="Number of Guests *"
+            type="number"
+            fullWidth
+            value={numPeople}
+            onChange={(e) => setNumPeople(Math.max(1, Math.min(room?.max_occupants ?? 99, Number(e.target.value))))}
+            inputProps={{ min: 1, max: room?.max_occupants }}
+            helperText={`Max: ${room?.max_occupants ?? '—'}`}
+            slotProps={{ input: { startAdornment: <PeopleIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
+          />
+
+          <TextField
+            label="Check-in Date & Time *"
+            type="datetime-local"
+            fullWidth
+            value={checkIn}
+            onChange={(e) => setCheckIn(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+          />
+
+          <TextField
+            label="Departure Date & Time (optional)"
+            type="datetime-local"
+            fullWidth
+            value={checkOut}
+            onChange={(e) => setCheckOut(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+          />
+
+          <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 1 }}>
+            <Typography variant="h6" fontWeight={700}>
+              Total: {formatCurrency(total, currency)}
+            </Typography>
+            <Typography variant="caption">
+              {durationCount} {durationLabel}{durationCount !== 1 ? 's' : ''} × {formatCurrency(room?.cost_amount ?? 0, currency)}
+            </Typography>
+          </Paper>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={handleConfirm}>Add to Cart</Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
@@ -1053,6 +1310,12 @@ function OrderDetailDialog({
                 {order.served_at && (
                   <Typography variant="body2"><strong>Served:</strong> {new Date(order.served_at).toLocaleString()}</Typography>
                 )}
+                {order.linked_room_number && (
+                  <Typography variant="body2"><strong>Room:</strong> Room {order.linked_room_number}</Typography>
+                )}
+                {order.table_id && (
+                  <Typography variant="body2"><strong>Table:</strong> #{String(order.table_id).slice(-4).toUpperCase()}</Typography>
+                )}
               </Grid>
             </Grid>
 
@@ -1063,6 +1326,14 @@ function OrderDetailDialog({
             {(order.order_items ?? []).map((item: any, idx: number) => {
               const ZERO_UUID = '00000000-0000-0000-0000-000000000000';
               const isStore = item.menu_item_id === ZERO_UUID || (!item.menu_item_id);
+
+              // Detect room booking metadata stored in order_items.modifiers
+              const bookingMeta = (() => {
+                const mods = Array.isArray(item.modifiers) ? item.modifiers : (() => {
+                  try { return JSON.parse(item.modifiers ?? '[]'); } catch { return []; }
+                })();
+                return mods.find((m: any) => m?.type === 'booking') ?? null;
+              })();
 
               let extras: any[] = [];
               if (Array.isArray(item.selected_extras)) {
@@ -1108,6 +1379,33 @@ function OrderDetailDialog({
                     <Typography variant="body2" color="text.secondary">
                       {fmt(item.unit_price)} × {item.quantity} = {fmt(item.unit_price * item.quantity)}
                     </Typography>
+
+                    {/* Booking details block for room items */}
+                    {bookingMeta && (
+                      <Paper variant="outlined" sx={{ p: 1, mt: 1, bgcolor: 'action.hover' }}>
+                        <Typography variant="caption" fontWeight={700} color="info.main" display="block" sx={{ mb: 0.5 }}>
+                          🏨 Booking Details
+                        </Typography>
+                        <Stack direction="row" spacing={2} flexWrap="wrap">
+                          <Typography variant="caption" color="text.secondary">
+                            <strong>Guests:</strong> {bookingMeta.num_people}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            <strong>Duration:</strong> {bookingMeta.duration_count} {bookingMeta.duration_unit}{bookingMeta.duration_count !== 1 ? 's' : ''}
+                          </Typography>
+                        </Stack>
+                        {bookingMeta.check_in && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            📅 <strong>Check-in:</strong> {new Date(bookingMeta.check_in).toLocaleString()}
+                          </Typography>
+                        )}
+                        {bookingMeta.check_out && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            🚪 <strong>Departure:</strong> {new Date(bookingMeta.check_out).toLocaleString()}
+                          </Typography>
+                        )}
+                      </Paper>
+                    )}
 
                     {ingredients.length > 0 && (
                       <Box sx={{ mt: 0.5 }}>
@@ -1288,6 +1586,12 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
+  // Free-room dialog state
+  const [freeDialog, setFreeDialog] = useState(false);
+  const [freeDialogRoom, setFreeDialogRoom] = useState<any>(null);
+  const [freeDialogPeople, setFreeDialogPeople] = useState(1);
+  const [freeLoading, setFreeLoading] = useState(false);
+
   const fmt = (n: number) => formatCurrency(n, currency);
 
   const fetchRooms = useCallback(async () => {
@@ -1303,6 +1607,11 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
   }, [branchId, page, pageSize, search, statusFilter]);
 
   useEffect(() => { setLoading(true); fetchRooms(); }, [fetchRooms]);
+
+  // Real-time: automatically refresh when any room in this branch changes (occupancy, status)
+  useRealtime('rooms', branchId ? { column: 'branch_id', value: branchId } : undefined, () => {
+    fetchRooms();
+  });
 
   const openNew = () => {
     setEditingRoom(null);
@@ -1449,6 +1758,32 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
     } catch (err: any) { toast.error(err.message); }
   };
 
+  const handleFreeRoom = async () => {
+    if (!freeDialogRoom || freeDialogPeople < 1) return;
+    const currentOccupants = Number(freeDialogRoom.current_occupants ?? 0);
+    if (freeDialogPeople > currentOccupants && currentOccupants > 0) {
+      toast.error(`Only ${currentOccupants} guest${currentOccupants !== 1 ? 's' : ''} currently recorded in this room`);
+      return;
+    }
+    setFreeLoading(true);
+    try {
+      const res = await api<{ room: any }>('accommodation', 'free-room', {
+        body: { room_id: freeDialogRoom.id, people_leaving: freeDialogPeople },
+        branchId,
+      });
+      const updated = res.room;
+      toast.success(
+        updated.status === 'available'
+          ? `Room ${freeDialogRoom.room_number} is now available`
+          : `Room ${freeDialogRoom.room_number}: ${updated.current_occupants} guest(s) remaining`
+      );
+      setFreeDialog(false);
+      setFreeDialogRoom(null);
+      fetchRooms();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setFreeLoading(false); }
+  };
+
   if (loading && rooms.length === 0) return <LinearProgress />;
 
   return (
@@ -1533,6 +1868,17 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
                   <Stack direction="row" spacing={0.5} sx={{ mt: 1 }}>
                     <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={() => openEdit(room)}>Edit</Button>
                     <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => handleDelete(room.id)}>Delete</Button>
+                    {room.status === 'occupied' && (
+                      <Tooltip title="Check out guests and free this room">
+                        <Button
+                          size="small" variant="outlined" color="warning"
+                          startIcon={<ExitToAppIcon />}
+                          onClick={() => { setFreeDialogRoom(room); setFreeDialogPeople(1); setFreeDialog(true); }}
+                        >
+                          Free
+                        </Button>
+                      </Tooltip>
+                    )}
                   </Stack>
                 </CardContent>
               </Card>
@@ -1670,6 +2016,48 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
           <Button onClick={() => setDialog(false)}>Cancel</Button>
           <Button variant="contained" onClick={handleSave} disabled={saving}>
             {editingRoom ? 'Update' : 'Create Room'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Free Room Dialog — record guests checking out */}
+      <Dialog open={freeDialog} onClose={() => { setFreeDialog(false); setFreeDialogRoom(null); }} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <ExitToAppIcon />
+            <Typography variant="h6">Free Room {freeDialogRoom?.room_number}</Typography>
+          </Stack>
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {freeDialogRoom && (
+              <Alert severity="info">
+                Room {freeDialogRoom.room_number} currently has{' '}
+                <strong>{freeDialogRoom.current_occupants ?? 0}</strong>
+                {' '}guest{(freeDialogRoom.current_occupants ?? 0) !== 1 ? 's' : ''}.
+                When all guests leave the room becomes available automatically.
+              </Alert>
+            )}
+            <TextField
+              label="Number of guests checking out *"
+              type="number"
+              fullWidth
+              value={freeDialogPeople}
+              onChange={(e) => setFreeDialogPeople(Math.max(1, Number(e.target.value)))}
+              inputProps={{ min: 1, max: freeDialogRoom?.current_occupants ?? 99 }}
+              slotProps={{ input: { startAdornment: <PeopleIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setFreeDialog(false); setFreeDialogRoom(null); }}>Cancel</Button>
+          <Button
+            variant="contained" color="warning"
+            startIcon={<ExitToAppIcon />}
+            disabled={freeLoading}
+            onClick={handleFreeRoom}
+          >
+            {freeLoading ? 'Processing…' : 'Confirm Check-out'}
           </Button>
         </DialogActions>
       </Dialog>
