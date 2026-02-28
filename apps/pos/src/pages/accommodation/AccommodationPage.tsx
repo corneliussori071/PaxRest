@@ -525,20 +525,23 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   const catLC = room.category?.toLowerCase();
                   const catColor = CATEGORY_COLORS[catLC] ?? '#757575';
                   const inCart = cart.some((c) => c.source === 'room' && c.id === room.id);
-                  const isOccupied = room.status !== 'available';
-                  const canBook = !inCart && !isOccupied;
+                  // partially_occupied rooms are bookable (still have capacity); only fully occupied,
+                  // maintenance and reserved rooms block booking
+                  const isBookable = room.status === 'available' || room.status === 'partially_occupied';
+                  const canBook = !inCart && isBookable;
+                  const availableCapacity = Math.max(0, Number(room.max_occupants) - Number(room.current_occupants ?? 0));
                   return (
                     <Card
                       key={room.id}
                       sx={{
                         width: 200, cursor: canBook ? 'pointer' : 'default',
-                        opacity: inCart || isOccupied ? 0.65 : 1,
+                        opacity: (inCart || !isBookable) ? 0.65 : 1,
                         borderLeft: `4px solid ${catColor}`,
                         '&:hover': { boxShadow: canBook ? 4 : 1 }, transition: '0.15s',
                       }}
                       onClick={() => {
                         if (inCart) { toast.error('This room is already in your cart'); return; }
-                        if (isOccupied) { toast.error(`Room ${room.room_number} is currently ${room.status}`); return; }
+                        if (!isBookable) { toast.error(`Room ${room.room_number} is currently ${room.status.replace('_', ' ')}`); return; }
                         setBookingDialogRoom(room);
                       }}
                     >
@@ -556,13 +559,21 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                           <Typography variant="body2" fontWeight={700}>Room {room.room_number}</Typography>
                           <Chip size="small" label={room.category} sx={{ bgcolor: catColor, color: '#fff', fontSize: 10 }} />
                         </Stack>
-                        {/* Status badge for non-available rooms */}
-                        {isOccupied && (
+                        {/* Status badge */}
+                        {room.status === 'partially_occupied' && (
+                          <Chip
+                            size="small"
+                            label={`Partial • ${availableCapacity} slot${availableCapacity !== 1 ? 's' : ''} free`}
+                            color="warning"
+                            sx={{ mt: 0.3, width: '100%', justifyContent: 'center' }}
+                          />
+                        )}
+                        {room.status !== 'available' && room.status !== 'partially_occupied' && (
                           <Chip
                             size="small"
                             label={room.status === 'occupied'
                               ? `Occupied${room.current_occupants ? ` (${room.current_occupants})` : ''}`
-                              : room.status}
+                              : room.status.replace('_', ' ')}
                             color={room.status === 'occupied' ? 'error' : 'warning'}
                             sx={{ mt: 0.3, width: '100%', justifyContent: 'center' }}
                           />
@@ -632,7 +643,10 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   <Stack direction="row" spacing={1} alignItems="center">
                     <MeetingRoomIcon fontSize="small" />
                     <span>Room {r.room_number}</span>
-                    {r.status !== 'available' && (
+                    {r.status === 'partially_occupied' && (
+                      <Chip size="small" label="Partial" color="warning" sx={{ ml: 0.5 }} />
+                    )}
+                    {r.status !== 'available' && r.status !== 'partially_occupied' && (
                       <Chip size="small" label={r.status} color="error" sx={{ ml: 0.5 }} />
                     )}
                   </Stack>
@@ -879,12 +893,22 @@ function RoomBookingDialog({
   const durationLabel = durationUnit === 'hour' ? 'hour' : durationUnit === 'day' ? 'day' : 'night';
   const total = Number(room?.cost_amount ?? 0) * durationCount;
 
+  // For partially_occupied rooms the bookable capacity is what's left
+  const isPartiallyOccupied = room?.status === 'partially_occupied';
+  const alreadyOccupied = Number(room?.current_occupants ?? 0);
+  const availableCapacity = Math.max(1, Number(room?.max_occupants ?? 1) - alreadyOccupied);
+  const maxGuests = isPartiallyOccupied ? availableCapacity : Number(room?.max_occupants ?? 99);
+
   const handleConfirm = () => {
     if (!checkIn) return toast.error('Check-in date & time is required');
     if (durationCount < 1) return toast.error(`Number of ${durationLabel}s must be at least 1`);
     if (numPeople < 1) return toast.error('At least 1 guest required');
-    if (numPeople > (room?.max_occupants ?? 99)) {
-      return toast.error(`Max ${room?.max_occupants} occupants allowed for this room`);
+    if (numPeople > maxGuests) {
+      return toast.error(
+        isPartiallyOccupied
+          ? `Only ${availableCapacity} slot${availableCapacity !== 1 ? 's' : ''} available (room already has ${alreadyOccupied} guest${alreadyOccupied !== 1 ? 's' : ''})`
+          : `Max ${room?.max_occupants} occupants allowed for this room`
+      );
     }
     onConfirm({
       num_people: numPeople,
@@ -910,6 +934,11 @@ function RoomBookingDialog({
             <Typography variant="body2"><strong>Category:</strong> {room?.category}</Typography>
             <Typography variant="body2"><strong>Rate:</strong> {formatCurrency(room?.cost_amount ?? 0, currency)} / {durationLabel}</Typography>
             <Typography variant="body2"><strong>Max occupants:</strong> {room?.max_occupants}</Typography>
+            {isPartiallyOccupied && (
+              <Typography variant="body2" color="warning.main">
+                <strong>Already occupied:</strong> {alreadyOccupied} &mdash; <strong>{availableCapacity} slot{availableCapacity !== 1 ? 's' : ''} available</strong>
+              </Typography>
+            )}
             {room?.floor_section && (
               <Typography variant="body2"><strong>Section:</strong> {room.floor_section}</Typography>
             )}
@@ -930,9 +959,11 @@ function RoomBookingDialog({
             type="number"
             fullWidth
             value={numPeople}
-            onChange={(e) => setNumPeople(Math.max(1, Math.min(room?.max_occupants ?? 99, Number(e.target.value))))}
-            inputProps={{ min: 1, max: room?.max_occupants }}
-            helperText={`Max: ${room?.max_occupants ?? '—'}`}
+            onChange={(e) => setNumPeople(Math.max(1, Math.min(maxGuests, Number(e.target.value))))}
+            inputProps={{ min: 1, max: maxGuests }}
+            helperText={isPartiallyOccupied
+              ? `Available slots: ${availableCapacity} (${alreadyOccupied} already occupied of ${room?.max_occupants})`
+              : `Max: ${room?.max_occupants ?? '—'}`}
             slotProps={{ input: { startAdornment: <PeopleIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
           />
 
@@ -1558,7 +1589,7 @@ const COST_DURATIONS = [
   { value: 'hour', label: 'Per Hour' },
 ];
 const ROOM_STATUS_COLORS: Record<string, 'success' | 'error' | 'warning' | 'info' | 'default'> = {
-  available: 'success', occupied: 'error', maintenance: 'warning', reserved: 'info',
+  available: 'success', occupied: 'error', partially_occupied: 'warning', maintenance: 'warning', reserved: 'info',
 };
 
 function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: string }) {
@@ -1806,6 +1837,7 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
               <MuiMenuItem value="">All</MuiMenuItem>
               <MuiMenuItem value="available">Available</MuiMenuItem>
               <MuiMenuItem value="occupied">Occupied</MuiMenuItem>
+              <MuiMenuItem value="partially_occupied">Partially Occupied</MuiMenuItem>
               <MuiMenuItem value="reserved">Reserved</MuiMenuItem>
               <MuiMenuItem value="maintenance">Maintenance</MuiMenuItem>
             </Select>
@@ -1872,7 +1904,7 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
                   <Stack direction="row" spacing={0.5} sx={{ mt: 1 }}>
                     <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={() => openEdit(room)}>Edit</Button>
                     <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => handleDelete(room.id)}>Delete</Button>
-                    {room.status === 'occupied' && (
+                    {(room.status === 'occupied' || room.status === 'partially_occupied') && (
                       <Tooltip title="Check out guests and free this room">
                         <Button
                           size="small" variant="outlined" color="warning"
@@ -3244,7 +3276,10 @@ function InStaySubTab({ branchId, fmt }: { branchId: string; fmt: (v: number) =>
     finally { setExtendLoading(false); }
   };
 
-  const availableRooms = allRooms.filter((r) => r.status === 'available');
+  // Include both available and partially_occupied rooms for transfer
+  const availableRooms = allRooms.filter((r) =>
+    r.status === 'available' || r.status === 'partially_occupied'
+  );
 
   return (
     <Box>
@@ -3398,12 +3433,15 @@ function InStaySubTab({ branchId, fmt }: { branchId: string; fmt: (v: number) =>
                       <MeetingRoomIcon fontSize="small" />
                       <span>Room {r.room_number}</span>
                       <Chip size="small" label={r.category} variant="outlined" sx={{ fontSize: 10 }} />
+                      {r.status === 'partially_occupied' && (
+                        <Chip size="small" label={`${Number(r.max_occupants) - Number(r.current_occupants ?? 0)} slots free`} color="warning" sx={{ fontSize: 10 }} />
+                      )}
                     </Stack>
                   </MuiMenuItem>
                 ))}
               </Select>
             </FormControl>
-            {availableRooms.length === 0 && (
+        {availableRooms.length === 0 && (
               <Alert severity="warning">No available rooms for transfer.</Alert>
             )}
             <TextField

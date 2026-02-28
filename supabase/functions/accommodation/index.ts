@@ -95,6 +95,22 @@ serve(async (req) => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   Shared helpers
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Derive the correct room status from its occupancy numbers.
+ * - 0 occupants            → 'available'
+ * - 0 < occupants < max   → 'partially_occupied'
+ * - occupants >= max       → 'occupied'
+ */
+function calcRoomStatus(currentOccupants: number, maxOccupants: number): string {
+  if (currentOccupants <= 0) return 'available';
+  if (currentOccupants >= maxOccupants) return 'occupied';
+  return 'partially_occupied';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    Rooms CRUD
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -415,13 +431,31 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
         extras: [],
       });
 
-      // Mark room as occupied and record current occupant count
+      // Load current room state, validate capacity, then update occupancy
       if (item.room_id) {
+        const { data: currentRoom } = await service
+          .from('rooms')
+          .select('current_occupants, max_occupants')
+          .eq('id', item.room_id)
+          .eq('branch_id', branchId)
+          .single();
+
+        const prevOccupants = Number(currentRoom?.current_occupants ?? 0);
+        const maxOccupants = Number(currentRoom?.max_occupants ?? 1);
+        const newOccupants = prevOccupants + numPeople;
+
+        if (newOccupants > maxOccupants) {
+          return errorResponse(
+            `Room capacity exceeded: adding ${numPeople} guest(s) would bring total to ${newOccupants}, ` +
+            `but max occupants is ${maxOccupants} (currently ${prevOccupants} occupied).`
+          );
+        }
+
         await service
           .from('rooms')
           .update({
-            status: 'occupied',
-            current_occupants: numPeople,
+            status: calcRoomStatus(newOccupants, maxOccupants),
+            current_occupants: newOccupants,
             updated_at: new Date().toISOString(),
           })
           .eq('id', item.room_id)
@@ -746,13 +780,13 @@ async function freeRoom(req: Request, supabase: any, auth: AuthContext, branchId
   if (!room) return errorResponse('Room not found', 404);
 
   const newOccupants = Math.max(0, Number(room.current_occupants) - peopleLeaving);
-  const newStatus = newOccupants === 0 ? 'available' : 'occupied';
+  const maxOccupants = Number(room.max_occupants ?? 1);
 
   const { data, error } = await service
     .from('rooms')
     .update({
       current_occupants: newOccupants,
-      status: newStatus,
+      status: calcRoomStatus(newOccupants, maxOccupants),
       updated_at: new Date().toISOString(),
     })
     .eq('id', body.room_id)
@@ -834,10 +868,23 @@ async function checkinGuest(req: Request, supabase: any, auth: AuthContext, bran
     .single();
   if (uErr) return errorResponse(uErr.message);
 
-  // Ensure room is marked occupied with correct occupant count
+  // Re-derive the room's actual occupancy after the check-in (staff may have changed num_occupants)
+  const occupantsDiff = numOccupants - Number(booking.num_occupants);
+  const { data: roomRow } = await service
+    .from('rooms')
+    .select('current_occupants, max_occupants')
+    .eq('id', booking.room_id)
+    .single();
+  const newRoomOccupants = Math.max(0, Number(roomRow?.current_occupants ?? 0) + occupantsDiff);
+  const maxOcc = Number(roomRow?.max_occupants ?? 1);
+
   await service
     .from('rooms')
-    .update({ status: 'occupied', current_occupants: numOccupants, updated_at: new Date().toISOString() })
+    .update({
+      current_occupants: newRoomOccupants,
+      status: newRoomOccupants === 0 ? 'available' : calcRoomStatus(newRoomOccupants, maxOcc),
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', booking.room_id)
     .eq('branch_id', branchId);
 
@@ -907,19 +954,20 @@ async function departGuest(req: Request, supabase: any, auth: AuthContext, branc
     .single();
   if (uErr) return errorResponse(uErr.message);
 
-  // Free the room — deduct all occupants
+  // Free the room — deduct this booking's occupants
   const { data: room } = await service
     .from('rooms')
-    .select('current_occupants')
+    .select('current_occupants, max_occupants')
     .eq('id', booking.room_id)
     .single();
 
   const newOccupants = Math.max(0, Number(room?.current_occupants ?? 0) - Number(booking.num_occupants));
+  const maxOcc = Number(room?.max_occupants ?? 1);
   await service
     .from('rooms')
     .update({
       current_occupants: newOccupants,
-      status: newOccupants === 0 ? 'available' : 'occupied',
+      status: calcRoomStatus(newOccupants, maxOcc),
       updated_at: new Date().toISOString(),
     })
     .eq('id', booking.room_id)
@@ -953,26 +1001,39 @@ async function transferGuest(req: Request, supabase: any, auth: AuthContext, bra
     .eq('branch_id', branchId)
     .single();
   if (rErr || !newRoom) return errorResponse('New room not found', 404);
-  if (newRoom.status !== 'available') return errorResponse(`Room ${newRoom.room_number} is not available`);
 
-  // Free old room
+  // Allow transfer to available OR partially_occupied rooms that have enough capacity
+  if (newRoom.status !== 'available' && newRoom.status !== 'partially_occupied') {
+    return errorResponse(`Room ${newRoom.room_number} is not available for transfer (status: ${newRoom.status})`);
+  }
+  const newRoomAvailableSlots = Number(newRoom.max_occupants) - Number(newRoom.current_occupants);
+  if (Number(booking.num_occupants) > newRoomAvailableSlots) {
+    return errorResponse(
+      `Room ${newRoom.room_number} cannot fit ${booking.num_occupants} guest(s). ` +
+      `Available capacity: ${newRoomAvailableSlots} (max ${newRoom.max_occupants}, current ${newRoom.current_occupants}).`
+    );
+  }
+
+  // Free old room — deduct this booking's occupants
   const { data: oldRoom } = await service
     .from('rooms')
-    .select('current_occupants, room_number')
+    .select('current_occupants, max_occupants, room_number')
     .eq('id', booking.room_id)
     .single();
 
   const oldNewOccupants = Math.max(0, Number(oldRoom?.current_occupants ?? 0) - Number(booking.num_occupants));
+  const oldMaxOcc = Number(oldRoom?.max_occupants ?? 1);
   await service.from('rooms').update({
     current_occupants: oldNewOccupants,
-    status: oldNewOccupants === 0 ? 'available' : 'occupied',
+    status: calcRoomStatus(oldNewOccupants, oldMaxOcc),
     updated_at: new Date().toISOString(),
   }).eq('id', booking.room_id).eq('branch_id', branchId);
 
-  // Occupy new room
+  // Occupy new room — additive (may already have other guests)
+  const newRoomFinalOccupants = Number(newRoom.current_occupants) + Number(booking.num_occupants);
   await service.from('rooms').update({
-    current_occupants: Number(booking.num_occupants),
-    status: 'occupied',
+    current_occupants: newRoomFinalOccupants,
+    status: calcRoomStatus(newRoomFinalOccupants, Number(newRoom.max_occupants)),
     updated_at: new Date().toISOString(),
   }).eq('id', body.new_room_id).eq('branch_id', branchId);
 
