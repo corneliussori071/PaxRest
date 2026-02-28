@@ -14,36 +14,13 @@ ALTER TYPE order_source ADD VALUE IF NOT EXISTS 'accommodation';
 -- 2. Add 'accommodation' station
 ALTER TYPE kitchen_station ADD VALUE IF NOT EXISTS 'accommodation';
 
--- 3. Accommodation permission enums
+-- 3. Accommodation permission enums (PG 12+ allows ADD VALUE inside transactions)
 ALTER TYPE permission_type ADD VALUE IF NOT EXISTS 'view_accommodation';
-
-COMMIT;
-BEGIN;
-
 ALTER TYPE permission_type ADD VALUE IF NOT EXISTS 'accom_create_order';
-
-COMMIT;
-BEGIN;
-
 ALTER TYPE permission_type ADD VALUE IF NOT EXISTS 'accom_pending_orders';
-
-COMMIT;
-BEGIN;
-
 ALTER TYPE permission_type ADD VALUE IF NOT EXISTS 'accom_pending_payment';
-
-COMMIT;
-BEGIN;
-
 ALTER TYPE permission_type ADD VALUE IF NOT EXISTS 'accom_create_rooms';
-
-COMMIT;
-BEGIN;
-
 ALTER TYPE permission_type ADD VALUE IF NOT EXISTS 'accom_request_items';
-
-COMMIT;
-BEGIN;
 
 -- 4. Rooms table
 CREATE TABLE IF NOT EXISTS rooms (
@@ -149,22 +126,27 @@ ALTER TABLE accom_store_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accom_store_sales ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accom_store_movements ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "rooms_company" ON rooms;
 CREATE POLICY "rooms_company"
   ON rooms FOR ALL
   USING (company_id = (SELECT company_id FROM profiles WHERE id = auth.uid()));
 
+DROP POLICY IF EXISTS "room_benefits_company" ON room_benefits;
 CREATE POLICY "room_benefits_company"
   ON room_benefits FOR ALL
   USING (company_id = (SELECT company_id FROM profiles WHERE id = auth.uid()));
 
+DROP POLICY IF EXISTS "accom_store_items_company" ON accom_store_items;
 CREATE POLICY "accom_store_items_company"
   ON accom_store_items FOR ALL
   USING (company_id = (SELECT company_id FROM profiles WHERE id = auth.uid()));
 
+DROP POLICY IF EXISTS "accom_store_sales_company" ON accom_store_sales;
 CREATE POLICY "accom_store_sales_company"
   ON accom_store_sales FOR ALL
   USING (company_id = (SELECT company_id FROM profiles WHERE id = auth.uid()));
 
+DROP POLICY IF EXISTS "accom_store_movements_company" ON accom_store_movements;
 CREATE POLICY "accom_store_movements_company"
   ON accom_store_movements FOR ALL
   USING (company_id = (SELECT company_id FROM profiles WHERE id = auth.uid()));
