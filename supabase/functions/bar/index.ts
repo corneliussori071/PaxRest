@@ -334,6 +334,8 @@ async function listBarOrders(req: Request, supabase: any, auth: AuthContext, bra
     page: Number(url.searchParams.get('page')),
     page_size: Number(url.searchParams.get('page_size')),
   });
+  const searchTerm = url.searchParams.get('search') ?? '';
+  const dateRange = url.searchParams.get('date_range') ?? 'all';
 
   const service = createServiceClient();
   let query = service
@@ -342,6 +344,21 @@ async function listBarOrders(req: Request, supabase: any, auth: AuthContext, bra
     .eq('branch_id', branchId)
     .eq('department', 'bar')
     .in('status', statuses);
+
+  // Search by order_number or customer_name
+  if (searchTerm) {
+    query = query.or(`order_number.ilike.%${searchTerm}%,customer_name.ilike.%${searchTerm}%`);
+  }
+
+  // Date range filtering
+  const now = new Date();
+  if (dateRange === 'today') {
+    query = query.gte('created_at', new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString());
+  } else if (dateRange === '7d') {
+    query = query.gte('created_at', new Date(now.getTime() - 7 * 86400000).toISOString());
+  } else if (dateRange === '30d') {
+    query = query.gte('created_at', new Date(now.getTime() - 30 * 86400000).toISOString());
+  }
 
   query = applyPagination(query, page, pageSize, 'created_at', false);
   const { data, count, error } = await query;
@@ -364,6 +381,27 @@ async function getOrderDetail(req: Request, supabase: any, auth: AuthContext, br
     .single();
 
   if (error) return errorResponse(error.message, 404);
+
+  // Enrich order items with ingredient & extra details from menu_items
+  if (data?.order_items?.length) {
+    const menuItemIds = [...new Set(data.order_items.filter((i: any) => i.menu_item_id).map((i: any) => i.menu_item_id))];
+    if (menuItemIds.length > 0) {
+      const { data: menuItems } = await service
+        .from('menu_items')
+        .select('id, name, menu_item_ingredients(id, ingredient_name, quantity, unit), menu_item_extras(id, name, price)')
+        .in('id', menuItemIds);
+      const menuMap = new Map((menuItems ?? []).map((m: any) => [m.id, m]));
+      data.order_items = data.order_items.map((item: any) => {
+        const mi: any = menuMap.get(item.menu_item_id);
+        return {
+          ...item,
+          ingredients: mi?.menu_item_ingredients ?? [],
+          extras_available: mi?.menu_item_extras ?? [],
+        };
+      });
+    }
+  }
+
   return jsonResponse({ order: data });
 }
 

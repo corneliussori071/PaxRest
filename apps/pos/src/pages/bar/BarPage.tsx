@@ -27,6 +27,8 @@ import RestaurantIcon from '@mui/icons-material/Restaurant';
 import CloseIcon from '@mui/icons-material/Close';
 import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
 import TableBarIcon from '@mui/icons-material/TableBar';
+import InventoryIcon from '@mui/icons-material/Inventory';
+import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_STATUS_COLORS } from '@paxrest/shared-utils';
 import type { IngredientRequestStatus, Permission } from '@paxrest/shared-types';
 import { useApi, usePaginated, useRealtime } from '@/hooks';
@@ -99,7 +101,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
   const [cart, setCart] = useState<BarCartItem[]>([]);
-  const [showMeals, setShowMeals] = useState(false);
+  const [itemSubTab, setItemSubTab] = useState<'meals' | 'store'>('store');
 
   // Bar store items
   const [storeItems, setStoreItems] = useState<any[]>([]);
@@ -180,11 +182,22 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
     setCart((prev) => {
       const existing = prev.find((c) => c.id === item.id && c.source === item.source);
       if (existing) {
+        const newQty = existing.quantity + 1;
+        // Enforce stock limit for bar_store items
+        if (item.source === 'bar_store' && item.max_qty != null && newQty > Number(item.max_qty)) {
+          toast.error(`Only ${Number(item.max_qty)} ${item.name} available in stock`);
+          return prev;
+        }
         return prev.map((c) =>
           c.id === item.id && c.source === item.source
-            ? { ...c, quantity: c.quantity + 1 }
+            ? { ...c, quantity: newQty }
             : c
         );
+      }
+      // First add — check stock
+      if (item.source === 'bar_store' && item.max_qty != null && Number(item.max_qty) < 1) {
+        toast.error(`${item.name} is out of stock`);
+        return prev;
       }
       return [...prev, { ...item, quantity: 1 }];
     });
@@ -192,11 +205,17 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
   const updateQty = (id: string, source: string, delta: number) => {
     setCart((prev) =>
-      prev.map((c) =>
-        c.id === id && c.source === source
-          ? { ...c, quantity: Math.max(1, c.quantity + delta) }
-          : c
-      )
+      prev.map((c) => {
+        if (c.id !== id || c.source !== source) return c;
+        const newQty = c.quantity + delta;
+        if (newQty < 1) return c;
+        // Enforce stock limit for bar_store items
+        if (c.source === 'bar_store' && c.max_qty != null && newQty > Number(c.max_qty)) {
+          toast.error(`Only ${Number(c.max_qty)} ${c.name} available in stock`);
+          return c;
+        }
+        return { ...c, quantity: newQty };
+      })
     );
   };
 
@@ -288,10 +307,10 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
       {/* Left: Item Browser */}
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {/* Search & Barcode */}
-        <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
+        <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
           <TextField
             size="small" fullWidth placeholder="Search bar items…"
-            value={search} onChange={(e) => { setSearch(e.target.value); setShowMeals(false); }}
+            value={search} onChange={(e) => setSearch(e.target.value)}
             slotProps={{ input: { startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
           />
           <TextField
@@ -302,24 +321,45 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
             slotProps={{ input: { startAdornment: <QrCodeScannerIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
             sx={{ width: 200 }}
           />
-          {meals.length > 0 && (
-            <Button
-              variant={showMeals ? 'contained' : 'outlined'}
-              color="success"
-              onClick={() => { setShowMeals(!showMeals); setSearch(''); }}
-              startIcon={<RestaurantIcon />}
-              sx={{ flexShrink: 0 }}
-            >
-              <Badge badgeContent={meals.reduce((s, m) => s + m.quantity_available, 0)} color="info" max={99}>
-                Meals
-              </Badge>
-            </Button>
-          )}
+        </Stack>
+
+        {/* Sub-tabs: Internal Store | Meals */}
+        <Stack direction="row" spacing={0} sx={{ mb: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+          <Button
+            variant="text"
+            onClick={() => setItemSubTab('store')}
+            startIcon={<InventoryIcon />}
+            sx={{
+              borderBottom: itemSubTab === 'store' ? '2px solid' : '2px solid transparent',
+              borderColor: itemSubTab === 'store' ? 'primary.main' : 'transparent',
+              borderRadius: 0, px: 2, py: 0.75,
+              color: itemSubTab === 'store' ? 'primary.main' : 'text.secondary',
+              fontWeight: itemSubTab === 'store' ? 700 : 400,
+            }}
+          >
+            Internal Store
+          </Button>
+          <Button
+            variant="text"
+            onClick={() => setItemSubTab('meals')}
+            startIcon={<RestaurantIcon />}
+            sx={{
+              borderBottom: itemSubTab === 'meals' ? '2px solid' : '2px solid transparent',
+              borderColor: itemSubTab === 'meals' ? 'success.main' : 'transparent',
+              borderRadius: 0, px: 2, py: 0.75,
+              color: itemSubTab === 'meals' ? 'success.main' : 'text.secondary',
+              fontWeight: itemSubTab === 'meals' ? 700 : 400,
+            }}
+          >
+            <Badge badgeContent={meals.reduce((s, m) => s + m.quantity_available, 0)} color="info" max={99}>
+              Meals
+            </Badge>
+          </Button>
         </Stack>
 
         {/* Item Grid */}
         <Box sx={{ flex: 1, overflow: 'auto' }}>
-          {storeLoading && !showMeals ? <LinearProgress /> : showMeals ? (
+          {storeLoading && itemSubTab === 'store' ? <LinearProgress /> : itemSubTab === 'meals' ? (
             // Available Meals
             <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
               {meals.filter((m) => m.quantity_available > 0).map((meal) => (
@@ -509,6 +549,11 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   </Typography>
                   <Chip size="small" label={item.source === 'bar_store' ? 'Bar' : 'Menu'} sx={{ ml: 1 }}
                     color={item.source === 'bar_store' ? 'primary' : 'success'} variant="outlined" />
+                  {item.source === 'bar_store' && item.max_qty != null && (
+                    <Typography variant="caption" color={item.quantity >= Number(item.max_qty) ? 'error.main' : 'text.secondary'} sx={{ ml: 1 }}>
+                      ({item.quantity}/{Number(item.max_qty)} in stock)
+                    </Typography>
+                  )}
                 </Box>
                 <Stack direction="row" alignItems="center" spacing={0}>
                   <IconButton size="small" onClick={() => updateQty(item.id, item.source, -1)}><RemoveIcon fontSize="small" /></IconButton>
@@ -697,6 +742,8 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
   const [markingServed, setMarkingServed] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [dateRange, setDateRange] = useState('today');
 
   // Order detail dialog
   const [detailDialog, setDetailDialog] = useState(false);
@@ -707,15 +754,19 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
 
   const fetchOrders = useCallback(async () => {
     try {
+      const params: Record<string, string> = {
+        page: String(page + 1), page_size: String(pageSize), date_range: dateRange,
+      };
+      if (search.trim()) params.search = search.trim();
       const data = await api<{ orders: any[]; total: number }>('bar', 'pending-orders', {
-        params: { page: String(page + 1), page_size: String(pageSize) },
+        params,
         branchId,
       });
       setOrders(data.orders ?? []);
       setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [branchId, page, pageSize]);
+  }, [branchId, page, pageSize, dateRange, search]);
 
   useEffect(() => { setLoading(true); fetchOrders(); }, [fetchOrders]);
   useRealtime('orders', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchOrders());
@@ -752,6 +803,22 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
 
   return (
     <Box>
+      {/* Search & Date Range */}
+      <Stack direction="row" spacing={2} sx={{ mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+        <TextField
+          size="small" placeholder="Search order # or customer…" sx={{ minWidth: 260 }}
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+          slotProps={{ input: { startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
+        />
+        <ToggleButtonGroup size="small" value={dateRange} exclusive onChange={(_, v) => { if (v) { setDateRange(v); setPage(0); } }}>
+          {[{ value: 'today', label: 'Today' }, { value: '7d', label: '7 Days' }, { value: '30d', label: '30 Days' }, { value: 'all', label: 'All' }].map((o) => (
+            <ToggleButton key={o.value} value={o.value}>{o.label}</ToggleButton>
+          ))}
+        </ToggleButtonGroup>
+        <Typography variant="body2" color="text.secondary">{total} order{total !== 1 ? 's' : ''}</Typography>
+      </Stack>
+
       {loading && <LinearProgress sx={{ mb: 1 }} />}
 
       {orders.length === 0 && !loading ? (
@@ -839,6 +906,8 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState('');
+  const [dateRange, setDateRange] = useState('today');
 
   const [detailDialog, setDetailDialog] = useState(false);
   const [detailOrder, setDetailOrder] = useState<any>(null);
@@ -848,15 +917,19 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
 
   const fetchOrders = useCallback(async () => {
     try {
+      const params: Record<string, string> = {
+        page: String(page + 1), page_size: String(pageSize), date_range: dateRange,
+      };
+      if (search.trim()) params.search = search.trim();
       const data = await api<{ orders: any[]; total: number }>('bar', 'awaiting-payment', {
-        params: { page: String(page + 1), page_size: String(pageSize) },
+        params,
         branchId,
       });
       setOrders(data.orders ?? []);
       setTotal(data.total ?? 0);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [branchId, page, pageSize]);
+  }, [branchId, page, pageSize, dateRange, search]);
 
   useEffect(() => { setLoading(true); fetchOrders(); }, [fetchOrders]);
   useRealtime('orders', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchOrders());
@@ -886,6 +959,22 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
       <Alert severity="info" sx={{ mb: 2 }}>
         Orders awaiting payment. Checkout can be completed at the POS Terminal.
       </Alert>
+
+      {/* Search & Date Range */}
+      <Stack direction="row" spacing={2} sx={{ mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+        <TextField
+          size="small" placeholder="Search order # or customer…" sx={{ minWidth: 260 }}
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+          slotProps={{ input: { startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
+        />
+        <ToggleButtonGroup size="small" value={dateRange} exclusive onChange={(_, v) => { if (v) { setDateRange(v); setPage(0); } }}>
+          {[{ value: 'today', label: 'Today' }, { value: '7d', label: '7 Days' }, { value: '30d', label: '30 Days' }, { value: 'all', label: 'All' }].map((o) => (
+            <ToggleButton key={o.value} value={o.value}>{o.label}</ToggleButton>
+          ))}
+        </ToggleButtonGroup>
+        <Typography variant="body2" color="text.secondary">{total} order{total !== 1 ? 's' : ''}</Typography>
+      </Stack>
 
       {loading && <LinearProgress sx={{ mb: 1 }} />}
 
@@ -1053,18 +1142,63 @@ function OrderDetailDialog({
                     <TableCell>Item</TableCell>
                     <TableCell align="right">Qty</TableCell>
                     <TableCell align="right">Unit Price</TableCell>
+                    <TableCell align="right">Extras</TableCell>
                     <TableCell align="right">Total</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {(order.order_items ?? []).map((item: any) => (
-                    <TableRow key={item.id}>
-                      <TableCell>{item.menu_item_name}</TableCell>
-                      <TableCell align="right">{item.quantity}</TableCell>
-                      <TableCell align="right">{fmt(item.unit_price)}</TableCell>
-                      <TableCell align="right">{fmt(item.item_total ?? item.unit_price * item.quantity)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {(order.order_items ?? []).map((item: any) => {
+                    const extras = Array.isArray(item.selected_extras) ? item.selected_extras : [];
+                    const removed = Array.isArray(item.removed_ingredients) ? item.removed_ingredients : [];
+                    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+                    return (
+                      <React.Fragment key={item.id}>
+                        <TableRow>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={600}>{item.menu_item_name}</Typography>
+                            {item.variant_name && (
+                              <Typography variant="caption" color="text.secondary">Variant: {item.variant_name}</Typography>
+                            )}
+                          </TableCell>
+                          <TableCell align="right">{item.quantity}</TableCell>
+                          <TableCell align="right">{fmt(item.unit_price)}</TableCell>
+                          <TableCell align="right">{item.modifiers_total > 0 ? fmt(item.modifiers_total) : '—'}</TableCell>
+                          <TableCell align="right">{fmt(item.item_total ?? item.unit_price * item.quantity)}</TableCell>
+                        </TableRow>
+                        {/* Detail sub-row: ingredients, removed ingredients, extras, instructions */}
+                        {(ingredients.length > 0 || removed.length > 0 || extras.length > 0 || item.special_instructions) && (
+                          <TableRow>
+                            <TableCell colSpan={5} sx={{ py: 0.5, pl: 4, borderBottom: 'none', bgcolor: 'action.hover' }}>
+                              {ingredients.length > 0 && (
+                                <Typography variant="caption" display="block" color="text.secondary">
+                                  <strong>Ingredients:</strong> {ingredients.map((ig: any) => ig.name ?? ig.ingredient_name ?? ig).join(', ')}
+                                </Typography>
+                              )}
+                              {removed.length > 0 && (
+                                <Typography variant="caption" display="block" color="error.main">
+                                  <strong>Removed:</strong> {removed.map((r: any) => typeof r === 'string' ? r : r.name ?? r.ingredient_name ?? JSON.stringify(r)).join(', ')}
+                                </Typography>
+                              )}
+                              {extras.length > 0 && (
+                                <Typography variant="caption" display="block" color="success.main">
+                                  <strong>Extras:</strong> {extras.map((ex: any) => {
+                                    const n = typeof ex === 'string' ? ex : ex.name ?? ex.extra_name ?? '';
+                                    const p = typeof ex === 'object' && ex.price ? ` (+${fmt(ex.price)})` : '';
+                                    return n + p;
+                                  }).join(', ')}
+                                </Typography>
+                              )}
+                              {item.special_instructions && (
+                                <Typography variant="caption" display="block" sx={{ fontStyle: 'italic' }}>
+                                  Note: {item.special_instructions}
+                                </Typography>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableContainer>
