@@ -115,6 +115,7 @@ export const STATION_LABELS: Record<KitchenStation, string> = {
   kitchen: 'Kitchen',
   bar: 'Bar',
   shisha: 'Shisha Lounge',
+  accommodation: 'Accommodation',
 };
 
 // ─── Meal Availability Labels ───────────────────────────────────────────────

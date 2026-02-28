@@ -29,6 +29,12 @@ export type Permission =
   | 'bar_pending_orders'
   | 'bar_pending_payment'
   | 'bar_request_items'
+  | 'view_accommodation'
+  | 'accom_create_order'
+  | 'accom_pending_orders'
+  | 'accom_pending_payment'
+  | 'accom_create_rooms'
+  | 'accom_request_items'
   | 'view_shisha'
   | 'manage_delivery'
   | 'manage_inventory'
@@ -82,7 +88,7 @@ export type OrderItemStatus =
   | 'served'
   | 'cancelled';
 
-export type KitchenStation = 'kitchen' | 'bar' | 'shisha';
+export type KitchenStation = 'kitchen' | 'bar' | 'shisha' | 'accommodation';
 
 export type OrderSource = 'pos' | 'online' | 'phone' | 'kitchen';
 
