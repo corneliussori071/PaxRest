@@ -390,7 +390,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                     source: 'menu',
                     menu_item_id: meal.menu_item_id,
                     ingredients: (meal.menu_items?.menu_item_ingredients ?? []).map((ig) => ({
-                      name: ig.name ?? 'Unknown',
+                      name: ig.name || (ig as any).inventory_items?.name || 'Unknown',
                       quantity_used: ig.quantity_used,
                       unit: ig.unit,
                       cost_contribution: ig.cost_contribution,
@@ -1177,13 +1177,31 @@ function OrderDetailDialog({
             {(order.order_items ?? []).map((item: any, idx: number) => {
               const ZERO_UUID = '00000000-0000-0000-0000-000000000000';
               const isBarStore = item.menu_item_id === ZERO_UUID || (!item.menu_item_id);
-              const extras = Array.isArray(item.selected_extras) ? item.selected_extras : [];
+
+              // Parse selected_extras — may be a JSON string (legacy) or array
+              let extras: any[] = [];
+              if (Array.isArray(item.selected_extras)) {
+                extras = item.selected_extras;
+              } else if (typeof item.selected_extras === 'string') {
+                try { extras = JSON.parse(item.selected_extras); } catch { extras = []; }
+              }
+
               const removed = Array.isArray(item.removed_ingredients) ? item.removed_ingredients : [];
-              // Ingredients: prefer backend-enriched `item.ingredients`, fallback to `item.modifiers` (stored at creation)
-              const rawIngredients = Array.isArray(item.ingredients) && item.ingredients.length > 0
-                ? item.ingredients
-                : Array.isArray(item.modifiers) ? item.modifiers : [];
-              const ingredients = rawIngredients.filter((ig: any) => ig && (ig.name || ig.ingredient_name));
+
+              // Parse ingredients — prefer enriched `item.ingredients`, then `item.modifiers` (stored at creation)
+              // Either may be a JSON string (legacy double-encoding) or array
+              let ingredients: any[] = [];
+              const tryParse = (v: any): any[] => {
+                if (Array.isArray(v) && v.length > 0) return v;
+                if (typeof v === 'string' && v.length > 2) {
+                  try { const p = JSON.parse(v); if (Array.isArray(p)) return p; } catch { /* ignore */ }
+                }
+                return [];
+              };
+              ingredients = tryParse(item.ingredients);
+              if (ingredients.length === 0) ingredients = tryParse(item.modifiers);
+              ingredients = ingredients.filter((ig: any) => ig && (ig.name || ig.ingredient_name));
+
               const extrasTotal = extras.reduce((s: number, ex: any) => s + (typeof ex === 'object' && ex.price ? Number(ex.price) : 0), 0);
 
               return (

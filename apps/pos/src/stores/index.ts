@@ -163,6 +163,7 @@ export interface MealIngredient {
   quantity_used: number;
   unit: string;
   cost_contribution: number;
+  inventory_items?: { name: string };
 }
 
 export interface MealExtra {

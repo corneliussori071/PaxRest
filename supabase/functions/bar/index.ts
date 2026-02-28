@@ -262,8 +262,8 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
     item_total: it.unit_price * it.quantity,
     station: 'bar' as const,
     status: 'pending' as const,
-    modifiers: JSON.stringify(it.ingredients ?? []),
-    selected_extras: JSON.stringify(it.extras ?? []),
+    modifiers: it.ingredients ?? [],
+    selected_extras: it.extras ?? [],
   }));
 
   await service.from('order_items').insert(orderItemRows);
