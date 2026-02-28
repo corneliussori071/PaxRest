@@ -860,10 +860,31 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   );
 }
 
+/**
+ * Calculates the number of billing units between two datetime strings.
+ *   night — calendar-night difference (hotel standard: only the date parts matter)
+ *   day   — ceil of full 24-hour periods
+ *   hour  — ceil of full hours
+ * Returns 0 if either date is missing or checkout <= checkin.
+ */
+function calcDuration(ciStr: string, coStr: string, unit: string): number {
+  if (!ciStr || !coStr) return 0;
+  const ci = new Date(ciStr).getTime();
+  const co = new Date(coStr).getTime();
+  if (isNaN(ci) || isNaN(co) || co <= ci) return 0;
+  const diffMs = co - ci;
+  if (unit === 'hour') return Math.max(1, Math.ceil(diffMs / 3_600_000));
+  if (unit === 'day')  return Math.max(1, Math.ceil(diffMs / 86_400_000));
+  // night: use calendar-day midnight boundaries
+  const ciMidnight = new Date(new Date(ciStr).toDateString()).getTime();
+  const coMidnight = new Date(new Date(coStr).toDateString()).getTime();
+  return Math.max(1, Math.round((coMidnight - ciMidnight) / 86_400_000));
+}
+
 /* ═══════════════════════════════════════════════════════
    Room Booking Dialog
    Opens when a user clicks an available room in the picker.
-   Collects: duration, guests, check-in/out, computes total.
+   Collects: check-in/out (auto-calculates duration), guests, computes total.
    ═══════════════════════════════════════════════════════ */
 function RoomBookingDialog({
   room, open, onClose, onConfirm, currency,
@@ -891,7 +912,17 @@ function RoomBookingDialog({
 
   const durationUnit = room?.cost_duration ?? 'night';
   const durationLabel = durationUnit === 'hour' ? 'hour' : durationUnit === 'day' ? 'day' : 'night';
-  const total = Number(room?.cost_amount ?? 0) * durationCount;
+
+  // Auto-calculate duration from dates when both are provided
+  const autoDuration = (checkIn && checkOut) ? calcDuration(checkIn, checkOut, durationUnit) : 0;
+  const effectiveDuration = autoDuration > 0 ? autoDuration : durationCount;
+  const total = Number(room?.cost_amount ?? 0) * effectiveDuration;
+
+  // Duration hint for the UI
+  const durationMethodLabel =
+    durationUnit === 'night' ? 'Calendar nights (hotel standard)'
+    : durationUnit === 'hour' ? 'Hours — rounded up'
+    : 'Days of 24 h — rounded up';
 
   // For partially_occupied rooms the bookable capacity is what's left
   const isPartiallyOccupied = room?.status === 'partially_occupied';
@@ -901,7 +932,7 @@ function RoomBookingDialog({
 
   const handleConfirm = () => {
     if (!checkIn) return toast.error('Check-in date & time is required');
-    if (durationCount < 1) return toast.error(`Number of ${durationLabel}s must be at least 1`);
+    if (effectiveDuration < 1) return toast.error(`Number of ${durationLabel}s must be at least 1`);
     if (numPeople < 1) return toast.error('At least 1 guest required');
     if (numPeople > maxGuests) {
       return toast.error(
@@ -914,7 +945,7 @@ function RoomBookingDialog({
       num_people: numPeople,
       check_in: checkIn,
       check_out: checkOut || undefined,
-      duration_count: durationCount,
+      duration_count: effectiveDuration,
       duration_unit: durationUnit,
     });
   };
@@ -944,15 +975,50 @@ function RoomBookingDialog({
             )}
           </Paper>
 
+          {/* Check-in comes FIRST so departure auto-calculates duration */}
           <TextField
-            label={`Number of ${durationLabel}s *`}
-            type="number"
+            label="Check-in Date & Time *"
+            type="datetime-local"
             fullWidth
-            value={durationCount}
-            onChange={(e) => setDurationCount(Math.max(1, Number(e.target.value)))}
-            inputProps={{ min: 1 }}
-            helperText={`Sub-total: ${formatCurrency(total, currency)}`}
+            value={checkIn}
+            onChange={(e) => setCheckIn(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
           />
+
+          <TextField
+            label="Departure Date & Time (auto-calculates duration)"
+            type="datetime-local"
+            fullWidth
+            value={checkOut}
+            onChange={(e) => setCheckOut(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText={checkOut && checkIn && autoDuration > 0
+              ? `${autoDuration} ${durationLabel}${autoDuration !== 1 ? 's' : ''} — ${durationMethodLabel}`
+              : 'Optional — set to auto-calculate duration'}
+          />
+
+          {/* Duration: auto-computed when checkout set, otherwise manual */}
+          {autoDuration > 0 ? (
+            <Alert severity="info" icon={<CalendarTodayIcon fontSize="small" />} sx={{ py: 0.5 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={0.5}>
+                <Typography variant="body2">
+                  <strong>{effectiveDuration} {durationLabel}{effectiveDuration !== 1 ? 's' : ''}</strong>
+                  {' '}&mdash; auto-calculated
+                </Typography>
+                <Typography variant="caption" color="text.secondary">{durationMethodLabel}</Typography>
+              </Stack>
+            </Alert>
+          ) : (
+            <TextField
+              label={`Number of ${durationLabel}s *`}
+              type="number"
+              fullWidth
+              value={durationCount}
+              onChange={(e) => setDurationCount(Math.max(1, Number(e.target.value)))}
+              inputProps={{ min: 1 }}
+              helperText={`Set a departure date/time to auto-calculate`}
+            />
+          )}
 
           <TextField
             label="Number of Guests *"
@@ -967,30 +1033,13 @@ function RoomBookingDialog({
             slotProps={{ input: { startAdornment: <PeopleIcon sx={{ mr: 1, color: 'text.secondary' }} /> } }}
           />
 
-          <TextField
-            label="Check-in Date & Time *"
-            type="datetime-local"
-            fullWidth
-            value={checkIn}
-            onChange={(e) => setCheckIn(e.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-          />
-
-          <TextField
-            label="Departure Date & Time (optional)"
-            type="datetime-local"
-            fullWidth
-            value={checkOut}
-            onChange={(e) => setCheckOut(e.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-          />
-
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 1 }}>
             <Typography variant="h6" fontWeight={700}>
               Total: {formatCurrency(total, currency)}
             </Typography>
             <Typography variant="caption">
-              {durationCount} {durationLabel}{durationCount !== 1 ? 's' : ''} × {formatCurrency(room?.cost_amount ?? 0, currency)}
+              {effectiveDuration} {durationLabel}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(room?.cost_amount ?? 0, currency)}
+              {autoDuration > 0 && ' (auto)'}
             </Typography>
           </Paper>
         </Stack>
@@ -3157,6 +3206,12 @@ function InStaySubTab({ branchId, fmt }: { branchId: string; fmt: (v: number) =>
   const [extendNotes, setExtendNotes] = useState('');
   const [extendLoading, setExtendLoading] = useState(false);
 
+  // Auto-compute extension count from the new departure date vs current scheduled checkout
+  const autoExtendFromDates = (extendNewCheckOut && extendDialog?.scheduled_check_out)
+    ? calcDuration(extendDialog.scheduled_check_out, extendNewCheckOut, extendUnit)
+    : 0;
+  const effectiveExtendCount = autoExtendFromDates > 0 ? autoExtendFromDates : extendCount;
+
   // Clock tick every minute for countdown
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60000);
@@ -3262,14 +3317,14 @@ function InStaySubTab({ branchId, fmt }: { branchId: string; fmt: (v: number) =>
       await api('accommodation', 'extend-stay', {
         body: {
           booking_id: extendDialog.id,
-          duration_count: extendCount,
+          duration_count: effectiveExtendCount,
           duration_unit: extendUnit,
           new_check_out: extendNewCheckOut ? new Date(extendNewCheckOut).toISOString() : undefined,
           notes: extendNotes || undefined,
         },
         branchId,
       });
-      toast.success(`Stay extended — ${extendCount} ${extendUnit}(s). New order created for payment.`);
+      toast.success(`Stay extended — ${effectiveExtendCount} ${extendUnit}(s). New order created for payment.`);
       setExtendDialog(null);
       fetchBookings();
     } catch (err: any) { toast.error(err.message); }
@@ -3474,32 +3529,44 @@ function InStaySubTab({ branchId, fmt }: { branchId: string; fmt: (v: number) =>
             </Typography>
             {extendDialog?.rooms?.cost_amount && (
               <Alert severity="info">
-                Extension total: <strong>{fmt(Number(extendDialog.rooms.cost_amount) * extendCount)}</strong>
-                {' '}({extendCount} {extendUnit}{extendCount !== 1 ? 's' : ''})
+                Extension total: <strong>{fmt(Number(extendDialog.rooms.cost_amount) * effectiveExtendCount)}</strong>
+                {' '}({effectiveExtendCount} {extendUnit}{effectiveExtendCount !== 1 ? 's' : ''}{autoExtendFromDates > 0 ? ' — auto-calculated' : ''})
                 — a new pending-payment order will be created.
               </Alert>
             )}
-            <Stack direction="row" spacing={1}>
-              <TextField
-                label="Duration" type="number" size="small" sx={{ width: 120 }}
-                value={extendCount}
-                onChange={(e) => setExtendCount(Math.max(1, Number(e.target.value)))}
-                slotProps={{ htmlInput: { min: 1 } }}
-              />
-              <FormControl size="small" sx={{ minWidth: 120 }}>
-                <InputLabel>Unit</InputLabel>
-                <Select value={extendUnit} label="Unit" onChange={(e) => setExtendUnit(e.target.value)}>
-                  <MuiMenuItem value="night">Night(s)</MuiMenuItem>
-                  <MuiMenuItem value="day">Day(s)</MuiMenuItem>
-                  <MuiMenuItem value="hour">Hour(s)</MuiMenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
+            {/* New departure date first — drives auto-calc */}
             <TextField
-              label="New Departure Date & Time (optional)" type="datetime-local" fullWidth size="small"
+              label="New Departure Date & Time (auto-calculates extension)" type="datetime-local" fullWidth size="small"
               value={extendNewCheckOut} onChange={(e) => setExtendNewCheckOut(e.target.value)}
               slotProps={{ inputLabel: { shrink: true } }}
+              helperText={autoExtendFromDates > 0
+                ? `${autoExtendFromDates} ${extendUnit}${autoExtendFromDates !== 1 ? 's' : ''} calculated from current checkout`
+                : 'Set date to auto-calculate extension duration'}
             />
+            {/* Duration: auto when new date set, manual otherwise */}
+            {autoExtendFromDates > 0 ? (
+              <Alert severity="success" icon={<CalendarTodayIcon fontSize="small" />} sx={{ py: 0.5 }}>
+                <strong>{effectiveExtendCount} {extendUnit}{effectiveExtendCount !== 1 ? 's' : ''}</strong>
+                {' '}— auto-calculated from new departure date
+              </Alert>
+            ) : (
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  label="Duration" type="number" size="small" sx={{ width: 120 }}
+                  value={extendCount}
+                  onChange={(e) => setExtendCount(Math.max(1, Number(e.target.value)))}
+                  slotProps={{ htmlInput: { min: 1 } }}
+                />
+                <FormControl size="small" sx={{ minWidth: 120 }}>
+                  <InputLabel>Unit</InputLabel>
+                  <Select value={extendUnit} label="Unit" onChange={(e) => setExtendUnit(e.target.value)}>
+                    <MuiMenuItem value="night">Night(s)</MuiMenuItem>
+                    <MuiMenuItem value="day">Day(s)</MuiMenuItem>
+                    <MuiMenuItem value="hour">Hour(s)</MuiMenuItem>
+                  </Select>
+                </FormControl>
+              </Stack>
+            )}
             <TextField
               label="Notes (optional)" fullWidth size="small" multiline rows={2}
               value={extendNotes} onChange={(e) => setExtendNotes(e.target.value)}
