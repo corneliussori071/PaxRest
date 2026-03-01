@@ -3,7 +3,7 @@ import {
   Box, Tabs, Tab, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, Grid, Chip, Typography, IconButton,
   Menu, MenuItem, FormControl, InputLabel, Select, Alert,
-  CircularProgress, Divider, Stack,
+  CircularProgress, Divider, Stack, InputAdornment,
 } from '@mui/material';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import AssignmentIcon from '@mui/icons-material/Assignment';
@@ -102,7 +102,20 @@ function DeliveriesTab() {
         />
       ),
     },
-    { id: 'customer', label: 'Customer', render: (r) => r.customer_name || r.orders?.customer_name || '' },
+    {
+      id: 'customer', label: 'Customer', render: (r) => {
+        const name = r.customer_name || r.orders?.customer_name || '';
+        const phone = r.customer_phone || '';
+        const address = r.delivery_address || '';
+        return (
+          <Box>
+            <Typography variant="body2" fontWeight={600}>{name || '—'}</Typography>
+            {phone && <Typography variant="caption" color="text.secondary" display="block">{phone}</Typography>}
+            {address && <Typography variant="caption" color="text.secondary" display="block">{address}</Typography>}
+          </Box>
+        );
+      },
+    },
     { id: 'rider', label: 'Rider', render: (r) => r.rider?.name ?? r.rider_name ?? <Typography variant="caption" color="warning.main">Unassigned</Typography> },
     { id: 'rider_response', label: 'Response', render: (r) => {
       if (!r.rider_id) return null;
@@ -477,22 +490,24 @@ function RiderAssignmentsDialog({ rider, onClose }: { rider: any; onClose: () =>
 // 
 
 function ZonesTab() {
-  const { activeBranchId } = useAuth();
+  const { activeBranchId, activeBranch, company } = useAuth();
+  const currency = activeBranch?.currency ?? company?.currency ?? '';
   const { items, loading, refetch } = usePaginated<any>('delivery', 'zones');
   const [dialog, setDialog] = useState(false);
-  const [form, setForm] = useState({ name: '', delivery_fee: 0, min_order_amount: 0, estimated_minutes: 30 });
+  const emptyForm = { name: '', delivery_fee: 0, min_order_amount: 0, estimated_minutes: 30 };
+  const [form, setForm] = useState<any>(emptyForm);
 
   const handleSave = async () => {
     try {
       await api('delivery', 'zones', { body: form, branchId: activeBranchId! });
-      toast.success('Zone saved'); setDialog(false); refetch();
+      toast.success('Zone saved'); setDialog(false); setForm(emptyForm); refetch();
     } catch (err: any) { toast.error(err.message); }
   };
 
   const columns: Column[] = [
     { id: 'name', label: 'Zone' },
-    { id: 'delivery_fee', label: 'Fee' },
-    { id: 'min_order_amount', label: 'Min Order' },
+    { id: 'delivery_fee', label: 'Fee', render: (r) => `${currency} ${Number(r.delivery_fee).toFixed(2)}` },
+    { id: 'min_order_amount', label: 'Min Order', render: (r) => `${currency} ${Number(r.min_order_amount).toFixed(2)}` },
     { id: 'estimated_minutes', label: 'Est. Minutes' },
     { id: 'is_active', label: 'Active', render: (r) => r.is_active ? 'Yes' : 'No' },
   ];
@@ -500,16 +515,28 @@ function ZonesTab() {
   return (
     <>
       <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
-        <Button variant="contained" onClick={() => setDialog(true)}>Add Zone</Button>
+        <Button variant="contained" onClick={() => { setForm(emptyForm); setDialog(true); }}>Add Zone</Button>
       </Box>
       <DataTable columns={columns} rows={items} loading={loading} rowKey={(r) => r.id} onRowClick={(r) => { setForm(r); setDialog(true); }} />
-      <Dialog open={dialog} onClose={() => setDialog(false)} maxWidth="xs" fullWidth>
+      <Dialog open={dialog} onClose={() => { setDialog(false); setForm(emptyForm); }} maxWidth="xs" fullWidth>
         <DialogTitle>Delivery Zone</DialogTitle>
         <DialogContent>
           <TextField fullWidth label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ mt: 1, mb: 2 }} />
           <Grid container spacing={2}>
-            <Grid size={6}><TextField fullWidth label="Fee" type="number" value={form.delivery_fee} onChange={(e) => setForm({ ...form, delivery_fee: Number(e.target.value) })} /></Grid>
-            <Grid size={6}><TextField fullWidth label="Min Order" type="number" value={form.min_order_amount} onChange={(e) => setForm({ ...form, min_order_amount: Number(e.target.value) })} /></Grid>
+            <Grid size={6}>
+              <TextField
+                fullWidth label="Delivery Fee" type="number" value={form.delivery_fee}
+                onChange={(e) => setForm({ ...form, delivery_fee: Number(e.target.value) })}
+                slotProps={{ input: { startAdornment: <InputAdornment position="start">{currency}</InputAdornment> } }}
+              />
+            </Grid>
+            <Grid size={6}>
+              <TextField
+                fullWidth label="Min Order" type="number" value={form.min_order_amount}
+                onChange={(e) => setForm({ ...form, min_order_amount: Number(e.target.value) })}
+                slotProps={{ input: { startAdornment: <InputAdornment position="start">{currency}</InputAdornment> } }}
+              />
+            </Grid>
             <Grid size={6}><TextField fullWidth label="Est. Minutes" type="number" value={form.estimated_minutes} onChange={(e) => setForm({ ...form, estimated_minutes: Number(e.target.value) })} /></Grid>
           </Grid>
         </DialogContent>

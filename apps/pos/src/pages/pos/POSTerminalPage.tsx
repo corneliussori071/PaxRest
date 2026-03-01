@@ -61,6 +61,10 @@ function POSTerminalContent() {
   const [deliveryRiderId, setDeliveryRiderId] = useState<string>('');
   const [deliveryAssignMode, setDeliveryAssignMode] = useState<'manual' | 'auto'>('auto');
   const [deliveryNotes, setDeliveryNotes] = useState<string>('');
+  // Delivery customer contact fields
+  const [deliveryCustomerName, setDeliveryCustomerName] = useState<string>('');
+  const [deliveryCustomerPhone, setDeliveryCustomerPhone] = useState<string>('');
+  const [deliveryAddress, setDeliveryAddress] = useState<string>('');
 
   const isDelivery = cart.orderType === 'delivery';
 
@@ -73,6 +77,8 @@ function POSTerminalContent() {
   );
   const deliveryZones = isDelivery ? (zonesData?.zones ?? []).filter((z: any) => z.is_active) : [];
   const availableRiders = isDelivery ? (ridersData?.riders ?? []).filter((r: any) => r.is_available && r.is_active) : [];
+  const selectedZone = deliveryZones.find((z: any) => z.id === deliveryZoneId);
+  const deliveryFee = isDelivery && selectedZone ? Number(selectedZone.delivery_fee) : 0;
 
   // Reset delivery fields when order type changes
   const handleOrderTypeChange = (t: typeof cart.orderType) => {
@@ -82,6 +88,9 @@ function POSTerminalContent() {
       setDeliveryRiderId('');
       setDeliveryAssignMode('auto');
       setDeliveryNotes('');
+      setDeliveryCustomerName('');
+      setDeliveryCustomerPhone('');
+      setDeliveryAddress('');
     }
   };
 
@@ -281,6 +290,9 @@ function POSTerminalContent() {
               auto_assign: deliveryAssignMode === 'auto',
               delivery_zone_id: deliveryZoneId || null,
               notes: deliveryNotes || null,
+              customer_name: deliveryCustomerName || null,
+              customer_phone: deliveryCustomerPhone || null,
+              delivery_address: deliveryAddress || null,
             },
             branchId: activeBranchId ?? undefined,
           });
@@ -297,6 +309,9 @@ function POSTerminalContent() {
       setDeliveryRiderId('');
       setDeliveryAssignMode('auto');
       setDeliveryNotes('');
+      setDeliveryCustomerName('');
+      setDeliveryCustomerPhone('');
+      setDeliveryAddress('');
       cart.clearCart();
       // Refresh meals in case available counts changed
       if (activeBranchId) fetchMeals(activeBranchId);
@@ -490,7 +505,7 @@ function POSTerminalContent() {
               label={t.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
               color={cart.orderType === t ? 'primary' : 'default'}
               variant={cart.orderType === t ? 'filled' : 'outlined'}
-              onClick={() => cart.setOrderType(t)}
+              onClick={() => handleOrderTypeChange(t)}
               size="small"
             />
           ))}
@@ -507,7 +522,7 @@ function POSTerminalContent() {
               <Select label="Delivery Zone" value={deliveryZoneId} onChange={(e) => setDeliveryZoneId(e.target.value)}>
                 <MenuItem value=""><em>No zone</em></MenuItem>
                 {deliveryZones.map((z: any) => (
-                  <MenuItem key={z.id} value={z.id}>{z.name} (+{z.delivery_fee})</MenuItem>
+                  <MenuItem key={z.id} value={z.id}>{z.name} (+{fmt(Number(z.delivery_fee))})</MenuItem>
                 ))}
               </Select>
             </FormControl>
@@ -542,6 +557,22 @@ function POSTerminalContent() {
               <Typography variant="caption" color="warning.dark">No available riders — switch to Auto or assign later</Typography>
             )}
 
+            {/* Customer contact info — required for delivery */}
+            <TextField
+              fullWidth size="small" label="Customer Name *" placeholder="Customer name"
+              value={deliveryCustomerName} onChange={(e) => setDeliveryCustomerName(e.target.value)}
+              sx={{ mb: 1 }}
+            />
+            <TextField
+              fullWidth size="small" label="Contact Number *" placeholder="Phone number"
+              value={deliveryCustomerPhone} onChange={(e) => setDeliveryCustomerPhone(e.target.value)}
+              sx={{ mb: 1 }}
+            />
+            <TextField
+              fullWidth size="small" label="Delivery Address *" placeholder="Delivery address"
+              value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)}
+              sx={{ mb: 1 }}
+            />
             {/* Delivery notes */}
             <TextField
               fullWidth size="small" placeholder="Delivery notes (optional)"
@@ -637,9 +668,15 @@ function POSTerminalContent() {
             <Typography variant="body2" color="error">-{fmt(cart.subtotal() * cart.discountPercent / 100)}</Typography>
           </Box>
         )}
+        {deliveryFee > 0 && (
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+            <Typography variant="body2" color="info.main">Delivery Fee ({selectedZone?.name})</Typography>
+            <Typography variant="body2" color="info.main">+{fmt(deliveryFee)}</Typography>
+          </Box>
+        )}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
           <Typography variant="h6" fontWeight={700}>Total</Typography>
-          <Typography variant="h6" fontWeight={700} color="primary">{fmt(cart.total())}</Typography>
+          <Typography variant="h6" fontWeight={700} color="primary">{fmt(cart.total() + deliveryFee)}</Typography>
         </Box>
 
         {/* Notes + discount */}
@@ -660,7 +697,7 @@ function POSTerminalContent() {
           fullWidth variant="contained" size="large" disabled={submitting || cart.items.length === 0}
           onClick={handleSubmitOrder}
         >
-          {submitting ? 'Placing Order…' : `Place Order — ${fmt(cart.total())}`}
+          {submitting ? 'Placing Order…' : `Place Order — ${fmt(cart.total() + deliveryFee)}`}
         </Button>
       </Paper>
 
