@@ -6,13 +6,37 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? 'placeholder';
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
- * Module-level refresh lock.
- * Prevents multiple concurrent refreshSession() calls racing each other
- * when several useEffect fetches fire at the same time with an expired token.
- * Supabase rotates refresh tokens on first use, so a second concurrent
- * refresh would fail (token already consumed) and trigger signOut().
+ * Module-level lock for proactive token refresh.
+ * All concurrent api() calls that detect an expired/near-expired token
+ * share a single refreshSession() call, preventing refresh-token rotation
+ * races (where the first rotated token invalidates all others).
  */
-let _refreshLock: Promise<{ data: { session: any } }> | null = null;
+let _sessionLock: Promise<{ data: { session: any } }> | null = null;
+
+/**
+ * Returns a valid session, refreshing proactively if the access token
+ * has expired or will expire within 60 seconds.
+ * Uses a module-level lock so concurrent callers all wait for the same
+ * network refresh instead of each racing to rotate the refresh token.
+ */
+async function getValidSession() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return null;
+
+  const expiresAt = session.expires_at ?? 0;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  // Token still valid for more than 60 seconds — use it directly
+  if (expiresAt - nowSeconds > 60) return session;
+
+  // Token expired or expiring soon — refresh once, shared across all callers
+  if (!_sessionLock) {
+    _sessionLock = supabase.auth.refreshSession()
+      .finally(() => { _sessionLock = null; });
+  }
+  const { data: { session: refreshed } } = await _sessionLock;
+  return refreshed; // null if the refresh token was also expired
+}
 
 /* ─── Edge Function caller ─── */
 export async function api<T = any>(
@@ -27,46 +51,30 @@ export async function api<T = any>(
 ): Promise<T> {
   const { method = 'GET', body, params, branchId } = options;
 
-  // getSession() in v2.49 auto-refreshes expired tokens
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error('Not authenticated');
+  // Get a guaranteed-valid session (refreshes proactively if near/past expiry)
+  const session = await getValidSession();
+  if (!session) {
+    await supabase.auth.signOut();
+    throw new Error('Session expired — please log in again');
+  }
 
   const url = new URL(`${supabaseUrl}/functions/v1/${fn}/${action}`);
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   }
 
-  const doFetch = (token: string) => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: supabaseAnonKey,
-    };
-    if (branchId) headers['x-branch-id'] = branchId;
-
-    return fetch(url.toString(), {
-      method: body ? (method === 'GET' ? 'POST' : method) : method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session.access_token}`,
+    apikey: supabaseAnonKey,
   };
+  if (branchId) headers['x-branch-id'] = branchId;
 
-  let res = await doFetch(session.access_token);
-
-  // If 401 (token expired between getSession and fetch), refresh and retry once.
-  // Use a module-level lock so concurrent calls share a single refreshSession()
-  // instead of each racing to rotate the refresh token (and all but one failing).
-  if (res.status === 401) {
-    if (!_refreshLock) {
-      _refreshLock = supabase.auth.refreshSession().finally(() => { _refreshLock = null; });
-    }
-    const { data: { session: refreshed } } = await _refreshLock;
-    if (!refreshed) {
-      await supabase.auth.signOut();
-      throw new Error('Session expired — please log in again');
-    }
-    res = await doFetch(refreshed.access_token);
-  }
+  const res = await fetch(url.toString(), {
+    method: body ? (method === 'GET' ? 'POST' : method) : method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
 
   const json = await res.json();
   if (!res.ok) {
