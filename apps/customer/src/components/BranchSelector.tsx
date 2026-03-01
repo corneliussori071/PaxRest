@@ -44,14 +44,13 @@ export default function BranchSelector() {
   }, [branchId]);
 
   const fetchBranches = async () => {
-    if (!COMPANY_SLUG) {
-      console.warn('NEXT_PUBLIC_COMPANY_SLUG is not set');
-      return;
-    }
     setLoading(true);
     try {
+      // If COMPANY_SLUG is set use it; otherwise the Edge Function auto-detects
+      // the single active company (single-tenant mode).
+      const qs = COMPANY_SLUG ? `?company_slug=${encodeURIComponent(COMPANY_SLUG)}` : '';
       const res = await publicApi<{ company: Company; branches: Branch[] }>(
-        `/customer/branches?company_slug=${encodeURIComponent(COMPANY_SLUG)}`,
+        `/customer/branches${qs}`,
       );
       if (res.data) {
         setCompany(res.data.company);
@@ -88,7 +87,7 @@ export default function BranchSelector() {
     >
       <DialogTitle sx={{ pt: 4, pb: 1, textAlign: 'center' }}>
         <StorefrontIcon color="primary" sx={{ fontSize: 48, display: 'block', mx: 'auto', mb: 1 }} />
-        <Typography variant="h5" fontWeight={700}>
+        <Typography variant="h5" fontWeight={700} component="span" display="block">
           {company?.name ?? 'Welcome!'}
         </Typography>
       </DialogTitle>

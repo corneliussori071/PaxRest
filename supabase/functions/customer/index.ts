@@ -62,6 +62,7 @@ serve(async (req) => {
   try {
     switch (action) {
       case 'branches':     return await getBranches(req);
+      case 'companies':    return await getCompanies(req);
       case 'zones':        return await getZones(req);
       case 'order':        return await createOrder(req);
       case 'order-status': return await getOrderStatus(req);
@@ -77,25 +78,52 @@ serve(async (req) => {
   }
 });
 
+// ─── GET companies ──────────────────────────────────────────────────────────
+// Returns all active companies (public info only — name, slug, logo).
+async function getCompanies(req: Request) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+  const service = createServiceClient();
+  const { data, error } = await service
+    .from('companies')
+    .select('id, name, slug, currency, logo_url')
+    .eq('is_active', true)
+    .order('name', { ascending: true });
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ companies: data ?? [] });
+}
+
 // ─── GET branches ────────────────────────────────────────────────────────────
 // Returns all active branches for a given company slug.
-
+// If no slug is provided AND there is only one active company, auto-selects it.
 async function getBranches(req: Request) {
   if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
 
   const url = new URL(req.url);
-  const slug = url.searchParams.get('company_slug');
-  if (!slug) return errorResponse('Missing company_slug');
+  const slug = url.searchParams.get('company_slug') ?? '';
 
   const service = createServiceClient();
 
-  const { data: company, error: cErr } = await service
-    .from('companies')
-    .select('id, name, currency, logo_url')
-    .eq('slug', slug)
-    .maybeSingle();
+  let company: { id: string; name: string; currency: string; logo_url: string | null } | null = null;
 
-  if (cErr || !company) return errorResponse('Company not found', 404);
+  if (slug) {
+    const { data, error: cErr } = await service
+      .from('companies')
+      .select('id, name, currency, logo_url')
+      .eq('slug', slug)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (cErr || !data) return errorResponse('Company not found', 404);
+    company = data;
+  } else {
+    // No slug provided — auto-select when there is exactly one active company
+    const { data, error: cErr } = await service
+      .from('companies')
+      .select('id, name, currency, logo_url')
+      .eq('is_active', true);
+    if (cErr || !data || data.length === 0) return errorResponse('No company found', 404);
+    if (data.length > 1) return errorResponse('Multiple companies found — provide company_slug param', 400);
+    company = data[0];
+  }
 
   const { data: branches, error: bErr } = await service
     .from('branches')
