@@ -30,7 +30,7 @@ import { formatCurrency, MEAL_AVAILABILITY_LABELS } from '@paxrest/shared-utils'
 import type { MealAvailability } from '@paxrest/shared-types';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
-import { useRealtime } from '@/hooks';
+import { useRealtime, useApi } from '@/hooks';
 import {
   useMenuStore, useCartStore, useAvailableMealsStore,
   type CartItem, type CartItemExtra, type CartItemRemovedIngredient,
@@ -55,6 +55,35 @@ function POSTerminalContent() {
   const [customizeItem, setCustomizeItem] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showMeals, setShowMeals] = useState(false);
+
+  // Delivery assignment state
+  const [deliveryZoneId, setDeliveryZoneId] = useState<string>('');
+  const [deliveryRiderId, setDeliveryRiderId] = useState<string>('');
+  const [deliveryAssignMode, setDeliveryAssignMode] = useState<'manual' | 'auto'>('auto');
+  const [deliveryNotes, setDeliveryNotes] = useState<string>('');
+
+  const isDelivery = cart.orderType === 'delivery';
+
+  // Load zones + riders only when delivery mode is active
+  const { data: zonesData } = useApi<{ zones: any[] }>(
+    'delivery', 'zones', {}, [isDelivery ? activeBranchId : null]
+  );
+  const { data: ridersData } = useApi<{ riders: any[] }>(
+    'delivery', 'riders', {}, [isDelivery ? activeBranchId : null]
+  );
+  const deliveryZones = isDelivery ? (zonesData?.zones ?? []).filter((z: any) => z.is_active) : [];
+  const availableRiders = isDelivery ? (ridersData?.riders ?? []).filter((r: any) => r.is_available && r.is_active) : [];
+
+  // Reset delivery fields when order type changes
+  const handleOrderTypeChange = (t: typeof cart.orderType) => {
+    cart.setOrderType(t);
+    if (t !== 'delivery') {
+      setDeliveryZoneId('');
+      setDeliveryRiderId('');
+      setDeliveryAssignMode('auto');
+      setDeliveryNotes('');
+    }
+  };
 
   // Awaiting payment orders (from bar/kitchen departments)
   const [awaitingPaymentDialog, setAwaitingPaymentDialog] = useState(false);
@@ -227,7 +256,7 @@ function POSTerminalContent() {
         ingredients_discount: (ci.removedIngredients ?? []).reduce((s, r) => s + r.cost_contribution, 0),
       }));
 
-      await api('orders', 'create', {
+      const orderRes = await api<{ order: any }>('orders', 'create', {
         body: {
           order_type: cart.orderType,
           table_id: cart.tableId,
@@ -241,7 +270,33 @@ function POSTerminalContent() {
         branchId: activeBranchId ?? undefined,
       });
 
+      // For delivery orders: create the delivery record immediately
+      if (cart.orderType === 'delivery' && orderRes?.order?.id) {
+        try {
+          await api('delivery', 'assign', {
+            method: 'POST',
+            body: {
+              order_id: orderRes.order.id,
+              rider_id: deliveryAssignMode === 'manual' && deliveryRiderId ? deliveryRiderId : null,
+              auto_assign: deliveryAssignMode === 'auto',
+              delivery_zone_id: deliveryZoneId || null,
+              notes: deliveryNotes || null,
+            },
+            branchId: activeBranchId ?? undefined,
+          });
+        } catch (deliveryErr: any) {
+          // Order is placed — don't block; show a warning
+          toast(deliveryErr.message?.includes('No available') 
+            ? 'Order placed — no riders available, assign manually from Delivery page'
+            : `Order placed — delivery assignment pending: ${deliveryErr.message}`);
+        }
+      }
+
       toast.success('Order placed!');
+      setDeliveryZoneId('');
+      setDeliveryRiderId('');
+      setDeliveryAssignMode('auto');
+      setDeliveryNotes('');
       cart.clearCart();
       // Refresh meals in case available counts changed
       if (activeBranchId) fetchMeals(activeBranchId);
@@ -440,6 +495,60 @@ function POSTerminalContent() {
             />
           ))}
         </Box>
+
+        {/* Delivery Details — shown only when order type is delivery */}
+        {isDelivery && (
+          <Box sx={{ mb: 2, p: 1.5, border: '1px solid', borderColor: 'warning.main', borderRadius: 1, bgcolor: 'warning.50' }}>
+            <Typography variant="caption" fontWeight={700} color="warning.dark" display="block" sx={{ mb: 1 }}>Delivery Details</Typography>
+
+            {/* Zone selector */}
+            <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+              <InputLabel>Delivery Zone</InputLabel>
+              <Select label="Delivery Zone" value={deliveryZoneId} onChange={(e) => setDeliveryZoneId(e.target.value)}>
+                <MenuItem value=""><em>No zone</em></MenuItem>
+                {deliveryZones.map((z: any) => (
+                  <MenuItem key={z.id} value={z.id}>{z.name} (+{z.delivery_fee})</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            {/* Assignment mode */}
+            <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+              {(['auto', 'manual'] as const).map((m) => (
+                <Chip
+                  key={m}
+                  size="small"
+                  label={m === 'auto' ? 'Auto-assign' : 'Manual'}
+                  color={deliveryAssignMode === m ? 'primary' : 'default'}
+                  variant={deliveryAssignMode === m ? 'filled' : 'outlined'}
+                  onClick={() => { setDeliveryAssignMode(m); if (m === 'auto') setDeliveryRiderId(''); }}
+                />
+              ))}
+            </Box>
+
+            {/* Manual rider selection */}
+            {deliveryAssignMode === 'manual' && (
+              <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+                <InputLabel>Assign Rider</InputLabel>
+                <Select label="Assign Rider" value={deliveryRiderId} onChange={(e) => setDeliveryRiderId(e.target.value)}>
+                  <MenuItem value=""><em>Select rider</em></MenuItem>
+                  {availableRiders.map((r: any) => (
+                    <MenuItem key={r.id} value={r.id}>{r.name} ({r.vehicle_type})</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+            {deliveryAssignMode === 'manual' && availableRiders.length === 0 && (
+              <Typography variant="caption" color="warning.dark">No available riders — switch to Auto or assign later</Typography>
+            )}
+
+            {/* Delivery notes */}
+            <TextField
+              fullWidth size="small" placeholder="Delivery notes (optional)"
+              value={deliveryNotes} onChange={(e) => setDeliveryNotes(e.target.value)}
+            />
+          </Box>
+        )}
 
         {/* Customer */}
         <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center' }}>
