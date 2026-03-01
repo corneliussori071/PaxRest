@@ -252,10 +252,11 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
 
   if (orderErr) return errorResponse(orderErr.message);
 
-  // Insert order items — store ingredients in modifiers and extras in selected_extras
+  // Insert order items — use null for non-menu items (bar-store/internal) since they
+  // have no menu_items FK reference. menu_item_id is now nullable in the schema.
   const orderItemRows = orderItems.map((it) => ({
     order_id: order.id,
-    menu_item_id: it.menu_item_id ?? '00000000-0000-0000-0000-000000000000',
+    menu_item_id: it.menu_item_id ?? null,
     menu_item_name: it.name,
     quantity: it.quantity,
     unit_price: it.unit_price,
@@ -266,7 +267,8 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
     selected_extras: it.extras ?? [],
   }));
 
-  await service.from('order_items').insert(orderItemRows);
+  const { error: itemsErr } = await service.from('order_items').insert(orderItemRows);
+  if (itemsErr) return errorResponse(`Failed to save order items: ${itemsErr.message}`);
 
   // Insert bar store sale records with order_id
   if (saleRecords.length > 0) {

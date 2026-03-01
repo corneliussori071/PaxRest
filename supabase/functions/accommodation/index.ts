@@ -507,10 +507,11 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
 
   if (orderErr) return errorResponse(orderErr.message);
 
-  // Insert order items
+  // Insert order items — use null for non-menu items (accom-store/room bookings) since
+  // they have no menu_items FK reference. menu_item_id is now nullable in the schema.
   const orderItemRows = orderItems.map((it) => ({
     order_id: order.id,
-    menu_item_id: it.menu_item_id ?? '00000000-0000-0000-0000-000000000000',
+    menu_item_id: it.menu_item_id ?? null,
     menu_item_name: it.name,
     quantity: it.quantity,
     unit_price: it.unit_price,
@@ -521,7 +522,8 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
     selected_extras: it.extras ?? [],
   }));
 
-  await service.from('order_items').insert(orderItemRows);
+  const { error: itemsErr } = await service.from('order_items').insert(orderItemRows);
+  if (itemsErr) return errorResponse(`Failed to save order items: ${itemsErr.message}`);
 
   // Insert accommodation store sale records
   if (saleRecords.length > 0) {
@@ -1123,10 +1125,10 @@ async function extendStay(req: Request, supabase: any, auth: AuthContext, branch
     .single();
   if (oErr) return errorResponse(oErr.message);
 
-  // Create the extension order item
-  await service.from('order_items').insert({
+  // Create the extension order item (null menu_item_id — not a menu item)
+  const { error: extItemErr } = await service.from('order_items').insert({
     order_id: order.id,
-    menu_item_id: '00000000-0000-0000-0000-000000000000',
+    menu_item_id: null,
     menu_item_name: `Room ${room.room_number} — Extension`,
     quantity: durationCount,
     unit_price: unitPrice,
@@ -1144,6 +1146,7 @@ async function extendStay(req: Request, supabase: any, auth: AuthContext, branch
     }],
     selected_extras: [],
   });
+  if (extItemErr) return errorResponse(`Failed to save extension order item: ${extItemErr.message}`);
 
   // Update scheduled_check_out on the current booking if provided
   if (body.new_check_out) {
