@@ -61,7 +61,7 @@ export default function OrdersPage() {
     } catch (err: any) { toast.error(err.message); }
   };
 
-  const statuses = ['', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'completed', 'cancelled'];
+  const statuses = ['', 'awaiting_approval', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'completed', 'cancelled'];
 
   const columns: Column[] = useMemo(() => {
     const base: Column[] = [
@@ -165,10 +165,28 @@ export default function OrdersPage() {
                   Notes: {detail.notes}
                 </Typography>
               )}
+              {detail.is_special_request && (
+                <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'warning.light', borderRadius: 1 }}>
+                  <Typography variant="body2" fontWeight={700} color="warning.dark">
+                    ⭐ Special Meal Request
+                  </Typography>
+                  {detail.special_request_notes && (
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                      {detail.special_request_notes}
+                    </Typography>
+                  )}
+                </Box>
+              )}
             </>
           )}
         </DialogContent>
         <DialogActions sx={{ flexWrap: 'wrap', gap: 1 }}>
+          {detail?.status === 'awaiting_approval' && (
+            <>
+              <Button variant="contained" color="success" onClick={() => updateStatus(detail.id, 'pending')}>Approve</Button>
+              <Button variant="outlined" color="error" onClick={() => updateStatus(detail.id, 'cancelled')}>Decline</Button>
+            </>
+          )}
           {detail?.status === 'pending' && (
             <Button variant="contained" onClick={() => updateStatus(detail.id, 'confirmed')}>Confirm</Button>
           )}

@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import {
   AppBar, Toolbar, Container, Typography, IconButton, Badge,
   Box, Button, Drawer, List, ListItemButton, ListItemIcon,
-  ListItemText, Divider, Stack, Avatar,
+  ListItemText, Divider, Stack, Chip, Tooltip,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
@@ -13,8 +13,10 @@ import HistoryIcon from '@mui/icons-material/History';
 import LoyaltyIcon from '@mui/icons-material/Loyalty';
 import PersonIcon from '@mui/icons-material/Person';
 import CloseIcon from '@mui/icons-material/Close';
+import LocationOnIcon from '@mui/icons-material/LocationOn';
 import Link from 'next/link';
 import { useCartStore } from '@/stores/cart';
+import { useCustomerAuth } from '@/stores/customerAuth';
 
 const NAV = [
   { label: 'Home', href: '/', icon: <HomeIcon /> },
@@ -26,6 +28,14 @@ const NAV = [
 export default function CustomerHeader() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const itemCount = useCartStore((s) => s.itemCount);
+  const branchName = useCartStore((s) => s.branchName);
+  const clearBranch = useCartStore((s) => s.setBranch);
+  const profile = useCustomerAuth((s) => s.profile);
+
+  const handleChangeBranch = () => {
+    // Clear branch to re-trigger BranchSelector
+    clearBranch('', '', '');
+  };
 
   return (
     <>
@@ -50,6 +60,31 @@ export default function CustomerHeader() {
 
             <Box sx={{ flexGrow: 1 }} />
 
+            {/* Branch chip */}
+            {branchName && (
+              <Tooltip title="Change branch">
+                <Chip
+                  icon={<LocationOnIcon />}
+                  label={branchName}
+                  size="small"
+                  variant="outlined"
+                  onClick={handleChangeBranch}
+                  sx={{ display: { xs: 'none', sm: 'flex' }, maxWidth: 160 }}
+                />
+              </Tooltip>
+            )}
+
+            {/* Account */}
+            <Button
+              component={Link}
+              href="/account"
+              size="small"
+              startIcon={<PersonIcon />}
+              sx={{ display: { xs: 'none', md: 'flex' }, textTransform: 'none' }}
+            >
+              {profile?.name ?? 'Sign In'}
+            </Button>
+
             <IconButton component={Link} href="/cart">
               <Badge badgeContent={itemCount} color="primary">
                 <ShoppingCartIcon />
@@ -66,6 +101,18 @@ export default function CustomerHeader() {
             <Typography variant="h6" fontWeight={700} color="primary">PaxRest</Typography>
             <IconButton onClick={() => setDrawerOpen(false)}><CloseIcon /></IconButton>
           </Box>
+          {branchName && (
+            <Box sx={{ px: 2, pb: 1 }}>
+              <Chip
+                icon={<LocationOnIcon />}
+                label={branchName}
+                size="small"
+                variant="outlined"
+                onClick={() => { handleChangeBranch(); setDrawerOpen(false); }}
+                sx={{ maxWidth: '100%' }}
+              />
+            </Box>
+          )}
           <Divider sx={{ my: 1 }} />
           <List>
             {NAV.map((n) => (
@@ -76,6 +123,12 @@ export default function CustomerHeader() {
                 </ListItemButton>
               </Link>
             ))}
+            <Link href="/account" style={{ textDecoration: 'none', color: 'inherit' }}>
+              <ListItemButton onClick={() => setDrawerOpen(false)}>
+                <ListItemIcon><PersonIcon /></ListItemIcon>
+                <ListItemText primary={profile?.name ?? 'Sign In / Sign Up'} />
+              </ListItemButton>
+            </Link>
           </List>
         </Box>
       </Drawer>

@@ -1,11 +1,11 @@
 'use client';
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   Box, Container, Typography, Grid, Card, CardContent, CardMedia,
   Chip, Stack, TextField, InputAdornment, Skeleton, Button,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton,
   FormControl, FormLabel, RadioGroup, FormControlLabel, Radio,
-  Checkbox, Divider, Alert,
+  Checkbox, Divider, Alert, Tabs, Tab, CircularProgress,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import AddIcon from '@mui/icons-material/Add';
@@ -34,7 +34,7 @@ interface MenuItem {
   calories?: number;
   variants: MenuVariant[]; modifier_groups: ModifierGroup[];
   ingredients: Ingredient[]; extras: Extra[];
-  available_count?: number;
+  available_quantity?: number;
 }
 interface MenuCategory { id: string; name: string; description: string | null; sort_order: number; items: MenuItem[]; }
 
@@ -54,38 +54,51 @@ export default function MenuPage() {
   const [removedIngredientIds, setRemovedIngredientIds] = useState<Set<string>>(new Set());
   const [selectedExtraIds, setSelectedExtraIds] = useState<Set<string>>(new Set());
   const [qty, setQty] = useState(1);
+  // Menu view tab: 0=All, 1=Available Now
+  const [menuTab, setMenuTab] = useState(0);
+  // Special request dialog
+  const [specialItem, setSpecialItem] = useState<MenuItem | null>(null);
 
   const addItem = useCartStore((s) => s.addItem);
+  const branchId = useCartStore((s) => s.branchId);
 
-  // Fetch full menu via public API
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await publicApi<{ categories: MenuCategory[] }>('/menu/public-menu');
-        if (res.data?.categories) {
-          setCategories(res.data.categories);
-          if (res.data.categories.length > 0) setActiveCategory(res.data.categories[0].id);
-        }
-      } catch {
-        toast.error('Failed to load menu');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
+  // Fetch full menu via public API (requires branchId)
+  const fetchMenu = useCallback(async () => {
+    if (!branchId) return;
+    setLoading(true);
+    try {
+      const res = await publicApi<{ menu: MenuCategory[] }>(`/menu/public-menu?branch_id=${encodeURIComponent(branchId)}`);
+      const cats = res.data?.menu ?? [];
+      setCategories(cats);
+      if (cats.length > 0) setActiveCategory(cats[0].id);
+    } catch {
+      toast.error('Failed to load menu');
+    } finally {
+      setLoading(false);
+    }
+  }, [branchId]);
+
+  useEffect(() => { fetchMenu(); }, [fetchMenu]);
 
   // Filtered items
   const filteredCategories = useMemo(() => {
-    if (!search.trim()) return categories;
+    let cats = categories;
+    // Available Now tab: only items with available_quantity > 0
+    if (menuTab === 1) {
+      cats = cats.map((c) => ({
+        ...c,
+        items: c.items.filter((i) => (i.available_quantity ?? 0) > 0),
+      })).filter((c) => c.items.length > 0);
+    }
+    if (!search.trim()) return cats;
     const q = search.toLowerCase();
-    return categories.map((c) => ({
+    return cats.map((c) => ({
       ...c,
       items: c.items.filter(
         (i) => i.name.toLowerCase().includes(q) || i.tags?.some((t) => t.toLowerCase().includes(q)),
       ),
     })).filter((c) => c.items.length > 0);
-  }, [categories, search]);
+  }, [categories, search, menuTab]);
 
   // ---------- Dialog helpers ----------
   const openCustomize = (item: MenuItem) => {
@@ -211,6 +224,35 @@ export default function MenuPage() {
 
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
+      {/* View tabs: All Menu / Available Now */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
+        <Tabs value={menuTab} onChange={(_, v) => setMenuTab(v)} sx={{ minHeight: 36 }}>
+          <Tab label="All Menu" sx={{ minHeight: 36, py: 0.5 }} />
+          <Tab
+            label={
+              <Stack direction="row" spacing={0.5} alignItems="center">
+                <span>Available Now</span>
+                <Chip
+                  size="small" label="Ready"
+                  color="success" variant="filled"
+                  sx={{ height: 20, fontSize: '0.65rem' }}
+                />
+              </Stack>
+            }
+            sx={{ minHeight: 36, py: 0.5 }}
+          />
+        </Tabs>
+        <Button
+          variant="outlined"
+          color="secondary"
+          size="small"
+          onClick={() => setSpecialItem(categories.flatMap((c) => c.items)[0] ?? null)}
+          disabled={categories.flatMap((c) => c.items).length === 0}
+        >
+          🍽️ Request Special Meal
+        </Button>
+      </Box>
+
       {/* Search & Category Chips */}
       <TextField
         fullWidth placeholder="Search menu…" size="small" sx={{ mb: 2 }}
@@ -272,9 +314,9 @@ export default function MenuPage() {
                         sx={{ position: 'absolute', top: 8, right: 8, zIndex: 1, fontWeight: 700 }}
                       />
                     )}
-                    {(item.available_count ?? 0) > 0 && !isSoldOut && (
+                    {(item.available_quantity ?? 0) > 0 && !isSoldOut && (
                       <Chip
-                        label={`${item.available_count} left`} color="success" size="small"
+                        label={`${item.available_quantity} ready`} color="success" size="small"
                         sx={{ position: 'absolute', top: 8, left: 8, zIndex: 1, fontWeight: 700 }}
                       />
                     )}
@@ -510,6 +552,211 @@ export default function MenuPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* ── Special Request Dialog ── */}
+      <SpecialRequestDialog
+        open={Boolean(specialItem)}
+        allItems={categories.flatMap((c) => c.items)}
+        initialItem={specialItem}
+        onClose={() => setSpecialItem(null)}
+      />
     </Container>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// SpecialRequestDialog
+// ────────────────────────────────────────────────────────────
+interface SRProps {
+  open: boolean;
+  allItems: MenuItem[];
+  initialItem: MenuItem | null;
+  onClose: () => void;
+}
+
+function SpecialRequestDialog({ open, allItems, initialItem, onClose }: SRProps) {
+  const branchId = useCartStore((s) => s.branchId);
+  const [selectedItemId, setSelectedItemId] = useState('');
+  const [removeIngredients, setRemoveIngredients] = useState<Set<string>>(new Set());
+  const [addExtras, setAddExtras] = useState<Set<string>>(new Set());
+  const [notes, setNotes] = useState('');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const item = useMemo(
+    () => allItems.find((i) => i.id === selectedItemId) ?? null,
+    [allItems, selectedItemId],
+  );
+
+  // When dialog opens, pre-select the passed item
+  useEffect(() => {
+    if (open && initialItem) {
+      setSelectedItemId(initialItem.id);
+      setRemoveIngredients(new Set());
+      setAddExtras(new Set());
+      setNotes('');
+    }
+  }, [open, initialItem]);
+
+  const toggleIngredient = (id: string) =>
+    setRemoveIngredients((prev) => {
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      return s;
+    });
+
+  const toggleExtra = (id: string) =>
+    setAddExtras((prev) => {
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      return s;
+    });
+
+  const handleSubmit = async () => {
+    if (!item || !branchId || !name.trim() || !phone.trim()) {
+      toast.error('Please fill in your name and phone number.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const removed = [...removeIngredients].map((id) => {
+        const ing = item.ingredients.find((i) => i.id === id);
+        return ing?.name || ing?.inventory_item_name || id;
+      });
+      const extras = [...addExtras].map((id) => item.extras.find((e) => e.id === id)?.name || id);
+
+      const lines = [
+        removed.length > 0 ? `Remove: ${removed.join(', ')}` : null,
+        extras.length > 0 ? `Add extras: ${extras.join(', ')}` : null,
+        notes.trim() ? `Notes: ${notes.trim()}` : null,
+      ].filter(Boolean);
+
+      const { error } = await publicApi('/customer/special-request', {
+        method: 'POST',
+        body: JSON.stringify({
+          branch_id: branchId,
+          item_id: item.id,
+          item_name: item.name,
+          customer_name: name.trim(),
+          customer_phone: phone.trim(),
+          special_request_notes: lines.join(' | '),
+        }),
+      });
+      if (error) throw new Error(typeof error === 'string' ? error : (error as { message: string }).message);
+      toast.success('Special meal request submitted! Staff will contact you.');
+      onClose();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not submit request');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>🍽️ Request a Special Meal</DialogTitle>
+      <DialogContent dividers>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          <Alert severity="info" sx={{ fontSize: '0.82rem' }}>
+            Tell us how you'd like your meal prepared. Staff will review and confirm your order.
+          </Alert>
+
+          {/* Item picker */}
+          <FormControl fullWidth size="small">
+            <FormLabel sx={{ mb: 0.5, fontSize: '0.85rem', fontWeight: 600 }}>Based on menu item</FormLabel>
+            <TextField
+              select size="small" value={selectedItemId}
+              onChange={(e) => { setSelectedItemId(e.target.value); setRemoveIngredients(new Set()); setAddExtras(new Set()); }}
+              SelectProps={{ native: true }}
+            >
+              {allItems.map((i) => (
+                <option key={i.id} value={i.id}>{i.name}</option>
+              ))}
+            </TextField>
+          </FormControl>
+
+          {/* Ingredients to remove */}
+          {item && item.ingredients.length > 0 && (
+            <Box>
+              <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>Remove ingredients:</Typography>
+              <Stack direction="row" flexWrap="wrap" gap={1}>
+                {item.ingredients.map((ing) => (
+                  <FormControlLabel
+                    key={ing.id}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={removeIngredients.has(ing.id)}
+                        onChange={() => toggleIngredient(ing.id)}
+                        color="error"
+                      />
+                    }
+                    label={<Typography variant="body2">{ing.name || ing.inventory_item_name}</Typography>}
+                    sx={{ mr: 0, my: 0 }}
+                  />
+                ))}
+              </Stack>
+            </Box>
+          )}
+
+          {/* Extras to add */}
+          {item && item.extras.length > 0 && (
+            <Box>
+              <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>Add extras:</Typography>
+              <Stack direction="row" flexWrap="wrap" gap={1}>
+                {item.extras.map((ext) => (
+                  <FormControlLabel
+                    key={ext.id}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={addExtras.has(ext.id)}
+                        onChange={() => toggleExtra(ext.id)}
+                        color="success"
+                      />
+                    }
+                    label={<Typography variant="body2">{ext.name} (+{formatCurrency(ext.price)})</Typography>}
+                    sx={{ mr: 0, my: 0 }}
+                  />
+                ))}
+              </Stack>
+            </Box>
+          )}
+
+          {/* Free-text notes */}
+          <TextField
+            label="Additional requests" multiline minRows={2} fullWidth size="small"
+            placeholder="E.g. extra spicy, less salt, nut allergy…"
+            value={notes} onChange={(e) => setNotes(e.target.value)}
+          />
+
+          <Divider />
+
+          {/* Contact info */}
+          <Typography variant="body2" fontWeight={600}>Your contact details (required)</Typography>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+            <TextField
+              label="Name" size="small" fullWidth required
+              value={name} onChange={(e) => setName(e.target.value)}
+            />
+            <TextField
+              label="Phone" size="small" fullWidth required
+              value={phone} onChange={(e) => setPhone(e.target.value)}
+            />
+          </Stack>
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, py: 2 }}>
+        <Button onClick={onClose} disabled={submitting}>Cancel</Button>
+        <Button
+          variant="contained" onClick={handleSubmit}
+          disabled={submitting || !selectedItemId || !name.trim() || !phone.trim()}
+          startIcon={submitting ? <CircularProgress size={16} /> : undefined}
+        >
+          {submitting ? 'Submitting…' : 'Submit Request'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }

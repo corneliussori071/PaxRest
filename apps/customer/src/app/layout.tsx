@@ -1,12 +1,19 @@
 'use client';
-import React from 'react';
+import React, { useEffect } from 'react';
 import { ThemeProvider, CssBaseline, Box } from '@mui/material';
 import { theme } from '@paxrest/ui';
 import { Toaster } from 'react-hot-toast';
 import CustomerHeader from '@/components/CustomerHeader';
 import CustomerFooter from '@/components/CustomerFooter';
+import BranchSelector from '@/components/BranchSelector';
+import { useCustomerAuth } from '@/stores/customerAuth';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const initialize = useCustomerAuth((s) => s.initialize);
+
+  // Restore customer session on page load
+  useEffect(() => { initialize(); }, []);
+
   return (
     <html lang="en">
       <head>
@@ -21,6 +28,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider theme={theme}>
           <CssBaseline />
           <Toaster position="top-center" />
+          {/* Branch selection — blocks until a branch is chosen */}
+          <BranchSelector />
           <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <CustomerHeader />
             <Box component="main" sx={{ flex: 1 }}>

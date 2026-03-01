@@ -15,12 +15,12 @@ import toast from 'react-hot-toast';
 export default function CheckoutPage() {
   const router = useRouter();
   const {
-    items, orderType, deliveryAddress, deliveryFee, customerName,
-    customerPhone, notes, subtotal, total, itemCount, clearCart,
+    items, orderType, deliveryAddress, deliveryFee, deliveryZoneId,
+    customerName, customerPhone, notes, subtotal, total, itemCount,
+    branchId, clearCart,
   } = useCartStore();
   const [loading, setLoading] = useState(false);
   const [orderId, setOrderId] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card'>('cash');
 
   const handlePlaceOrder = async () => {
     if (items.length === 0) return;
@@ -43,22 +43,24 @@ export default function CheckoutPage() {
         };
       });
 
-      const res = await publicApi<{ id: string; order_number: number }>('/orders/create', {
+      const res = await publicApi<{ order_id: string; order_number: number }>('/customer/order', {
         method: 'POST',
         body: JSON.stringify({
+          branch_id: branchId,
           order_type: orderType,
           items: orderItems,
           customer_name: customerName,
           customer_phone: customerPhone,
           notes,
+          delivery_fee: orderType === 'delivery' ? deliveryFee : 0,
+          delivery_zone_id: orderType === 'delivery' ? deliveryZoneId : undefined,
           delivery_address: orderType === 'delivery' ? deliveryAddress : undefined,
-          payment_method: paymentMethod,
         }),
       });
 
-      if (res.error) throw new Error(res.error.message);
+      if (res.error) throw new Error(typeof res.error === 'string' ? res.error : (res.error as { message: string }).message);
 
-      setOrderId(res.data!.id);
+      setOrderId(res.data!.order_id);
       clearCart();
       toast.success('Order placed successfully!');
     } catch (err: any) {
@@ -78,7 +80,7 @@ export default function CheckoutPage() {
           Your order has been received and is being prepared.
         </Typography>
         <Stack spacing={2}>
-          <Button variant="contained" size="large" onClick={() => router.push(`/track/${orderId}`)}>
+      <Button variant="contained" size="large" onClick={() => router.push(`/track/${orderId}`)}>
             Track Your Order
           </Button>
           <Button variant="outlined" onClick={() => router.push('/menu')}>
@@ -165,33 +167,6 @@ export default function CheckoutPage() {
             )}
             {notes && <Typography variant="body2"><strong>Notes:</strong> {notes}</Typography>}
           </Stack>
-        </CardContent>
-      </Card>
-
-      {/* Payment method */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Typography variant="subtitle1" fontWeight={600} gutterBottom>Payment Method</Typography>
-          <Stack direction="row" spacing={1}>
-            {[
-              { value: 'cash' as const, label: '💵 Cash on Delivery / Pickup' },
-              { value: 'card' as const, label: '💳 Card (Stripe)' },
-            ].map((m) => (
-              <Button
-                key={m.value}
-                variant={paymentMethod === m.value ? 'contained' : 'outlined'}
-                onClick={() => setPaymentMethod(m.value)}
-                fullWidth
-              >
-                {m.label}
-              </Button>
-            ))}
-          </Stack>
-          {paymentMethod === 'card' && (
-            <Alert severity="info" sx={{ mt: 2 }}>
-              You will be redirected to Stripe to complete payment after placing the order.
-            </Alert>
-          )}
         </CardContent>
       </Card>
 

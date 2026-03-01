@@ -17,6 +17,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 
 const ORDER_STEPS = [
+  { status: 'awaiting_approval' as OrderStatus, label: 'Awaiting Approval', icon: <AccessTimeIcon /> },
   { status: 'pending' as OrderStatus, label: 'Order Placed', icon: <AccessTimeIcon /> },
   { status: 'confirmed' as OrderStatus, label: 'Confirmed', icon: <CheckCircleIcon /> },
   { status: 'preparing' as OrderStatus, label: 'Preparing', icon: <RestaurantIcon /> },
@@ -57,8 +58,8 @@ export default function TrackOrderPage() {
     (async () => {
       setLoading(true);
       try {
-        const res = await publicApi<OrderDetail>(`/orders/get?id=${orderId}`);
-        if (res.data) setOrder(res.data);
+        const res = await publicApi<{ order: OrderDetail }>(`/customer/order-status?id=${orderId}`);
+        if (res.data?.order) setOrder(res.data.order);
       } catch {
         // ignore
       } finally {
