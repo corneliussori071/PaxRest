@@ -49,6 +49,8 @@ serve(async (req) => {
         return await listBarOrders(req, supabase, auth, branchId, ['awaiting_payment']);
       case 'order-detail':
         return await getOrderDetail(req, supabase, auth, branchId);
+      case 'cancel-order':
+        return await cancelOrder(req, supabase, auth, branchId);
 
       // ─── Bar barcode lookup ───
       case 'barcode-lookup':
@@ -139,7 +141,8 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
 
   const body = await req.json();
   if (!body.items || body.items.length === 0) return errorResponse('No items in order');
-  if (!body.table_id) return errorResponse('Table selection is required');
+  const hasRooms = (body.items as any[]).some((i: any) => i.source === 'room');
+  if (!body.table_id && !hasRooms) return errorResponse('Table selection is required (or add a room booking)');
   if (!body.num_people || body.num_people < 1) return errorResponse('Number of people is required');
 
   const service = createServiceClient();
@@ -208,6 +211,64 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
         performed_by: auth.userId,
         performed_by_name: auth.name,
       });
+    } else if (item.source === 'room') {
+      // Room booking item from accommodation
+      const bd = item.booking_details ?? {};
+      const numPeople = Number(bd.num_people ?? 1);
+      const durationCount = Number(bd.duration_count ?? item.quantity ?? 1);
+      const durationUnit = bd.duration_unit ?? 'night';
+      const checkIn = bd.check_in ?? null;
+      const checkOut = bd.check_out ?? null;
+
+      orderItems.push({
+        name: item.name,
+        quantity: durationCount,
+        unit_price: item.unit_price ?? 0,
+        source: 'room',
+        room_id: item.room_id,
+        ingredients: [{
+          type: 'booking',
+          num_people: numPeople,
+          duration_count: durationCount,
+          duration_unit: durationUnit,
+          check_in: checkIn,
+          check_out: checkOut,
+        }],
+        extras: [],
+      });
+
+      if (item.room_id) {
+        const { data: currentRoom } = await service
+          .from('rooms')
+          .select('current_occupants, max_occupants')
+          .eq('id', item.room_id)
+          .eq('branch_id', branchId)
+          .single();
+
+        const prevOccupants = Number(currentRoom?.current_occupants ?? 0);
+        const maxOccupants = Number(currentRoom?.max_occupants ?? 1);
+        const newOccupants = prevOccupants + numPeople;
+
+        if (newOccupants > maxOccupants) {
+          return errorResponse(
+            `Room capacity exceeded: adding ${numPeople} guest(s) would bring total to ${newOccupants}, ` +
+            `but max is ${maxOccupants} (currently ${prevOccupants} occupied).`
+          );
+        }
+
+        const calcRoomStatus = (occ: number, max: number) =>
+          occ === 0 ? 'available' : occ >= max ? 'occupied' : 'partially_occupied';
+
+        await service
+          .from('rooms')
+          .update({
+            status: calcRoomStatus(newOccupants, maxOccupants),
+            current_occupants: newOccupants,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', item.room_id)
+          .eq('branch_id', branchId);
+      }
     } else {
       // Menu item (available meal)
       orderItems.push({
@@ -235,7 +296,7 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
       branch_id: branchId,
       order_type: body.order_type ?? 'dine_in',
       status: 'pending',
-      table_id: body.table_id,
+      table_id: body.table_id ?? null,
       customer_name: body.customer_name?.trim() || 'Walk In Customer',
       notes: body.notes ?? null,
       source: 'bar',
@@ -282,17 +343,52 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
     await service.from('bar_store_movements').insert(withRef);
   }
 
-  // Update table to occupied with num_people
-  await service
-    .from('tables')
-    .update({
-      status: 'occupied',
-      num_people: body.num_people,
-      assigned_customer_name: body.customer_name ?? null,
-      current_order_id: order.id,
-    })
-    .eq('id', body.table_id)
-    .eq('branch_id', branchId);
+  // Update table status (only if a table was selected)
+  if (body.table_id) {
+    await service
+      .from('tables')
+      .update({
+        status: 'occupied',
+        num_people: body.num_people,
+        assigned_customer_name: body.customer_name ?? null,
+        current_order_id: order.id,
+      })
+      .eq('id', body.table_id)
+      .eq('branch_id', branchId);
+  }
+
+  // Create guest_bookings for any room items
+  const roomItems = body.items.filter((i: any) => i.source === 'room');
+  for (const roomItem of roomItems) {
+    const bd = roomItem.booking_details ?? {};
+    if (roomItem.room_id) {
+      const { data: room } = await service
+        .from('rooms')
+        .select('room_number')
+        .eq('id', roomItem.room_id)
+        .single();
+
+      await service.from('guest_bookings').insert({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        room_id: roomItem.room_id,
+        room_number: room?.room_number ?? '',
+        order_id: order.id,
+        order_number: order.order_number,
+        customer_name: body.customer_name?.trim() || 'Walk In Customer',
+        num_people: Number(bd.num_people ?? 1),
+        check_in: bd.check_in ?? null,
+        check_out: bd.check_out ?? null,
+        duration_count: Number(bd.duration_count ?? 1),
+        duration_unit: bd.duration_unit ?? 'night',
+        room_rate: Number(roomItem.unit_price ?? 0),
+        status: 'pending_checkin',
+        source: 'bar',
+        created_by: auth.userId,
+        created_by_name: auth.name,
+      });
+    }
+  }
 
   return jsonResponse({
     order_id: order.id,
@@ -517,4 +613,23 @@ async function listBarStaff(req: Request, supabase: any, auth: AuthContext, bran
       role: s.role ?? 'staff',
     })),
   });
+}
+
+async function cancelOrder(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_orders')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  if (!body.order_id) return errorResponse('Missing order_id');
+
+  const { data, error } = await supabase.rpc('update_order_status', {
+    p_order_id: body.order_id,
+    p_new_status: 'cancelled',
+    p_changed_by: auth.userId,
+    p_changed_by_name: body.changed_by_name ?? auth.email,
+    p_notes: body.reason ?? 'Order cancelled',
+  });
+
+  if (error) return errorResponse(error.message, 400);
+  return jsonResponse(data);
 }

@@ -29,6 +29,8 @@ import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
 import TableBarIcon from '@mui/icons-material/TableBar';
 import InventoryIcon from '@mui/icons-material/Inventory';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
+import MeetingRoomIcon from '@mui/icons-material/MeetingRoom';
+import PeopleIcon from '@mui/icons-material/People';
 import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_STATUS_COLORS } from '@paxrest/shared-utils';
 import type { IngredientRequestStatus, Permission } from '@paxrest/shared-types';
 import { useApi, usePaginated, useRealtime } from '@/hooks';
@@ -95,17 +97,27 @@ interface CartExtra {
   price: number;
 }
 
+interface BookingDetails {
+  num_people: number;
+  check_in: string;
+  check_out?: string;
+  duration_count: number;
+  duration_unit: string;
+}
+
 interface BarCartItem {
   id: string;
   name: string;
   unit_price: number;
   quantity: number;
-  source: 'bar_store' | 'menu';
+  source: 'bar_store' | 'menu' | 'room';
   bar_store_item_id?: string;
   menu_item_id?: string;
+  room_id?: string;
   max_qty?: number;
   ingredients?: CartIngredient[];
   extras?: CartExtra[];
+  booking_details?: BookingDetails;
 }
 
 function CreateOrderTab({ branchId, currency }: { branchId: string; currency: string }) {
@@ -115,7 +127,12 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
   const [cart, setCart] = useState<BarCartItem[]>([]);
-  const [itemSubTab, setItemSubTab] = useState<'meals' | 'store'>('store');
+  const [itemSubTab, setItemSubTab] = useState<'meals' | 'store' | 'rooms'>('store');
+
+  // Rooms (all statuses; occupied shown as disabled)
+  const [rooms, setRooms] = useState<any[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState(false);
+  const [bookingDialogRoom, setBookingDialogRoom] = useState<any>(null);
 
   // Bar store items
   const [storeItems, setStoreItems] = useState<any[]>([]);
@@ -153,6 +170,21 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
   useEffect(() => { fetchStore(); }, [fetchStore]);
   useEffect(() => { if (branchId) fetchMeals(branchId); }, [branchId]);
+
+  // Fetch rooms from accommodation service
+  const fetchRooms = useCallback(async () => {
+    setRoomsLoading(true);
+    try {
+      const data = await api<{ rooms: any[]; total: number }>('accommodation', 'list-rooms', {
+        params: { page: '1', page_size: '200' },
+        branchId,
+      });
+      setRooms(data.rooms ?? []);
+    } catch (err) { console.error(err); }
+    finally { setRoomsLoading(false); }
+  }, [branchId]);
+
+  useEffect(() => { fetchRooms(); }, [fetchRooms]);
 
   // Fetch available tables (all statuses for full visibility)
   useEffect(() => {
@@ -196,6 +228,10 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
     setCart((prev) => {
       const existing = prev.find((c) => c.id === item.id && c.source === item.source);
       if (existing) {
+        if (item.source === 'room') {
+          toast.error('This room is already in your cart');
+          return prev;
+        }
         const newQty = existing.quantity + 1;
         // Enforce stock limit for bar_store items
         if (item.source === 'bar_store' && item.max_qty != null && newQty > Number(item.max_qty)) {
@@ -221,6 +257,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
     setCart((prev) =>
       prev.map((c) => {
         if (c.id !== id || c.source !== source) return c;
+        if (c.source === 'room') return c; // Rooms always qty 1
         const newQty = c.quantity + delta;
         if (newQty < 1) return c;
         // Enforce stock limit for bar_store items
@@ -279,8 +316,15 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
   const handleSubmit = async () => {
     if (cart.length === 0) return toast.error('Cart is empty');
-    if (!selectedTable) return toast.error('Select a table');
+    const hasRooms = cart.some((c) => c.source === 'room');
+    if (!selectedTable && !hasRooms) return toast.error('Select a table or add a room booking');
     if (!numPeople || numPeople < 1) return toast.error('Enter number of people');
+    // Validate room bookings
+    for (const c of cart.filter((x) => x.source === 'room')) {
+      if (!c.booking_details?.check_in || !c.booking_details?.duration_count) {
+        return toast.error(`Missing booking details for ${c.name}. Remove and re-add it.`);
+      }
+    }
 
     setSubmitting(true);
     try {
@@ -291,14 +335,16 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         source: c.source,
         bar_store_item_id: c.bar_store_item_id,
         menu_item_id: c.menu_item_id,
+        room_id: c.room_id,
         ingredients: c.ingredients ?? [],
         extras: c.extras ?? [],
+        booking_details: c.booking_details,
       }));
 
       const data = await api<{ order_id: string; order_number: string; total: number }>('bar', 'create-order', {
         body: {
           items,
-          table_id: selectedTable,
+          table_id: selectedTable || undefined,
           num_people: numPeople,
           customer_name: customerName.trim() || 'Walk In Customer',
           notes: notes || undefined,
@@ -314,6 +360,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
       setCustomerName('');
       setNotes('');
       fetchStore(); // refresh stock
+      fetchRooms(); // refresh rooms
     } catch (err: any) { toast.error(err.message); }
     finally { setSubmitting(false); }
   };
@@ -369,6 +416,22 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           >
             <Badge badgeContent={meals.reduce((s, m) => s + m.quantity_available, 0)} color="info" max={99}>
               Meals
+            </Badge>
+          </Button>
+          <Button
+            variant="text"
+            onClick={() => setItemSubTab('rooms')}
+            startIcon={<MeetingRoomIcon />}
+            sx={{
+              borderBottom: itemSubTab === 'rooms' ? '2px solid' : '2px solid transparent',
+              borderColor: itemSubTab === 'rooms' ? 'info.main' : 'transparent',
+              borderRadius: 0, px: 2, py: 0.75,
+              color: itemSubTab === 'rooms' ? 'info.main' : 'text.secondary',
+              fontWeight: itemSubTab === 'rooms' ? 700 : 400,
+            }}
+          >
+            <Badge badgeContent={rooms.length} color="info" max={99}>
+              Rooms
             </Badge>
           </Button>
         </Stack>
@@ -436,6 +499,74 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                 </Typography>
               )}
             </Box>
+          ) : itemSubTab === 'rooms' ? (
+            // Rooms sub-tab
+            roomsLoading ? <LinearProgress /> : (
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                {rooms.map((room) => {
+                  const CATEGORY_COLORS: Record<string, string> = {
+                    vip: '#FFD700', express: '#2196F3', luxury: '#9C27B0', regular: '#4CAF50',
+                  };
+                  const catLC = room.category?.toLowerCase();
+                  const catColor = CATEGORY_COLORS[catLC] ?? '#757575';
+                  const inCart = cart.some((c) => c.source === 'room' && c.id === room.id);
+                  const isBookable = room.status === 'available' || room.status === 'partially_occupied';
+                  const canBook = !inCart && isBookable;
+                  const availableCapacity = Math.max(0, Number(room.max_occupants) - Number(room.current_occupants ?? 0));
+                  const DURATION_LABELS: Record<string, string> = { night: '/night', day: '/day', hour: '/hr' };
+                  return (
+                    <Card
+                      key={room.id}
+                      sx={{
+                        width: 200, cursor: canBook ? 'pointer' : 'default',
+                        opacity: (inCart || !isBookable) ? 0.65 : 1,
+                        borderLeft: `4px solid ${catColor}`,
+                        '&:hover': { boxShadow: canBook ? 4 : 1 }, transition: '0.15s',
+                      }}
+                      onClick={() => {
+                        if (inCart) { toast.error('This room is already in your cart'); return; }
+                        if (!isBookable) { toast.error(`Room ${room.room_number} is currently ${room.status.replace('_', ' ')}`); return; }
+                        setBookingDialogRoom(room);
+                      }}
+                    >
+                      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                        {room.media_url && (
+                          <Box sx={{ width: '100%', height: 80, borderRadius: 1, overflow: 'hidden', mb: 0.5 }}>
+                            <img src={room.media_url} alt={`Room ${room.room_number}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          </Box>
+                        )}
+                        <Stack direction="row" justifyContent="space-between" alignItems="center">
+                          <Typography variant="body2" fontWeight={700}>Room {room.room_number}</Typography>
+                          <Chip size="small" label={room.category} sx={{ bgcolor: catColor, color: '#fff', fontSize: 10 }} />
+                        </Stack>
+                        {room.status === 'partially_occupied' && (
+                          <Chip size="small" label={`Partial • ${availableCapacity} free`} color="warning" sx={{ mt: 0.3, width: '100%', justifyContent: 'center' }} />
+                        )}
+                        {room.status !== 'available' && room.status !== 'partially_occupied' && (
+                          <Chip size="small"
+                            label={room.status === 'occupied' ? `Occupied${room.current_occupants ? ` (${room.current_occupants})` : ''}` : room.status.replace('_', ' ')}
+                            color={room.status === 'occupied' ? 'error' : 'warning'}
+                            sx={{ mt: 0.3, width: '100%', justifyContent: 'center' }}
+                          />
+                        )}
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5 }}>
+                          <Typography variant="body2" color="primary.main" fontWeight={600}>
+                            {formatCurrency(room.cost_amount, currency)}{DURATION_LABELS[room.cost_duration] ?? ''}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">Max {room.max_occupants}</Typography>
+                        </Stack>
+                        {inCart && <Chip size="small" label="In Cart" color="primary" sx={{ mt: 0.5 }} />}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+                {rooms.length === 0 && !roomsLoading && (
+                  <Alert severity="info" sx={{ mt: 2, width: '100%' }}>
+                    No rooms available. Set up rooms in the Accommodation page.
+                  </Alert>
+                )}
+              </Box>
+            )
           ) : (
             // Bar Store Items
             <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
@@ -600,12 +731,33 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
         <Button
           variant="contained" fullWidth size="large"
-          disabled={submitting || cart.length === 0 || !selectedTable}
+          disabled={submitting || cart.length === 0 || (!selectedTable && !cart.some((c) => c.source === 'room'))}
           onClick={handleSubmit}
         >
           {submitting ? 'Processing…' : `Place Order — ${fmt(subtotal)}`}
         </Button>
       </Paper>
+
+      {/* Room Booking Dialog */}
+      <RoomBookingDialog
+        room={bookingDialogRoom}
+        open={!!bookingDialogRoom}
+        onClose={() => setBookingDialogRoom(null)}
+        currency={currency}
+        onConfirm={(details) => {
+          if (!bookingDialogRoom) return;
+          addToCart({
+            id: bookingDialogRoom.id,
+            name: `Room ${bookingDialogRoom.room_number}`,
+            unit_price: Number(bookingDialogRoom.cost_amount),
+            quantity: details.duration_count,
+            source: 'room',
+            room_id: bookingDialogRoom.id,
+            booking_details: details,
+          });
+          setBookingDialogRoom(null);
+        }}
+      />
 
       {/* Meal Detail Dialog — ingredients, extras, print/PDF */}
       <Dialog open={mealDetailOpen} onClose={() => setMealDetailOpen(false)} maxWidth="md" fullWidth>
@@ -748,6 +900,123 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   );
 }
 
+/**
+ * Calculates the number of billing units between two datetime strings.
+ */
+function calcDuration(ciStr: string, coStr: string, unit: string): number {
+  if (!ciStr || !coStr) return 0;
+  const ci = new Date(ciStr).getTime();
+  const co = new Date(coStr).getTime();
+  if (isNaN(ci) || isNaN(co) || co <= ci) return 0;
+  const diffMs = co - ci;
+  if (unit === 'hour') return Math.max(1, Math.ceil(diffMs / 3_600_000));
+  if (unit === 'day')  return Math.max(1, Math.ceil(diffMs / 86_400_000));
+  const ciMidnight = new Date(new Date(ciStr).toDateString()).getTime();
+  const coMidnight = new Date(new Date(coStr).toDateString()).getTime();
+  return Math.max(1, Math.round((coMidnight - ciMidnight) / 86_400_000));
+}
+
+function BarRoomBookingDialog({
+  room, open, onClose, onConfirm, currency,
+}: {
+  room: any;
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (details: BookingDetails) => void;
+  currency: string;
+}) {
+  const [numPeople, setNumPeople] = useState(1);
+  const [checkIn, setCheckIn] = useState('');
+  const [checkOut, setCheckOut] = useState('');
+  const [durationCount, setDurationCount] = useState(1);
+
+  useEffect(() => {
+    if (room) { setNumPeople(1); setCheckIn(''); setCheckOut(''); setDurationCount(1); }
+  }, [room]);
+
+  const durationUnit = room?.cost_duration ?? 'night';
+  const durationLabel = durationUnit === 'hour' ? 'hour' : durationUnit === 'day' ? 'day' : 'night';
+  const autoDuration = (checkIn && checkOut) ? calcDuration(checkIn, checkOut, durationUnit) : 0;
+  const effectiveDuration = autoDuration > 0 ? autoDuration : durationCount;
+  const total = Number(room?.cost_amount ?? 0) * effectiveDuration;
+
+  const isPartiallyOccupied = room?.status === 'partially_occupied';
+  const alreadyOccupied = Number(room?.current_occupants ?? 0);
+  const availableCapacity = Math.max(1, Number(room?.max_occupants ?? 1) - alreadyOccupied);
+  const maxGuests = isPartiallyOccupied ? availableCapacity : Number(room?.max_occupants ?? 99);
+
+  const handleConfirm = () => {
+    if (!checkIn) return toast.error('Check-in date & time is required');
+    if (effectiveDuration < 1) return toast.error(`Number of ${durationLabel}s must be at least 1`);
+    if (numPeople < 1) return toast.error('At least 1 guest required');
+    if (numPeople > maxGuests) {
+      return toast.error(
+        isPartiallyOccupied
+          ? `Only ${availableCapacity} slot${availableCapacity !== 1 ? 's' : ''} available (room already has ${alreadyOccupied} guest${alreadyOccupied !== 1 ? 's' : ''})`
+          : `Max ${room?.max_occupants} occupants allowed for this room`
+      );
+    }
+    onConfirm({ num_people: numPeople, check_in: checkIn, check_out: checkOut || undefined, duration_count: effectiveDuration, duration_unit: durationUnit });
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <MeetingRoomIcon />
+          <Typography variant="h6">Book Room {room?.room_number}</Typography>
+        </Stack>
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
+            <Typography variant="body2"><strong>Category:</strong> {room?.category}</Typography>
+            <Typography variant="body2"><strong>Rate:</strong> {formatCurrency(room?.cost_amount ?? 0, currency)} / {durationLabel}</Typography>
+            <Typography variant="body2"><strong>Max occupants:</strong> {room?.max_occupants}</Typography>
+            {isPartiallyOccupied && (
+              <Typography variant="body2" color="warning.main">
+                <strong>Already occupied:</strong> {alreadyOccupied} &mdash; <strong>{availableCapacity} slot{availableCapacity !== 1 ? 's' : ''} available</strong>
+              </Typography>
+            )}
+          </Paper>
+          <TextField label="Check-in Date & Time *" type="datetime-local" fullWidth value={checkIn}
+            onChange={(e) => setCheckIn(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+          <TextField label="Departure Date & Time (auto-calculates duration)" type="datetime-local" fullWidth value={checkOut}
+            onChange={(e) => setCheckOut(e.target.value)} slotProps={{ inputLabel: { shrink: true } }}
+            helperText={checkOut && checkIn && autoDuration > 0
+              ? `${autoDuration} ${durationLabel}${autoDuration !== 1 ? 's' : ''}`
+              : 'Optional — set to auto-calculate duration'} />
+          {autoDuration > 0 ? (
+            <Alert severity="info" icon={<CalendarTodayIcon fontSize="small" />} sx={{ py: 0.5 }}>
+              <Typography variant="body2"><strong>{effectiveDuration} {durationLabel}{effectiveDuration !== 1 ? 's' : ''}</strong> — auto-calculated</Typography>
+            </Alert>
+          ) : (
+            <TextField label={`Number of ${durationLabel}s *`} type="number" fullWidth
+              value={durationCount} inputProps={{ min: 1 }}
+              onChange={(e) => setDurationCount(Math.max(1, Number(e.target.value)))} />
+          )}
+          <TextField label="Number of Guests *" type="number" fullWidth value={numPeople}
+            inputProps={{ min: 1, max: maxGuests }}
+            onChange={(e) => setNumPeople(Math.max(1, Math.min(maxGuests, Number(e.target.value))))}
+            helperText={`Max: ${maxGuests}`} />
+          <Alert severity="info" sx={{ py: 0.5 }}>
+            <Typography variant="body2" fontWeight={700}>
+              Estimated Total: {formatCurrency(total, currency)}
+            </Typography>
+          </Alert>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" onClick={handleConfirm}>Add to Cart</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// Alias so CreateOrderTab uses BarRoomBookingDialog as RoomBookingDialog
+const RoomBookingDialog = BarRoomBookingDialog;
+
 /* ═══════════════════════════════════════════════════════
    Tab 2 — Pending Orders
    ═══════════════════════════════════════════════════════ */
@@ -768,6 +1037,7 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
   const [markingServed, setMarkingServed] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState('today');
 
@@ -805,6 +1075,17 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
       fetchOrders();
     } catch (err: any) { toast.error(err.message); }
     finally { setMarkingServed(null); }
+  };
+
+  const handleCancel = async (orderId: string) => {
+    if (!window.confirm('Cancel this order? This cannot be undone.')) return;
+    setCancelling(orderId);
+    try {
+      await api('bar', 'cancel-order', { body: { order_id: orderId }, branchId });
+      toast.success('Order cancelled');
+      fetchOrders();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setCancelling(null); }
   };
 
   const openDetail = async (orderId: string) => {
@@ -898,6 +1179,14 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
                   >
                     Served?
                   </Button>
+                  <Button
+                    size="small" variant="outlined" color="error"
+                    startIcon={<CloseIcon />}
+                    disabled={cancelling === order.id}
+                    onClick={() => handleCancel(order.id)}
+                  >
+                    Cancel
+                  </Button>
                 </Stack>
               </CardContent>
             </Card>
@@ -941,6 +1230,7 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
   const [detailDialog, setDetailDialog] = useState(false);
   const [detailOrder, setDetailOrder] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [cancelling, setCancelling] = useState<string | null>(null);
 
   const fmt = (n: number) => formatCurrency(n, currency);
 
@@ -979,6 +1269,17 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
     } finally {
       setDetailLoading(false);
     }
+  };
+
+  const handleCancel = async (orderId: string) => {
+    if (!window.confirm('Cancel this order? This cannot be undone.')) return;
+    setCancelling(orderId);
+    try {
+      await api('bar', 'cancel-order', { body: { order_id: orderId }, branchId });
+      toast.success('Order cancelled');
+      fetchOrders();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setCancelling(null); }
   };
 
   if (loading && orders.length === 0) return <LinearProgress />;
@@ -1061,6 +1362,14 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
                 <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
                   <Button size="small" variant="outlined" startIcon={<VisibilityIcon />} onClick={() => openDetail(order.id)}>
                     Full Details
+                  </Button>
+                  <Button
+                    size="small" variant="outlined" color="error"
+                    startIcon={<CloseIcon />}
+                    disabled={cancelling === order.id}
+                    onClick={() => handleCancel(order.id)}
+                  >
+                    Cancel
                   </Button>
                 </Stack>
               </CardContent>

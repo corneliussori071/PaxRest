@@ -30,6 +30,7 @@ import MeetingRoomIcon from '@mui/icons-material/MeetingRoom';
 import InventoryIcon from '@mui/icons-material/Inventory';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import LocalBarIcon from '@mui/icons-material/LocalBar';
 import BedroomParentIcon from '@mui/icons-material/BedroomParent';
 import TableRestaurantIcon from '@mui/icons-material/TableRestaurant';
 import PeopleIcon from '@mui/icons-material/People';
@@ -114,8 +115,9 @@ interface AccomCartItem {
   name: string;
   unit_price: number;
   quantity: number;
-  source: 'accom_store' | 'menu' | 'room';
+  source: 'accom_store' | 'menu' | 'room' | 'bar_store';
   accom_store_item_id?: string;
+  bar_store_item_id?: string;
   menu_item_id?: string;
   room_id?: string;
   max_qty?: number;
@@ -131,11 +133,15 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
   const [cart, setCart] = useState<AccomCartItem[]>([]);
-  const [itemSubTab, setItemSubTab] = useState<'store' | 'meals' | 'rooms'>('store');
+  const [itemSubTab, setItemSubTab] = useState<'store' | 'meals' | 'rooms' | 'bar'>('store');
 
   // Internal store items
   const [storeItems, setStoreItems] = useState<any[]>([]);
   const [storeLoading, setStoreLoading] = useState(true);
+
+  // Bar store items (for cross-selling bar drinks from accommodation)
+  const [barStoreItems, setBarStoreItems] = useState<any[]>([]);
+  const [barStoreLoading, setBarStoreLoading] = useState(false);
 
   // Rooms (all statuses — occupied shown as disabled in picker)
   const [rooms, setRooms] = useState<any[]>([]);
@@ -173,6 +179,21 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
     } catch (err) { console.error(err); }
     finally { setStoreLoading(false); }
   }, [branchId, search]);
+
+  // Fetch bar store items
+  const fetchBarStore = useCallback(async () => {
+    setBarStoreLoading(true);
+    try {
+      const data = await api<{ items: any[]; total: number }>('bar', 'internal-store', {
+        params: { page: '1', page_size: '200' },
+        branchId,
+      });
+      setBarStoreItems(data.items ?? []);
+    } catch (err) { console.error(err); }
+    finally { setBarStoreLoading(false); }
+  }, [branchId]);
+
+  useEffect(() => { fetchBarStore(); }, [fetchBarStore]);
 
   // Fetch all rooms (all statuses; occupied displayed but not bookable)
   const fetchRooms = useCallback(async () => {
@@ -235,7 +256,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           return prev;
         }
         const newQty = existing.quantity + 1;
-        if (item.source === 'accom_store' && item.max_qty != null && newQty > Number(item.max_qty)) {
+        if ((item.source === 'accom_store' || item.source === 'bar_store') && item.max_qty != null && newQty > Number(item.max_qty)) {
           toast.error(`Only ${Number(item.max_qty)} ${item.name} available in stock`);
           return prev;
         }
@@ -245,7 +266,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
             : c
         );
       }
-      if (item.source === 'accom_store' && item.max_qty != null && Number(item.max_qty) < 1) {
+      if ((item.source === 'accom_store' || item.source === 'bar_store') && item.max_qty != null && Number(item.max_qty) < 1) {
         toast.error(`${item.name} is out of stock`);
         return prev;
       }
@@ -260,7 +281,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         const newQty = c.quantity + delta;
         if (newQty < 1) return c;
         if (c.source === 'room') return c; // Rooms always qty 1
-        if (c.source === 'accom_store' && c.max_qty != null && newQty > Number(c.max_qty)) {
+        if ((c.source === 'accom_store' || c.source === 'bar_store') && c.max_qty != null && newQty > Number(c.max_qty)) {
           toast.error(`Only ${Number(c.max_qty)} ${c.name} available in stock`);
           return c;
         }
@@ -312,6 +333,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         unit_price: c.unit_price,
         source: c.source,
         accom_store_item_id: c.accom_store_item_id,
+        bar_store_item_id: c.bar_store_item_id,
         menu_item_id: c.menu_item_id,
         room_id: c.room_id,
         ingredients: c.ingredients ?? [],
@@ -410,6 +432,20 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           >
             <Badge badgeContent={rooms.length} color="info" max={99}>
               Rooms
+            </Badge>
+          </Button>
+          <Button
+            variant="text" onClick={() => setItemSubTab('bar')} startIcon={<LocalBarIcon />}
+            sx={{
+              borderBottom: itemSubTab === 'bar' ? '2px solid' : '2px solid transparent',
+              borderColor: itemSubTab === 'bar' ? 'warning.main' : 'transparent',
+              borderRadius: 0, px: 2, py: 0.75,
+              color: itemSubTab === 'bar' ? 'warning.main' : 'text.secondary',
+              fontWeight: itemSubTab === 'bar' ? 700 : 400,
+            }}
+          >
+            <Badge badgeContent={barStoreItems.filter((i: any) => Number(i.quantity) > 0).length} color="warning" max={99}>
+              Bar Items
             </Badge>
           </Button>
         </Stack>
@@ -517,7 +553,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                 </Typography>
               )}
             </Box>
-          ) : (
+          ) : itemSubTab === 'rooms' ? (
             /* Rooms sub-tab */
             roomsLoading ? <LinearProgress /> : (
               <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
@@ -611,7 +647,47 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                 )}
               </Box>
             )
-          )}
+          ) : itemSubTab === 'bar' ? (
+            barStoreLoading ? <LinearProgress /> : (
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                {barStoreItems.filter((i: any) => Number(i.quantity) > 0).map((item: any) => (
+                  <Card
+                    key={item.id}
+                    sx={{ width: 180, cursor: 'pointer', '&:hover': { boxShadow: 4 }, transition: '0.15s' }}
+                    onClick={() => addToCart({
+                      id: item.id,
+                      name: item.item_name,
+                      unit_price: item.selling_price ?? 0,
+                      quantity: 1,
+                      source: 'bar_store',
+                      bar_store_item_id: item.id,
+                      max_qty: item.quantity,
+                    })}
+                  >
+                    <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                      <Typography variant="body2" fontWeight={700} noWrap>{item.item_name}</Typography>
+                      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5 }}>
+                        <Typography variant="body2" color="warning.main" fontWeight={600}>
+                          {item.selling_price ? fmt(item.selling_price) : '—'}
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={`${Number(item.quantity)} ${item.unit ?? ''}`}
+                          color={Number(item.quantity) < 5 ? 'warning' : 'default'}
+                          variant="outlined"
+                        />
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                ))}
+                {barStoreItems.filter((i: any) => Number(i.quantity) > 0).length === 0 && !barStoreLoading && (
+                  <Alert severity="info" sx={{ mt: 2, width: '100%' }}>
+                    No bar items available. Add items to the Bar internal store.
+                  </Alert>
+                )}
+              </Box>
+            )
+          ) : null}
         </Box>
       </Box>
 
@@ -881,6 +957,17 @@ function calcDuration(ciStr: string, coStr: string, unit: string): number {
   return Math.max(1, Math.round((coMidnight - ciMidnight) / 86_400_000));
 }
 
+/** Given a base ISO date string, add `count` units and return a datetime-local string (YYYY-MM-DDTHH:mm). */
+function addDurationToDate(baseIso: string, count: number, unit: string): string {
+  if (!baseIso || count < 1) return '';
+  const d = new Date(baseIso);
+  if (isNaN(d.getTime())) return '';
+  if (unit === 'hour') d.setHours(d.getHours() + count);
+  else if (unit === 'day') d.setDate(d.getDate() + count);
+  else /* night */ d.setDate(d.getDate() + count); // calendar days
+  return d.toISOString().slice(0, 16);
+}
+
 /* ═══════════════════════════════════════════════════════
    Room Booking Dialog
    Opens when a user clicks an available room in the picker.
@@ -1067,6 +1154,7 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
   const [markingServed, setMarkingServed] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState('today');
   const [detailDialog, setDetailDialog] = useState(false);
@@ -1097,6 +1185,17 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
       fetchOrders();
     } catch (err: any) { toast.error(err.message); }
     finally { setMarkingServed(null); }
+  };
+
+  const handleCancel = async (orderId: string) => {
+    if (!window.confirm('Cancel this order? This cannot be undone.')) return;
+    setCancelling(orderId);
+    try {
+      await api('accommodation', 'cancel-order', { body: { order_id: orderId }, branchId });
+      toast.success('Order cancelled');
+      fetchOrders();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setCancelling(null); }
   };
 
   const openDetail = async (orderId: string) => {
@@ -1174,6 +1273,14 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
                   >
                     Served?
                   </Button>
+                  <Button
+                    size="small" variant="outlined" color="error"
+                    startIcon={<CloseIcon />}
+                    disabled={cancelling === order.id}
+                    onClick={() => handleCancel(order.id)}
+                  >
+                    Cancel
+                  </Button>
                 </Stack>
               </CardContent>
             </Card>
@@ -1209,6 +1316,7 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
   const [detailDialog, setDetailDialog] = useState(false);
   const [detailOrder, setDetailOrder] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [cancelling, setCancelling] = useState<string | null>(null);
 
   const fmt = (n: number) => formatCurrency(n, currency);
 
@@ -1235,6 +1343,17 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
       setDetailOrder(data.order);
     } catch (err: any) { toast.error(err.message); setDetailDialog(false); }
     finally { setDetailLoading(false); }
+  };
+
+  const handleCancel = async (orderId: string) => {
+    if (!window.confirm('Cancel this order? This cannot be undone.')) return;
+    setCancelling(orderId);
+    try {
+      await api('accommodation', 'cancel-order', { body: { order_id: orderId }, branchId });
+      toast.success('Order cancelled');
+      fetchOrders();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setCancelling(null); }
   };
 
   if (loading && orders.length === 0) return <LinearProgress />;
@@ -1305,6 +1424,14 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
                 <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
                   <Button size="small" variant="outlined" startIcon={<VisibilityIcon />} onClick={() => openDetail(order.id)}>
                     Full Details
+                  </Button>
+                  <Button
+                    size="small" variant="outlined" color="error"
+                    startIcon={<CloseIcon />}
+                    disabled={cancelling === order.id}
+                    onClick={() => handleCancel(order.id)}
+                  >
+                    Cancel
                   </Button>
                 </Stack>
               </CardContent>
@@ -3554,12 +3681,24 @@ function InStaySubTab({ branchId, fmt }: { branchId: string; fmt: (v: number) =>
                 <TextField
                   label="Duration" type="number" size="small" sx={{ width: 120 }}
                   value={extendCount}
-                  onChange={(e) => setExtendCount(Math.max(1, Number(e.target.value)))}
+                  onChange={(e) => {
+                    const n = Math.max(1, Number(e.target.value));
+                    setExtendCount(n);
+                    if (extendDialog?.scheduled_check_out) {
+                      setExtendNewCheckOut(addDurationToDate(extendDialog.scheduled_check_out, n, extendUnit));
+                    }
+                  }}
                   slotProps={{ htmlInput: { min: 1 } }}
                 />
                 <FormControl size="small" sx={{ minWidth: 120 }}>
                   <InputLabel>Unit</InputLabel>
-                  <Select value={extendUnit} label="Unit" onChange={(e) => setExtendUnit(e.target.value)}>
+                  <Select value={extendUnit} label="Unit" onChange={(e) => {
+                    const u = e.target.value;
+                    setExtendUnit(u);
+                    if (extendDialog?.scheduled_check_out && extendCount > 0) {
+                      setExtendNewCheckOut(addDurationToDate(extendDialog.scheduled_check_out, extendCount, u));
+                    }
+                  }}>
                     <MuiMenuItem value="night">Night(s)</MuiMenuItem>
                     <MuiMenuItem value="day">Day(s)</MuiMenuItem>
                     <MuiMenuItem value="hour">Hour(s)</MuiMenuItem>

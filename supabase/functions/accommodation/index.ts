@@ -62,6 +62,8 @@ serve(async (req) => {
         return await listAccomOrders(req, supabase, auth, branchId, ['awaiting_payment']);
       case 'order-detail':
         return await getOrderDetail(req, supabase, auth, branchId);
+      case 'cancel-order':
+        return await cancelOrder(req, supabase, auth, branchId);
 
       // ─── Barcode lookup ───
       case 'barcode-lookup':
@@ -344,6 +346,8 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
   const orderItems: any[] = [];
   const saleRecords: any[] = [];
   const movementRecords: any[] = [];
+  const barSaleRecords: any[] = [];
+  const barMovementRecords: any[] = [];
 
   for (const item of body.items) {
     if (item.source === 'accom_store') {
@@ -461,6 +465,63 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
           .eq('id', item.room_id)
           .eq('branch_id', branchId);
       }
+    } else if (item.source === 'bar_store') {
+      // Bar internal store item
+      const { data: barItem, error: biErr } = await service
+        .from('bar_store_items')
+        .select('id, quantity, selling_price, item_name, unit, inventory_item_id')
+        .eq('id', item.bar_store_item_id)
+        .eq('branch_id', branchId)
+        .single();
+      if (biErr || !barItem) return errorResponse(`Bar item not found: ${item.name ?? item.bar_store_item_id}`);
+
+      const qty = Number(item.quantity);
+      const qtyBefore = Number(barItem.quantity);
+      if (qty > qtyBefore) return errorResponse(`Insufficient bar stock for ${barItem.item_name}. Available: ${qtyBefore}`);
+
+      const qtyAfter = qtyBefore - qty;
+      const unitPrice = item.unit_price ?? barItem.selling_price;
+
+      await service
+        .from('bar_store_items')
+        .update({ quantity: qtyAfter, updated_at: new Date().toISOString() })
+        .eq('id', barItem.id);
+
+      orderItems.push({
+        name: barItem.item_name,
+        quantity: qty,
+        unit_price: unitPrice,
+        source: 'bar_store',
+        bar_store_item_id: barItem.id,
+        ingredients: [],
+        extras: [],
+      });
+
+      barSaleRecords.push({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        bar_store_item_id: barItem.id,
+        inventory_item_id: barItem.inventory_item_id,
+        quantity: qty,
+        unit: barItem.unit,
+        sold_by: auth.userId,
+        sold_by_name: auth.name,
+      });
+
+      barMovementRecords.push({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        bar_store_item_id: barItem.id,
+        inventory_item_id: barItem.inventory_item_id,
+        movement_type: 'sale',
+        quantity_change: -qty,
+        quantity_before: qtyBefore,
+        quantity_after: qtyAfter,
+        reference_type: 'sale',
+        notes: 'Accommodation order (bar item)',
+        performed_by: auth.userId,
+        performed_by_name: auth.name,
+      });
     } else {
       // Menu item (available meal)
       orderItems.push({
@@ -535,6 +596,16 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
   if (movementRecords.length > 0) {
     const withRef = movementRecords.map((m) => ({ ...m, reference_id: order.id }));
     await service.from('accom_store_movements').insert(withRef);
+  }
+
+  // Insert bar store sale + movement records (cross-department)
+  if (barSaleRecords.length > 0) {
+    const withOrderId = barSaleRecords.map((s) => ({ ...s, order_id: order.id }));
+    await service.from('bar_store_sales').insert(withOrderId);
+  }
+  if (barMovementRecords.length > 0) {
+    const withRef = barMovementRecords.map((m) => ({ ...m, reference_id: order.id }));
+    await service.from('bar_store_movements').insert(withRef);
   }
 
   // Create guest_bookings records for any room items (pending_checkin lifecycle)
@@ -1187,4 +1258,23 @@ async function listAccomStaff(req: Request, supabase: any, auth: AuthContext, br
       role: s.role ?? 'staff',
     })),
   });
+}
+
+async function cancelOrder(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_orders')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  if (!body.order_id) return errorResponse('Missing order_id');
+
+  const { data, error } = await supabase.rpc('update_order_status', {
+    p_order_id: body.order_id,
+    p_new_status: 'cancelled',
+    p_changed_by: auth.userId,
+    p_changed_by_name: body.changed_by_name ?? auth.email,
+    p_notes: body.reason ?? 'Order cancelled',
+  });
+
+  if (error) return errorResponse(error.message, 400);
+  return jsonResponse(data);
 }
