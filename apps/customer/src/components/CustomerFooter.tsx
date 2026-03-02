@@ -17,7 +17,7 @@ export default function CustomerFooter() {
           <Grid size={{ xs: 6, md: 2 }}>
             <Typography variant="overline" sx={{ color: '#C9973A', letterSpacing: '0.12em', display: 'block', mb: 2 }}>Dining</Typography>
             <Stack spacing={1}>
-              {[{ label: 'Menu', href: '/menu' }, { label: 'My Orders', href: '/orders' }, { label: 'Reservations', href: '/reservations' }].map((l) => (
+              {[{ label: 'Menu', href: '/menu' }, { label: 'Reservations', href: '/reservations' }, { label: 'Events & Suites', href: '/events' }, { label: 'My Orders', href: '/orders' }].map((l) => (
                 <MuiLink key={l.label} href={l.href} underline="hover" variant="body2" sx={{ color: 'rgba(255,255,255,0.55)', '&:hover': { color: '#C9973A' } }}>{l.label}</MuiLink>
               ))}
             </Stack>

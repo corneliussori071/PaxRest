@@ -27,19 +27,23 @@ export default function CheckoutPage() {
     setLoading(true);
     try {
       const orderItems = items.map((item) => {
+        const modifiersTotal = item.modifiers.reduce((s, m) => s + m.price, 0);
         const extrasTotal = item.selectedExtras?.reduce((s, e) => s + e.price, 0) ?? 0;
         const ingredientsDiscount = item.removedIngredients?.reduce((s, r) => s + r.cost_contribution, 0) ?? 0;
         return {
           menu_item_id: item.menuItemId,
+          menu_item_name: item.name,
           variant_id: item.variantId ?? null,
+          variant_name: item.variantLabel ?? null,
           quantity: item.quantity,
           unit_price: item.basePrice + (item.variantPriceAdjustment ?? 0),
           modifiers: item.modifiers.map((m) => ({ modifier_id: m.id, name: m.name, price: m.price })),
+          modifiers_total: modifiersTotal,
           removed_ingredients: item.removedIngredients?.map((r) => ({ ingredient_id: r.ingredient_id, name: r.name, cost_contribution: r.cost_contribution })) ?? [],
           selected_extras: item.selectedExtras?.map((e) => ({ extra_id: e.id, name: e.name, price: e.price })) ?? [],
           extras_total: extrasTotal,
           ingredients_discount: ingredientsDiscount,
-          notes: item.notes || null,
+          special_instructions: item.notes || null,
         };
       });
 

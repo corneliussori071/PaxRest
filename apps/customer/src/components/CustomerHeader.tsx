@@ -16,8 +16,9 @@ import { useCustomerAuth } from '@/stores/customerAuth';
 
 const NAV = [
   { label: 'Dining', href: '/menu' },
-  { label: 'My Orders', href: '/orders' },
   { label: 'Reservations', href: '/reservations' },
+  { label: 'Events & Suites', href: '/events' },
+  { label: 'My Orders', href: '/orders' },
 ];
 
 export default function CustomerHeader() {

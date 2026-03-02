@@ -38,7 +38,7 @@ export default function HomePage() {
           {[
             { title: 'Dining Room', body: 'Savour a curated menu in our elegantly appointed restaurant, open for breakfast, lunch and dinner.', cta: 'View Menu', href: '/menu' },
             { title: 'Room Service', body: 'Our full menu is available for in-room dining, 24 hours a day. Order directly through this portal.', cta: 'Order Now', href: '/menu' },
-            { title: 'Private Events', body: 'From intimate dinners to corporate banquets, our team will tailor every detail to your occasion.', cta: 'Enquire', href: '/contact' },
+            { title: 'Private Events', body: 'From intimate dinners to corporate banquets, our team will tailor every detail to your occasion.', cta: 'Enquire', href: '/events' },
           ].map((s) => (
             <Grid key={s.title} size={{ xs: 12, md: 4 }}>
               <Box sx={{ p: 4, height: '100%', border: '1px solid #E0DBD0', borderRadius: 2, display: 'flex', flexDirection: 'column', bgcolor: '#fff', transition: 'box-shadow 0.2s, transform 0.2s', '&:hover': { boxShadow: '0 8px 32px rgba(28,43,74,0.10)', transform: 'translateY(-2px)' } }}>

@@ -65,6 +65,8 @@ serve(async (req) => {
       case 'companies':    return await getCompanies(req);
       case 'menu':         return await getPublicMenu(req);
       case 'zones':        return await getZones(req);
+      case 'tables':       return await getPublicTables(req);
+      case 'rooms':        return await getPublicRooms(req);
       case 'order':        return await createOrder(req);
       case 'order-status': return await getOrderStatus(req);
       case 'signup':       return await signUp(req);
@@ -594,8 +596,8 @@ async function createSpecialRequest(req: Request) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
 
   const body = await req.json().catch(() => null);
-  if (!body || !body.branch_id || !body.items?.length) {
-    return errorResponse('Missing branch_id or items');
+  if (!body || !body.branch_id) {
+    return errorResponse('Missing branch_id');
   }
   if (!body.customer_name || !body.customer_phone) {
     return errorResponse('Customer name and phone are required');
@@ -635,11 +637,35 @@ async function createSpecialRequest(req: Request) {
     customerId = newCust?.id ?? null;
   }
 
-  // Create order via RPC first (standard flow, status will be overridden below)
+  // Build items array from various input formats:
+  // 1. Legacy: body.items array already provided
+  // 2. Single item: body.item_id + body.item_name
+  // 3. Enquiry only (reservation/event): empty array
+  let rpcItems: unknown[] = [];
+  if (Array.isArray(body.items) && body.items.length > 0) {
+    rpcItems = body.items;
+  } else if (body.item_name) {
+    rpcItems = [{
+      menu_item_id: body.item_id ?? null,
+      menu_item_name: safeStr(body.item_name),
+      quantity: 1,
+      unit_price: 0,
+      modifiers: [],
+      modifiers_total: 0,
+      special_instructions: body.special_request_notes ? safeStr(body.special_request_notes, MAX_TEXT) : null,
+    }];
+  }
+  // else enquiry with empty items — order acts as a notification ticket
+
+  // Map 'pickup' → 'takeaway'; default to 'dine_in' if not provided
+  const rawType = body.order_type ?? 'dine_in';
+  const dbOrderType = rawType === 'pickup' ? 'takeaway' : rawType;
+
+  // Create order via RPC first (status will be overridden to awaiting_approval below)
   const { data: orderData, error: rpcErr } = await service.rpc('create_order_with_deduction', {
     p_company_id: branch.company_id,
     p_branch_id: body.branch_id,
-    p_order_type: 'online',
+    p_order_type: dbOrderType,
     p_table_id: null,
     p_customer_id: customerId,
     p_customer_name: sanitizeString(body.customer_name),
@@ -658,7 +684,7 @@ async function createSpecialRequest(req: Request) {
     p_delivery_fee: 0,
     p_loyalty_points_used: 0,
     p_loyalty_discount: 0,
-    p_items: body.items,
+    p_items: rpcItems,
   });
 
   if (rpcErr) return errorResponse(rpcErr.message, 400);
@@ -682,4 +708,50 @@ async function createSpecialRequest(req: Request) {
     order_number: orderData?.order_number,
     message: 'Your special request has been sent. Staff will review and confirm shortly.',
   }, 201);
+}
+
+// ─── GET /customer/tables ────────────────────────────────────────────────────
+// Public — returns available (and all) tables for a branch so customers can
+// see seating options and make walk-in / dine-in reservation requests.
+
+async function getPublicTables(req: Request) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const url = new URL(req.url);
+  const branchId = url.searchParams.get('branch_id');
+  if (!branchId) return errorResponse('Missing branch_id');
+
+  const service = createServiceClient();
+  const { data, error } = await service
+    .from('tables')
+    .select('id, table_number, name, capacity, section, status')
+    .eq('branch_id', branchId)
+    .eq('is_active', true)
+    .order('table_number', { ascending: true });
+
+  if (error) return errorResponse(error.message, 500);
+  return jsonResponse({ tables: data ?? [] });
+}
+
+// ─── GET /customer/rooms ─────────────────────────────────────────────────────
+// Public — returns available rooms/halls for customer browsing and enquiry
+// (conference halls, event rooms, suites, etc.).
+
+async function getPublicRooms(req: Request) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const url = new URL(req.url);
+  const branchId = url.searchParams.get('branch_id');
+  if (!branchId) return errorResponse('Missing branch_id');
+
+  const service = createServiceClient();
+  const { data, error } = await service
+    .from('rooms')
+    .select('id, room_number, floor_section, max_occupants, category, cost_amount, cost_duration, benefits, media_url, media_type, status')
+    .eq('branch_id', branchId)
+    .eq('is_active', true)
+    .order('room_number', { ascending: true });
+
+  if (error) return errorResponse(error.message, 500);
+  return jsonResponse({ rooms: data ?? [] });
 }
