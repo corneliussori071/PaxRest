@@ -5,7 +5,6 @@ import {
   Card, CardActionArea, CardContent, Skeleton, Stack, Chip,
 } from '@mui/material';
 import LocationOnIcon from '@mui/icons-material/LocationOn';
-import StorefrontIcon from '@mui/icons-material/Storefront';
 import { publicApi } from '@/lib/supabase';
 import { useCartStore } from '@/stores/cart';
 
@@ -83,12 +82,13 @@ export default function BranchSelector() {
       fullWidth
       // Prevent closing without selecting
       onClose={() => {}}
-      PaperProps={{ sx: { borderRadius: 3 } }}
+      PaperProps={{ sx: { borderRadius: 2 } }}
     >
-      <DialogTitle sx={{ pt: 4, pb: 1, textAlign: 'center' }}>
-        <StorefrontIcon color="primary" sx={{ fontSize: 48, display: 'block', mx: 'auto', mb: 1 }} />
-        <Typography variant="h5" fontWeight={700} component="span" display="block">
-          {company?.name ?? 'Welcome!'}
+      <DialogTitle sx={{ pt: 4, pb: 1, textAlign: 'center', bgcolor: '#1C2B4A' }}>
+        <Box sx={{ width: 36, height: 2, bgcolor: '#C9973A', mx: 'auto', mb: 2 }} />
+        <Typography variant="overline" sx={{ color: '#C9973A', letterSpacing: '0.15em', display: 'block', mb: 0.5 }}>Welcome to</Typography>
+        <Typography variant="h5" sx={{ fontFamily: '"Playfair Display", serif', color: '#fff', fontWeight: 700 }} component="span" display="block">
+          {company?.name ?? 'Pax Hotel'}
         </Typography>
       </DialogTitle>
 
@@ -119,10 +119,10 @@ export default function BranchSelector() {
                 key={branch.id}
                 variant="outlined"
                 sx={{
-                  borderColor: selecting === branch.id ? 'primary.main' : 'divider',
+                  borderColor: selecting === branch.id ? '#C9973A' : '#E0DBD0',
                   borderWidth: selecting === branch.id ? 2 : 1,
                   transition: 'all 0.15s',
-                  '&:hover': { borderColor: 'primary.main', boxShadow: 2 },
+                  '&:hover': { borderColor: '#1C2B4A', boxShadow: 1 },
                 }}
               >
                 <CardActionArea
@@ -148,10 +148,12 @@ export default function BranchSelector() {
                         )}
                       </Box>
                       <Chip
-                        label="Select"
-                        color={selecting === branch.id ? 'primary' : 'default'}
-                        variant={selecting === branch.id ? 'filled' : 'outlined'}
+                        label={selecting === branch.id ? 'Selected' : 'Select'}
                         size="small"
+                        sx={selecting === branch.id
+                          ? { bgcolor: '#C9973A', color: '#fff', border: '1px solid #C9973A' }
+                          : { borderColor: '#E0DBD0', color: 'text.secondary' }}
+                        variant={selecting === branch.id ? 'filled' : 'outlined'}
                       />
                     </Stack>
                   </CardContent>

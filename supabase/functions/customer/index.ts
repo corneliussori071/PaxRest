@@ -63,6 +63,7 @@ serve(async (req) => {
     switch (action) {
       case 'branches':     return await getBranches(req);
       case 'companies':    return await getCompanies(req);
+      case 'menu':         return await getPublicMenu(req);
       case 'zones':        return await getZones(req);
       case 'order':        return await createOrder(req);
       case 'order-status': return await getOrderStatus(req);
@@ -77,6 +78,93 @@ serve(async (req) => {
     return errorResponse(err?.message ?? 'Internal server error', 500);
   }
 });
+
+// ─── GET menu ───────────────────────────────────────────────────────────────
+// Public menu with live kitchen status. No JWT required.
+async function getPublicMenu(req: Request) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const url = new URL(req.url);
+  const branchId = url.searchParams.get('branch_id');
+  if (!branchId) return errorResponse('Missing branch_id');
+
+  const service = createServiceClient();
+
+  // Categories
+  const { data: categories, error: catErr } = await service
+    .from('menu_categories')
+    .select('id, name, description, image_url, sort_order')
+    .eq('branch_id', branchId)
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+  if (catErr) return errorResponse(catErr.message);
+
+  // Items with related data
+  const { data: items, error: itemErr } = await service
+    .from('menu_items')
+    .select(`
+      id, name, description, base_price, image_url, media_url, media_type,
+      availability_status, preparation_time_min, tags, allergens, calories,
+      category_id,
+      menu_variants(id, name, price_adjustment, is_active),
+      menu_item_modifier_groups(modifier_groups(id, name, min_selections, max_selections, is_required, modifiers(id, name, price, is_active))),
+      menu_item_ingredients(id, ingredient_id, name, cost_contribution, quantity_used, unit),
+      menu_item_extras(id, name, price, is_available, sort_order)
+    `)
+    .eq('branch_id', branchId)
+    .eq('is_active', true)
+    .eq('is_available', true)
+    .order('sort_order', { ascending: true });
+  if (itemErr) return errorResponse(itemErr.message);
+
+  // Available meals (kitchen "Available Now" queue)
+  const { data: availableMeals } = await service
+    .from('available_meals')
+    .select('menu_item_id, quantity_available, availability_status')
+    .eq('branch_id', branchId)
+    .gt('quantity_available', 0);
+
+  // Active meal assignments (kitchen is currently preparing)
+  const { data: assignments } = await service
+    .from('meal_assignments')
+    .select('menu_item_id, quantity, status')
+    .eq('branch_id', branchId)
+    .in('status', ['pending', 'accepted', 'in_progress']);
+
+  const availMap = new Map<string, { qty: number; status: string }>();
+  for (const m of availableMeals ?? []) {
+    availMap.set(m.menu_item_id, { qty: m.quantity_available, status: m.availability_status ?? 'available' });
+  }
+
+  const assignMap = new Map<string, number>();
+  for (const a of assignments ?? []) {
+    assignMap.set(a.menu_item_id, (assignMap.get(a.menu_item_id) ?? 0) + (a.quantity ?? 1));
+  }
+
+  const itemIds = new Set((items ?? []).map((i: any) => i.id));
+
+  const menu = (categories ?? []).map((cat: any) => ({
+    ...cat,
+    items: (items ?? [])
+      .filter((item: any) => item.category_id === cat.id)
+      .map((item: any) => {
+        const avail = availMap.get(item.id);
+        const assignCount = assignMap.get(item.id) ?? 0;
+        // kitchen_status: 'ready' | 'preparing' | null
+        const kitchen_status = avail && avail.qty > 0 ? 'ready'
+          : assignCount > 0 ? 'preparing'
+          : null;
+        return {
+          ...item,
+          available_quantity: avail?.qty ?? 0,
+          assignment_count: assignCount,
+          kitchen_status,
+        };
+      }),
+  }));
+
+  return jsonResponse({ menu });
+}
 
 // ─── GET companies ──────────────────────────────────────────────────────────
 // Returns all active companies (public info only — name, slug, logo).
