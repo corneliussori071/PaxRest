@@ -152,6 +152,11 @@ async function listOrders(req: Request, supabase: any, auth: AuthContext) {
   const source = url.searchParams.get('source');
   if (source) query = query.eq('source', source);
 
+  const search = url.searchParams.get('search');
+  if (search) {
+    query = query.or(`order_number.ilike.%${search}%,customer_name.ilike.%${search}%`);
+  }
+
   const ascending = sortDirection === 'ASC';
   query = applyPagination(query, page, pageSize, sortColumn, ascending);
 
@@ -257,7 +262,7 @@ async function addPayment(req: Request, supabase: any, auth: AuthContext) {
       payment_method: body.payment_method,
       amount: body.amount,
       status: 'paid',
-      reference_number: body.reference_number ?? null,
+      reference: body.reference_number ?? body.reference ?? null,
       processed_by: auth.userId,
       processed_by_name: body.processed_by_name ?? auth.email,
     })

@@ -1,0 +1,465 @@
+/**
+ * Shared order management components used by both POSTerminalPage and OrdersPage.
+ * - OrderDetailDialog: full order detail with status transition buttons
+ * - OrderCard: compact card for grid display
+ * - OrdersGrid: paginated grid with search + status filter chips
+ */
+import React, { useState, useMemo, useCallback } from 'react';
+import {
+  Box, Typography, Chip, Button, Dialog,
+  DialogTitle, DialogContent, DialogActions, Divider, Stack,
+  Card, CardContent, CardActions, Alert, IconButton,
+  Table, TableHead, TableBody, TableRow, TableCell,
+  InputAdornment, TextField, CircularProgress,
+  TablePagination,
+} from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
+import PaymentIcon from '@mui/icons-material/Payment';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import CloseIcon from '@mui/icons-material/Close';
+import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
+import { usePaginated } from '@/hooks';
+import { api } from '@/lib/supabase';
+import toast from 'react-hot-toast';
+
+// ─── Constants ──────────────────────────────────────────────────────────────────
+export const STATUS_COLORS: Record<string, string> = {
+  awaiting_approval: '#f59e0b',
+  pending: '#6366f1',
+  confirmed: '#3b82f6',
+  preparing: '#8b5cf6',
+  ready: '#22c55e',
+  out_for_delivery: '#0ea5e9',
+  completed: '#10b981',
+  awaiting_payment: '#ef4444',
+  cancelled: '#6b7280',
+};
+
+export const ORDER_TYPE_LABELS: Record<string, string> = {
+  dine_in: 'Dine-in',
+  takeaway: 'Takeaway',
+  delivery: 'Delivery',
+  room_service: 'Room Svc',
+  bar: 'Bar',
+  accommodation: 'Room',
+};
+
+// ─── Order Detail Dialog ────────────────────────────────────────────────────────
+export interface OrderDetailProps {
+  order: any | null;
+  currency: string;
+  effectiveBranchId: string;
+  onClose: () => void;
+  onStatusChange?: () => void;
+  onPaymentOpen?: (order: any) => void;
+}
+
+export function OrderDetailDialog({
+  order,
+  currency,
+  effectiveBranchId,
+  onClose,
+  onStatusChange,
+  onPaymentOpen,
+}: OrderDetailProps) {
+  const [detail, setDetail] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [actioning, setActioning] = useState(false);
+
+  React.useEffect(() => {
+    if (!order) { setDetail(null); return; }
+    setLoading(true);
+    api('orders', 'get', { params: { id: order.id }, branchId: effectiveBranchId })
+      .then((d: any) => setDetail(d.order))
+      .catch(() => setDetail(null))
+      .finally(() => setLoading(false));
+  }, [order?.id]);
+
+  const doStatus = async (newStatus: string) => {
+    if (!detail) return;
+    setActioning(true);
+    try {
+      await api('orders', 'update-status', {
+        body: { order_id: detail.id, new_status: newStatus },
+        branchId: effectiveBranchId,
+      });
+      toast.success(`Order #${detail.order_number} → ${newStatus.replace(/_/g, ' ')}`);
+      setDetail((d: any) => ({ ...d, status: newStatus }));
+      onStatusChange?.();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to update status');
+    } finally {
+      setActioning(false);
+    }
+  };
+
+  const d = detail ?? order;
+  const items: any[] = detail?.items ?? detail?.order_items ?? [];
+  const payments: any[] = detail?.order_payments ?? [];
+  const totalPaid = payments.reduce((s: number, p: any) => s + Number(p.amount ?? 0), 0);
+  const orderTotal = Number(d?.total ?? d?.total_amount ?? 0);
+
+  return (
+    <Dialog open={!!order} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Box>
+          <Typography variant="h6">Order #{d?.order_number}</Typography>
+          <Chip
+            size="small"
+            label={d?.status?.replace(/_/g, ' ')}
+            sx={{ bgcolor: STATUS_COLORS[d?.status] ?? '#6b7280', color: '#fff', mt: 0.5, fontSize: 11 }}
+          />
+        </Box>
+        <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
+      </DialogTitle>
+      <DialogContent>
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+        ) : (
+          <>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              {(d?.order_type && ORDER_TYPE_LABELS[d.order_type]) || d?.order_type}
+              {d?.source === 'online' ? ' · 🌐 Online' : ' · 🏪 POS'}
+              {d?.customer_name ? ` · ${d.customer_name}` : ''}
+              {d?.customer_phone ? ` · ${d.customer_phone}` : ''}
+              {d?.table_name ? ` · Table: ${d.table_name}` : ''}
+              {d?.created_at ? ` · ${formatDateTime(d.created_at)}` : ''}
+            </Typography>
+
+            <Divider sx={{ my: 1.5 }} />
+
+            {items.length > 0 ? (
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Item</TableCell>
+                    <TableCell align="right">Qty</TableCell>
+                    <TableCell align="right">Unit</TableCell>
+                    <TableCell align="right">Total</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {items.map((it: any, idx: number) => (
+                    <TableRow key={it.id ?? idx}>
+                      <TableCell>
+                        {it.item_name ?? it.menu_item_name ?? it.name}
+                        {it.variant_name ? <Typography variant="caption" display="block" color="text.secondary">{it.variant_name}</Typography> : null}
+                      </TableCell>
+                      <TableCell align="right">{it.quantity}</TableCell>
+                      <TableCell align="right">{formatCurrency(it.unit_price ?? it.price ?? 0, currency)}</TableCell>
+                      <TableCell align="right">{formatCurrency(it.line_total ?? it.item_total ?? ((it.quantity ?? 0) * (it.unit_price ?? it.price ?? 0)), currency)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <Typography variant="body2" color="text.secondary">No item details available</Typography>
+            )}
+
+            <Divider sx={{ my: 1.5 }} />
+
+            <Stack spacing={0.5}>
+              {d?.tax_amount > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="body2" color="text.secondary">Tax</Typography>
+                  <Typography variant="body2">{formatCurrency(d.tax_amount, currency)}</Typography>
+                </Box>
+              )}
+              {d?.discount_amount > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="body2" color="text.secondary">Discount</Typography>
+                  <Typography variant="body2" color="error.main">−{formatCurrency(d.discount_amount, currency)}</Typography>
+                </Box>
+              )}
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography fontWeight={700}>Total</Typography>
+                <Typography fontWeight={700}>{formatCurrency(orderTotal, currency)}</Typography>
+              </Box>
+              {totalPaid > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="body2" color="text.secondary">Paid</Typography>
+                  <Typography variant="body2" color="success.main">{formatCurrency(totalPaid, currency)}</Typography>
+                </Box>
+              )}
+            </Stack>
+
+            {d?.notes && (
+              <Alert severity="info" sx={{ mt: 2, py: 0.5 }}>
+                <Typography variant="body2">{d.notes}</Typography>
+              </Alert>
+            )}
+            {d?.is_special_request && (
+              <Alert severity="warning" sx={{ mt: 1, py: 0.5 }}>
+                <Typography variant="body2" fontWeight={700}>⭐ Special Request</Typography>
+                {d?.special_request_notes && <Typography variant="body2">{d.special_request_notes}</Typography>}
+              </Alert>
+            )}
+          </>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ flexWrap: 'wrap', gap: 1, px: 3, py: 2 }}>
+        {d?.status === 'awaiting_approval' && (
+          <>
+            <Button variant="contained" color="success" size="small" disabled={actioning} onClick={() => doStatus('pending')}>
+              Approve
+            </Button>
+            <Button variant="outlined" color="error" size="small" disabled={actioning} onClick={() => doStatus('cancelled')}>
+              Decline
+            </Button>
+          </>
+        )}
+        {d?.status === 'pending' && (
+          <Button variant="contained" size="small" disabled={actioning} onClick={() => doStatus('confirmed')}>Confirm</Button>
+        )}
+        {d?.status === 'confirmed' && (
+          <Button variant="contained" size="small" disabled={actioning} onClick={() => doStatus('preparing')}>Start Preparing</Button>
+        )}
+        {d?.status === 'preparing' && (
+          <Button variant="contained" size="small" disabled={actioning} onClick={() => doStatus('ready')}>Mark Ready</Button>
+        )}
+        {d?.status === 'ready' && d?.order_type === 'delivery' && (
+          <Button variant="contained" color="info" size="small" disabled={actioning} onClick={() => doStatus('out_for_delivery')}>
+            Out for Delivery
+          </Button>
+        )}
+        {d?.status === 'ready' && d?.order_type !== 'delivery' && (
+          <Button variant="contained" color="success" size="small" disabled={actioning} onClick={() => doStatus('awaiting_payment')}>
+            Mark as Served
+          </Button>
+        )}
+        {d?.status === 'awaiting_payment' && onPaymentOpen && (
+          <Button
+            variant="contained"
+            color="error"
+            size="small"
+            startIcon={<PaymentIcon />}
+            onClick={() => { onPaymentOpen(d); onClose(); }}
+          >
+            Process Payment
+          </Button>
+        )}
+        {['pending', 'confirmed', 'preparing'].includes(d?.status ?? '') && (
+          <Button variant="outlined" color="error" size="small" disabled={actioning} onClick={() => doStatus('cancelled')}>
+            Cancel
+          </Button>
+        )}
+        <Button size="small" onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ─── Order Card ─────────────────────────────────────────────────────────────────
+export interface OrderCardProps {
+  order: any;
+  currency: string;
+  onViewDetail: (o: any) => void;
+  onPayment?: (o: any) => void;
+  onQuickStatus?: (o: any, status: string) => void;
+  showPayBtn?: boolean;
+}
+
+export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickStatus, showPayBtn }: OrderCardProps) {
+  const items: any[] = order.order_items ?? order.items ?? [];
+  const itemCount = items.length;
+
+  return (
+    <Card
+      variant="outlined"
+      sx={{
+        borderRadius: 2,
+        borderLeft: `4px solid ${STATUS_COLORS[order.status] ?? '#e5e7eb'}`,
+        transition: 'box-shadow 0.15s',
+        '&:hover': { boxShadow: 3 },
+      }}
+    >
+      <CardContent sx={{ pb: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <Typography variant="subtitle2" fontWeight={700}>#{order.order_number}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {ORDER_TYPE_LABELS[order.order_type] ?? order.order_type}
+              {order.customer_name ? ` · ${order.customer_name}` : ''}
+            </Typography>
+          </Box>
+          <Chip
+            size="small"
+            label={order.status?.replace(/_/g, ' ')}
+            sx={{ bgcolor: STATUS_COLORS[order.status] ?? '#6b7280', color: '#fff', fontSize: 10, height: 20 }}
+          />
+        </Box>
+
+        {itemCount > 0 && (
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+            {itemCount} item{itemCount !== 1 ? 's' : ''}
+            {items.slice(0, 2).map((it: any, i: number) => (
+              <span key={i}> · {it.quantity ?? 1}× {it.item_name ?? it.menu_item_name ?? it.name ?? '?'}</span>
+            ))}
+            {itemCount > 2 ? <span> +{itemCount - 2} more</span> : null}
+          </Typography>
+        )}
+
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ fontSize: 11 }}>
+            {formatDateTime(order.created_at)}
+          </Typography>
+          <Typography variant="subtitle2" fontWeight={700} color="primary.main">
+            {formatCurrency(order.total ?? order.total_amount, currency)}
+          </Typography>
+        </Box>
+      </CardContent>
+
+      <CardActions sx={{ pt: 0, px: 2, pb: 1.5, gap: 0.75 }}>
+        <Button size="small" startIcon={<VisibilityIcon />} onClick={() => onViewDetail(order)}>Details</Button>
+        {order.status === 'awaiting_approval' && onQuickStatus && (
+          <Button size="small" variant="contained" color="success" onClick={() => onQuickStatus(order, 'pending')}>
+            Approve
+          </Button>
+        )}
+        {order.status === 'ready' && order.order_type !== 'delivery' && onQuickStatus && (
+          <Button size="small" variant="contained" color="success" onClick={() => onQuickStatus(order, 'awaiting_payment')}>
+            Served?
+          </Button>
+        )}
+        {showPayBtn && order.status === 'awaiting_payment' && onPayment && (
+          <Button size="small" variant="contained" color="error" startIcon={<PaymentIcon />} onClick={() => onPayment(order)}>
+            Pay
+          </Button>
+        )}
+      </CardActions>
+    </Card>
+  );
+}
+
+// ─── Orders Grid ────────────────────────────────────────────────────────────────
+export interface OrdersGridProps {
+  source?: 'pos' | 'online';
+  orderTypes?: string;
+  extraParams?: Record<string, string>;
+  currency: string;
+  effectiveBranchId: string;
+  onViewDetail?: (o: any) => void;
+  onPayment?: (o: any) => void;
+  onQuickStatus?: (o: any, status: string) => void;
+  defaultStatus?: string;
+  statusOptions?: string[];
+  showPayBtn?: boolean;
+}
+
+export function OrdersGrid({
+  source,
+  orderTypes,
+  extraParams,
+  currency,
+  effectiveBranchId,
+  onViewDetail,
+  onPayment,
+  onQuickStatus,
+  defaultStatus = '',
+  statusOptions,
+  showPayBtn,
+}: OrdersGridProps) {
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState(defaultStatus);
+
+  const params = useMemo(() => ({
+    ...(source ? { source } : {}),
+    ...(statusFilter ? { status: statusFilter } : {}),
+    ...(orderTypes ? { order_type: orderTypes } : {}),
+    ...(search ? { search } : {}),
+    ...extraParams,
+  }), [source, statusFilter, orderTypes, search, extraParams]);
+
+  const { items: orders, loading, refetch, total, page, setPage, pageSize, setPageSize } = usePaginated<any>('orders', 'list', params);
+
+  const handleStatusChange = useCallback(async (order: any, newStatus: string) => {
+    try {
+      await api('orders', 'update-status', {
+        body: { order_id: order.id, new_status: newStatus },
+        branchId: effectiveBranchId,
+      });
+      toast.success(`Order #${order.order_number} → ${newStatus.replace(/_/g, ' ')}`);
+      refetch();
+      onQuickStatus?.(order, newStatus);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed');
+    }
+  }, [effectiveBranchId, refetch]);
+
+  const allStatuses: string[] = statusOptions ?? [
+    '', 'awaiting_approval', 'pending', 'confirmed', 'preparing', 'ready',
+    'out_for_delivery', 'awaiting_payment', 'completed', 'cancelled',
+  ];
+
+  return (
+    <Box>
+      <Stack direction="row" spacing={1.5} sx={{ mb: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TextField
+          placeholder="Search order #, customer…"
+          size="small"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          sx={{ minWidth: 220 }}
+          slotProps={{
+            input: {
+              startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
+            },
+          }}
+        />
+        <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+          {allStatuses.map((s) => (
+            <Chip
+              key={s || 'all'}
+              label={s ? s.replace(/_/g, ' ') : 'All'}
+              size="small"
+              color={statusFilter === s ? 'primary' : 'default'}
+              variant={statusFilter === s ? 'filled' : 'outlined'}
+              onClick={() => setStatusFilter(s)}
+            />
+          ))}
+        </Box>
+      </Stack>
+
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
+      ) : orders.length === 0 ? (
+        <Alert severity="info" sx={{ mt: 2 }}>No orders found.</Alert>
+      ) : (
+        <>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block' }}>
+            {total} order{total !== 1 ? 's' : ''}
+          </Typography>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' },
+              gap: 2,
+            }}
+          >
+            {orders.map((o) => (
+              <OrderCard
+                key={o.id}
+                order={o}
+                currency={currency}
+                onViewDetail={onViewDetail ?? (() => {})}
+                onPayment={onPayment}
+                onQuickStatus={handleStatusChange}
+                showPayBtn={showPayBtn}
+              />
+            ))}
+          </Box>
+          <TablePagination
+            component="div"
+            count={total}
+            page={page}
+            onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={pageSize}
+            onRowsPerPageChange={(e) => { setPageSize(parseInt(e.target.value, 10)); setPage(0); }}
+            rowsPerPageOptions={[10, 20, 50]}
+            sx={{ mt: 2, borderTop: '1px solid', borderColor: 'divider' }}
+          />
+        </>
+      )}
+    </Box>
+  );
+}
