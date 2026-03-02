@@ -106,7 +106,12 @@ function DeliveriesTab() {
       id: 'customer', label: 'Customer', render: (r) => {
         const name = r.customer_name || r.orders?.customer_name || '';
         const phone = r.customer_phone || '';
-        const address = r.delivery_address || '';
+        const rawAddr = r.delivery_address;
+        const address = rawAddr
+          ? typeof rawAddr === 'object'
+            ? [rawAddr.street, rawAddr.city].filter(Boolean).join(', ')
+            : String(rawAddr)
+          : '';
         return (
           <Box>
             <Typography variant="body2" fontWeight={600}>{name || '—'}</Typography>

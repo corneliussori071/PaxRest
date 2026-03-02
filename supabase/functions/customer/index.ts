@@ -281,38 +281,53 @@ async function createOrder(req: Request) {
 
   if (bErr || !branch) return errorResponse('Branch not found', 404);
 
-  // Upsert customer record if phone is provided (find-or-create by phone)
-  let customerId: string | null = null;
-  const { data: existingCustomer } = await service
-    .from('customers')
-    .select('id')
-    .eq('company_id', branch.company_id)
-    .eq('phone', body.customer_phone)
-    .maybeSingle();
+  // Prefer the authenticated customer if the request carries a valid JWT
+  const authedCustomer = await resolveCustomer(req);
+  let customerId: string | null = authedCustomer?.id ?? null;
 
-  if (existingCustomer) {
-    customerId = existingCustomer.id;
-    // Update name/email if changed
+  if (customerId) {
+    // Keep name/email up-to-date on the auth-linked row
     await service
       .from('customers')
       .update({
         name: sanitizeString(body.customer_name),
         email: body.customer_email ?? undefined,
+        phone: body.customer_phone,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', customerId!);
+      .eq('id', customerId);
   } else {
-    const { data: newCust } = await service
+    // Fall back: find-or-create by phone
+    const { data: existingCustomer } = await service
       .from('customers')
-      .insert({
-        company_id: branch.company_id,
-        name: sanitizeString(body.customer_name),
-        phone: body.customer_phone,
-        email: body.customer_email ?? null,
-      })
       .select('id')
-      .single();
-    customerId = newCust?.id ?? null;
+      .eq('company_id', branch.company_id)
+      .eq('phone', body.customer_phone)
+      .maybeSingle();
+
+    if (existingCustomer) {
+      customerId = existingCustomer.id;
+      await service
+        .from('customers')
+        .update({
+          name: sanitizeString(body.customer_name),
+          email: body.customer_email ?? undefined,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', customerId!);
+    } else {
+      const { data: newCust } = await service
+        .from('customers')
+        .insert({
+          company_id: branch.company_id,
+          name: sanitizeString(body.customer_name),
+          phone: body.customer_phone,
+          email: body.customer_email ?? null,
+        })
+        .select('id')
+        .single();
+      customerId = newCust?.id ?? null;
+    }
   }
 
   // Build delivery address for DB (jsonb format)
@@ -415,7 +430,22 @@ async function getOrderStatus(req: Request) {
     .single();
 
   if (error) return errorResponse('Order not found', 404);
-  return jsonResponse({ order: data });
+
+  // Normalise the response shape expected by the track page
+  const order = {
+    ...data,
+    discount: (data as any).discount_amount ?? 0,
+    tax: (data as any).tax_amount ?? 0,
+    items: ((data as any).order_items ?? []).map((oi: any) => ({
+      id: oi.id,
+      name: oi.menu_items?.name ?? oi.notes ?? 'Item',
+      quantity: oi.quantity,
+      unit_price: oi.unit_price,
+      notes: oi.notes,
+    })),
+  };
+
+  return jsonResponse({ order });
 }
 
 // ─── POST signup ─────────────────────────────────────────────────────────────
