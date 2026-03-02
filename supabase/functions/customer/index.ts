@@ -73,6 +73,7 @@ serve(async (req) => {
       case 'me':           return req.method === 'PATCH' ? updateMe(req) : getMe(req);
       case 'my-orders':    return await getMyOrders(req);
       case 'special-request': return await createSpecialRequest(req);
+      case 'book-room':       return await bookRoom(req);
       default:             return errorResponse('Unknown customer action', 404);
     }
   } catch (err) {
@@ -355,22 +356,32 @@ async function createOrder(req: Request) {
 
   if (error) return errorResponse(error.message, 400);
 
-  // If delivery order + zone provided, create delivery record
-  if ((dbOrderType === 'delivery') && body.delivery_zone_id && data?.order_id) {
-    await service
-      .from('deliveries')
-      .insert({
-        company_id: branch.company_id,
-        branch_id: body.branch_id,
-        order_id: data.order_id,
-        status: 'pending_assignment',
-        delivery_zone_id: body.delivery_zone_id,
-        customer_name: sanitizeString(body.customer_name),
-        customer_phone: body.customer_phone,
-        delivery_address: safeStr((body.delivery_address?.line1 ?? body.delivery_address?.street) ?? ''),
-        notes: body.notes ? safeStr(body.notes, MAX_TEXT) : null,
-      })
-      .catch((e: any) => console.error('Delivery record creation failed:', e.message));
+  // If delivery order, create delivery record
+  if (dbOrderType === 'delivery' && data?.order_id) {
+    const deliveryRec: Record<string, unknown> = {
+      company_id: branch.company_id,
+      branch_id: body.branch_id,
+      order_id: data.order_id,
+      order_number: data.order_number,
+      status: 'pending_assignment',
+      customer_name: sanitizeString(body.customer_name),
+      customer_phone: body.customer_phone ?? '',
+      delivery_fee: body.delivery_fee ?? 0,
+      notes: body.notes ? safeStr(body.notes, MAX_TEXT) : null,
+    };
+    if (body.delivery_zone_id) deliveryRec.delivery_zone_id = body.delivery_zone_id;
+    if (body.delivery_address) {
+      const addr = body.delivery_address;
+      deliveryRec.delivery_address = {
+        street: safeStr(addr.line1 ?? addr.street ?? ''),
+        city: safeStr(addr.city ?? ''),
+        lat: typeof addr.lat === 'number' ? addr.lat : null,
+        lng: typeof addr.lng === 'number' ? addr.lng : null,
+        instructions: safeStr(addr.instructions ?? body.delivery_notes ?? ''),
+      };
+    }
+    const { error: delErr } = await service.from('deliveries').insert(deliveryRec);
+    if (delErr) console.error('Delivery record creation failed:', delErr.message);
   }
 
   return jsonResponse({ order_id: data?.order_id, order_number: data?.order_number }, 201);
@@ -581,7 +592,7 @@ async function getMyOrders(req: Request) {
 
   if (error) return errorResponse(error.message);
   return jsonResponse({
-    items: data ?? [],
+    orders: data ?? [],
     total: count ?? 0,
     page,
     page_size: pageSize,
@@ -754,4 +765,157 @@ async function getPublicRooms(req: Request) {
 
   if (error) return errorResponse(error.message, 500);
   return jsonResponse({ rooms: data ?? [] });
+}
+
+// ─── POST /customer/book-room ─────────────────────────────────────────────────
+// Books a room: creates an order, a guest_bookings record, and sets room → reserved.
+
+async function bookRoom(req: Request) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+
+  const body = await req.json().catch(() => null);
+  if (!body) return errorResponse('Invalid JSON');
+
+  const { branch_id, room_id, customer_name, customer_phone } = body;
+  if (!branch_id || !room_id || !customer_name || !customer_phone) {
+    return errorResponse('branch_id, room_id, customer_name, and customer_phone are required');
+  }
+
+  const service = createServiceClient();
+
+  // Fetch branch + room
+  const [{ data: branch }, { data: room }] = await Promise.all([
+    service.from('branches').select('company_id').eq('id', branch_id).single(),
+    service
+      .from('rooms')
+      .select('id, room_number, category, cost_amount, cost_duration, max_occupants, status, company_id')
+      .eq('id', room_id)
+      .single(),
+  ]);
+
+  if (!branch) return errorResponse('Branch not found', 404);
+  if (!room) return errorResponse('Room not found', 404);
+  if (room.status !== 'available') {
+    return errorResponse(`Room is not available (status: ${room.status})`, 409);
+  }
+
+  // Upsert customer
+  let customerId: string | null = null;
+  const { data: existing } = await service
+    .from('customers')
+    .select('id')
+    .eq('company_id', branch.company_id)
+    .eq('phone', customer_phone)
+    .maybeSingle();
+
+  if (existing) {
+    customerId = existing.id;
+  } else {
+    const { data: newCust } = await service
+      .from('customers')
+      .insert({
+        company_id: branch.company_id,
+        name: sanitizeString(customer_name),
+        phone: customer_phone,
+        email: body.customer_email ?? null,
+      })
+      .select('id').single();
+    customerId = newCust?.id ?? null;
+  }
+
+  // Build notes from booking details
+  const checkIn = body.check_in ?? null;
+  const checkOut = body.check_out ?? null;
+  const durationCount = Number(body.duration_count ?? 1);
+  const durationUnit = safeStr(body.duration_unit ?? 'night');
+  const numOccupants = Number(body.num_occupants ?? 1);
+  const notes = body.notes ? safeStr(body.notes, MAX_TEXT) : null;
+
+  const noteParts = [
+    `Room ${room.room_number} (${room.category})`,
+    checkIn ? `Check-in: ${checkIn}` : null,
+    checkOut ? `Check-out: ${checkOut}` : null,
+    !checkIn ? `Duration: ${durationCount} ${durationUnit}(s)` : null,
+    `Guests: ${numOccupants}`,
+    notes ? `Notes: ${notes}` : null,
+  ].filter(Boolean);
+
+  // Create order via RPC
+  const { data: orderData, error: rpcErr } = await service.rpc('create_order_with_deduction', {
+    p_company_id: branch.company_id,
+    p_branch_id: branch_id,
+    p_order_type: 'accommodation',
+    p_table_id: null,
+    p_customer_id: customerId,
+    p_customer_name: sanitizeString(customer_name),
+    p_customer_phone: customer_phone,
+    p_customer_email: body.customer_email ?? null,
+    p_customer_address: null,
+    p_notes: noteParts.join(' | '),
+    p_source: 'online',
+    p_shift_id: null,
+    p_created_by: null,
+    p_created_by_name: 'Online Booking',
+    p_tax_rate: 0,
+    p_discount_amount: 0,
+    p_discount_reason: null,
+    p_tip_amount: 0,
+    p_delivery_fee: 0,
+    p_loyalty_points_used: 0,
+    p_loyalty_discount: 0,
+    p_items: [{
+      menu_item_id: null,
+      menu_item_name: `Room Booking — ${room.category.charAt(0).toUpperCase() + room.category.slice(1)} (${room.room_number})`,
+      quantity: durationCount,
+      unit_price: room.cost_amount,
+      modifiers: [],
+      modifiers_total: 0,
+      special_instructions: null,
+    }],
+  });
+
+  if (rpcErr) return errorResponse(rpcErr.message, 400);
+
+  const orderId = orderData?.order_id;
+  const orderNumber = orderData?.order_number;
+
+  // Mark order as awaiting_approval so staff reviews it
+  await service
+    .from('orders')
+    .update({ status: 'awaiting_approval' as any, linked_room_id: room_id, linked_room_number: room.room_number })
+    .eq('id', orderId);
+
+  // Update room status → reserved
+  await service.from('rooms').update({ status: 'reserved' }).eq('id', room_id);
+
+  // Create guest_bookings record
+  const { data: booking, error: bookingErr } = await service
+    .from('guest_bookings')
+    .insert({
+      company_id: branch.company_id,
+      branch_id,
+      room_id,
+      room_number: room.room_number,
+      order_id: orderId,
+      order_number: orderNumber,
+      customer_name: sanitizeString(customer_name),
+      num_occupants: numOccupants,
+      scheduled_check_in: checkIn,
+      scheduled_check_out: checkOut,
+      duration_count: durationCount,
+      duration_unit: durationUnit,
+      notes,
+      status: 'pending_checkin',
+    })
+    .select('id')
+    .single();
+
+  if (bookingErr) console.error('guest_bookings insert failed:', bookingErr.message);
+
+  return jsonResponse({
+    order_id: orderId,
+    order_number: orderNumber,
+    booking_id: booking?.id ?? null,
+    message: 'Room reserved! Your booking reference is ready. Staff will confirm shortly.',
+  }, 201);
 }

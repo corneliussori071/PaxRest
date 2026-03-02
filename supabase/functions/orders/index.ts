@@ -149,6 +149,9 @@ async function listOrders(req: Request, supabase: any, auth: AuthContext) {
   const dateTo = url.searchParams.get('date_to');
   if (dateTo) query = query.lte('created_at', dateTo);
 
+  const source = url.searchParams.get('source');
+  if (source) query = query.eq('source', source);
+
   const ascending = sortDirection === 'ASC';
   query = applyPagination(query, page, pageSize, sortColumn, ascending);
 

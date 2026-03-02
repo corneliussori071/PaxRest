@@ -15,6 +15,7 @@ export default function OrdersPage() {
   const { activeBranchId, company, activeBranch, isGlobalStaff, branches } = useAuth();
   const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
   const [statusFilter, setStatusFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -27,10 +28,15 @@ export default function OrdersPage() {
   // The branchId to send in API calls
   const effectiveBranchId = isGlobalStaff ? (branchFilter ?? '__all__') : (activeBranchId ?? '');
 
+  const paginatedParams = {
+    ...(statusFilter ? { status: statusFilter } : {}),
+    ...(sourceFilter ? { source: sourceFilter } : {}),
+  };
+
   const {
     items: orders, total, loading, page, pageSize, sortBy, sortDir,
     setPage, setPageSize, onSortChange, refetch,
-  } = usePaginated<any>('orders', 'list', statusFilter ? { status: statusFilter } : undefined);
+  } = usePaginated<any>('orders', 'list', Object.keys(paginatedParams).length ? paginatedParams : undefined);
 
   // Real-time order updates
   useRealtime('orders', activeBranchId ? { column: 'branch_id', value: activeBranchId } : undefined, () => {
@@ -100,7 +106,7 @@ export default function OrdersPage() {
       )}
 
       {/* Status filter chips */}
-      <Box sx={{ mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+      <Box sx={{ mb: 1.5, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         {statuses.map((s) => (
           <Chip
             key={s || 'all'}
@@ -111,6 +117,32 @@ export default function OrdersPage() {
             size="small"
           />
         ))}
+      </Box>
+
+      {/* Source filter: Online orders toggle */}
+      <Box sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>Source:</Typography>
+        <Chip
+          label="All Sources"
+          color={sourceFilter === '' ? 'secondary' : 'default'}
+          variant={sourceFilter === '' ? 'filled' : 'outlined'}
+          onClick={() => setSourceFilter('')}
+          size="small"
+        />
+        <Chip
+          label="🌐 Online Orders"
+          color={sourceFilter === 'online' ? 'secondary' : 'default'}
+          variant={sourceFilter === 'online' ? 'filled' : 'outlined'}
+          onClick={() => setSourceFilter(sourceFilter === 'online' ? '' : 'online')}
+          size="small"
+        />
+        <Chip
+          label="🏪 POS Orders"
+          color={sourceFilter === 'pos' ? 'secondary' : 'default'}
+          variant={sourceFilter === 'pos' ? 'filled' : 'outlined'}
+          onClick={() => setSourceFilter(sourceFilter === 'pos' ? '' : 'pos')}
+          size="small"
+        />
       </Box>
 
       <DataTable
