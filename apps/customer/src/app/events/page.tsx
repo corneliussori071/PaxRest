@@ -197,6 +197,30 @@ export default function EventsPage() {
   );
 }
 
+// ── Duration helpers (ported from POS accommodation logic) ───────────────────
+function calcDuration(ciStr: string, coStr: string, unit: string): number {
+  if (!ciStr || !coStr) return 0;
+  const ci = new Date(ciStr).getTime();
+  const co = new Date(coStr).getTime();
+  if (isNaN(ci) || isNaN(co) || co <= ci) return 0;
+  const diffMs = co - ci;
+  if (unit === 'hour') return Math.max(1, Math.ceil(diffMs / 3_600_000));
+  if (unit === 'day')  return Math.max(1, Math.ceil(diffMs / 86_400_000));
+  // night: use calendar-day midnight boundaries
+  const ciMid = new Date(new Date(ciStr).toDateString()).getTime();
+  const coMid = new Date(new Date(coStr).toDateString()).getTime();
+  return Math.max(1, Math.round((coMid - ciMid) / 86_400_000));
+}
+
+function addDurationToDate(baseIso: string, count: number, unit: string): string {
+  if (!baseIso || count < 1) return '';
+  const d = new Date(baseIso);
+  if (isNaN(d.getTime())) return '';
+  if (unit === 'hour') d.setHours(d.getHours() + count);
+  else d.setDate(d.getDate() + count);
+  return d.toISOString().slice(0, 16);
+}
+
 interface BookingDialogProps {
   room: Room | null;
   branchId: string;
@@ -210,19 +234,56 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
   const [email, setEmail] = useState('');
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
-  const [durationCount, setDurationCount] = useState('1');
-  const [durationUnit, setDurationUnit] = useState('night');
-  const [numGuests, setNumGuests] = useState('1');
+  const [durationCount, setDurationCount] = useState(1);
+  const [durationUnit, setDurationUnit] = useState(room?.cost_duration ?? 'night');
+  const [numGuests, setNumGuests] = useState(1);
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Sync durationUnit to room's cost_duration whenever room changes
+  React.useEffect(() => {
+    setDurationUnit(room?.cost_duration ?? 'night');
+  }, [room?.id]);
+
   const maxGuests = room?.max_occupants ?? 100;
+
+  // Auto-calculate duration from check-in + check-out dates
+  const autoDuration = calcDuration(checkIn, checkOut, durationUnit);
+  const effectiveDuration = autoDuration > 0 ? autoDuration : durationCount;
+  const totalCost = Number(room?.cost_amount ?? 0) * effectiveDuration;
+  const unitLabel = durationUnit === 'hour' ? 'hour' : durationUnit === 'day' ? 'day' : 'night';
+
+  const handleCheckInChange = (val: string) => {
+    setCheckIn(val);
+    // Clear checkOut so auto-calc triggers fresh
+    setCheckOut('');
+  };
+
+  const handleCheckOutChange = (val: string) => {
+    setCheckOut(val);
+  };
+
+  const handleDurationCountChange = (val: number) => {
+    const count = Math.max(1, val);
+    setDurationCount(count);
+    // If check-in is set but no check-out, auto-set check-out
+    if (checkIn && !checkOut) {
+      setCheckOut(addDurationToDate(checkIn, count, durationUnit));
+    }
+  };
+
+  const handleDurationUnitChange = (val: string) => {
+    setDurationUnit(val);
+    if (checkIn && durationCount > 0 && !checkOut) {
+      setCheckOut(addDurationToDate(checkIn, durationCount, val));
+    }
+  };
 
   const reset = () => {
     setName(''); setPhone(''); setEmail('');
     setCheckIn(''); setCheckOut('');
-    setDurationCount('1'); setDurationUnit('night');
-    setNumGuests('1'); setNotes('');
+    setDurationCount(1); setDurationUnit(room?.cost_duration ?? 'night');
+    setNumGuests(1); setNotes('');
   };
 
   const handleClose = () => { reset(); onClose(); };
@@ -232,9 +293,12 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
       toast.error('Please provide your name and phone number.');
       return;
     }
-    const guests = parseInt(numGuests, 10);
-    if (isNaN(guests) || guests < 1 || guests > maxGuests) {
+    if (numGuests < 1 || numGuests > maxGuests) {
       toast.error(`Number of guests must be between 1 and ${maxGuests}.`);
+      return;
+    }
+    if (effectiveDuration < 1) {
+      toast.error(`Duration must be at least 1 ${unitLabel}.`);
       return;
     }
     setSubmitting(true);
@@ -249,9 +313,9 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
           customer_email: email.trim() || null,
           check_in: checkIn || null,
           check_out: checkOut || null,
-          duration_count: parseInt(durationCount, 10) || 1,
+          duration_count: effectiveDuration,
           duration_unit: durationUnit,
-          num_occupants: guests,
+          num_occupants: numGuests,
           notes: notes.trim() || null,
         }),
       });
@@ -266,7 +330,7 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
     }
   };
 
-  const canSubmit = name.trim() && phone.trim() && !submitting;
+  const canSubmit = !!(name.trim() && phone.trim() && effectiveDuration >= 1 && !submitting);
 
   return (
     <Dialog open={!!room} onClose={handleClose} maxWidth="xs" fullWidth>
@@ -275,7 +339,7 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
           <Typography variant="h6" sx={{ fontFamily: '"Playfair Display", serif', color: '#1C2B4A' }}>Book This Space</Typography>
           {room && (
             <Typography variant="caption" color="text.secondary">
-              {room.category} Room {room.room_number} Â· up to {room.max_occupants} guests Â· {formatCurrency(room.cost_amount)}/{room.cost_duration}
+              {room.category} Room {room.room_number} · up to {room.max_occupants} guests · {formatCurrency(room.cost_amount)}/{room.cost_duration}
             </Typography>
           )}
         </Box>
@@ -289,36 +353,40 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
           </Stack>
           <TextField label="Email (optional)" size="small" fullWidth type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
 
+          {/* Check-in / check-out — auto-calculates duration + cost */}
           <Stack direction="row" spacing={1.5}>
             <TextField
-              label="Check-in Date"
+              label="Check-in"
               type="datetime-local"
               size="small"
               fullWidth
               value={checkIn}
-              onChange={(e) => setCheckIn(e.target.value)}
+              onChange={(e) => handleCheckInChange(e.target.value)}
               slotProps={{ inputLabel: { shrink: true } }}
             />
             <TextField
-              label="Check-out Date"
+              label="Check-out"
               type="datetime-local"
               size="small"
               fullWidth
               value={checkOut}
-              onChange={(e) => setCheckOut(e.target.value)}
+              onChange={(e) => handleCheckOutChange(e.target.value)}
               slotProps={{ inputLabel: { shrink: true } }}
             />
           </Stack>
 
-          <Stack direction="row" spacing={1.5}>
+          {/* Duration row — manual fallback; syncs with dates */}
+          <Stack direction="row" spacing={1.5} alignItems="center">
             <TextField
               label="Duration"
               type="number"
               size="small"
               sx={{ flex: 1 }}
-              value={durationCount}
-              onChange={(e) => setDurationCount(e.target.value)}
+              value={autoDuration > 0 ? autoDuration : durationCount}
+              disabled={autoDuration > 0}
+              onChange={(e) => handleDurationCountChange(parseInt(e.target.value, 10))}
               slotProps={{ htmlInput: { min: 1 } }}
+              helperText={autoDuration > 0 ? 'Auto from dates' : 'Manual entry'}
             />
             <TextField
               select
@@ -326,7 +394,7 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
               size="small"
               sx={{ flex: 1 }}
               value={durationUnit}
-              onChange={(e) => setDurationUnit(e.target.value)}
+              onChange={(e) => handleDurationUnitChange(e.target.value)}
             >
               <MenuItem value="hour">Hour(s)</MenuItem>
               <MenuItem value="day">Day(s)</MenuItem>
@@ -338,10 +406,20 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
               size="small"
               sx={{ flex: 1 }}
               value={numGuests}
-              onChange={(e) => setNumGuests(e.target.value)}
+              onChange={(e) => setNumGuests(Math.max(1, Math.min(maxGuests, parseInt(e.target.value, 10) || 1)))}
               slotProps={{ htmlInput: { min: 1, max: maxGuests } }}
             />
           </Stack>
+
+          {/* Live cost summary */}
+          <Box sx={{ p: 1.5, bgcolor: '#1C2B4A', borderRadius: 1 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ color: '#C9973A' }}>
+              {formatCurrency(totalCost)}
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)' }}>
+              {effectiveDuration} {unitLabel}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(room?.cost_amount ?? 0)} per {room?.cost_duration ?? unitLabel}
+            </Typography>
+          </Box>
 
           <TextField
             label="Additional notes"
@@ -364,7 +442,7 @@ function BookingDialog({ room, branchId, onClose, onBooked }: BookingDialogProps
           startIcon={submitting ? <CircularProgress size={14} color="inherit" /> : <EventAvailableIcon />}
           sx={{ bgcolor: '#1C2B4A', '&:hover': { bgcolor: '#253559' } }}
         >
-          {submitting ? 'Booking...' : 'Confirm Booking'}
+          {submitting ? 'Booking...' : `Confirm · ${formatCurrency(totalCost)}`}
         </Button>
       </DialogActions>
     </Dialog>
