@@ -829,28 +829,38 @@ async function bookRoom(req: Request) {
     return errorResponse(`Room is not available (status: ${room.status})`, 409);
   }
 
-  // Upsert customer
+  // Resolve customer — JWT account takes priority so orders appear in "My Orders"
   let customerId: string | null = null;
-  const { data: existing } = await service
-    .from('customers')
-    .select('id')
-    .eq('company_id', branch.company_id)
-    .eq('phone', customer_phone)
-    .maybeSingle();
-
-  if (existing) {
-    customerId = existing.id;
+  const jwtCtx = await resolveCustomer(req);
+  if (jwtCtx) {
+    customerId = jwtCtx.id;
+    // Optionally update email if freshly provided
+    if (body.customer_email) {
+      await service.from('customers').update({ email: body.customer_email }).eq('id', customerId);
+    }
   } else {
-    const { data: newCust } = await service
+    // Fallback: find or create by phone
+    const { data: existing } = await service
       .from('customers')
-      .insert({
-        company_id: branch.company_id,
-        name: sanitizeString(customer_name),
-        phone: customer_phone,
-        email: body.customer_email ?? null,
-      })
-      .select('id').single();
-    customerId = newCust?.id ?? null;
+      .select('id')
+      .eq('company_id', branch.company_id)
+      .eq('phone', customer_phone)
+      .maybeSingle();
+
+    if (existing) {
+      customerId = existing.id;
+    } else {
+      const { data: newCust } = await service
+        .from('customers')
+        .insert({
+          company_id: branch.company_id,
+          name: sanitizeString(customer_name),
+          phone: customer_phone,
+          email: body.customer_email ?? null,
+        })
+        .select('id').single();
+      customerId = newCust?.id ?? null;
+    }
   }
 
   // Build notes from booking details
