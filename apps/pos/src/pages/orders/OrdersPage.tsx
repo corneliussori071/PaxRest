@@ -8,7 +8,6 @@ import RestaurantIcon from '@mui/icons-material/Restaurant';
 import { useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import BranchSelector from '@/components/BranchSelector';
-import PaymentDialog from '@/components/PaymentDialog';
 import { OrderDetailDialog, OrdersGrid } from '@/components/OrderComponents';
 
 export default function OrdersPage() {
@@ -24,7 +23,6 @@ export default function OrdersPage() {
   const [internalSub, setInternalSub] = useState(0);
 
   const [detailOrder, setDetailOrder] = useState<any | null>(null);
-  const [payOrder, setPayOrder] = useState<any | null>(null);
 
   const [refreshKey, setRefreshKey] = useState(0);
   const doRefresh = () => setRefreshKey((k) => k + 1);
@@ -76,8 +74,6 @@ export default function OrdersPage() {
               currency={currency}
               effectiveBranchId={effectiveBranchId}
               onViewDetail={setDetailOrder}
-              onPayment={setPayOrder}
-              showPayBtn
             />
           )}
 
@@ -89,8 +85,6 @@ export default function OrdersPage() {
               currency={currency}
               effectiveBranchId={effectiveBranchId}
               onViewDetail={setDetailOrder}
-              onPayment={setPayOrder}
-              showPayBtn
             />
           )}
 
@@ -108,8 +102,6 @@ export default function OrdersPage() {
                 currency={currency}
                 effectiveBranchId={effectiveBranchId}
                 onViewDetail={setDetailOrder}
-                onPayment={setPayOrder}
-                showPayBtn
               />
             </Box>
           )}
@@ -128,8 +120,6 @@ export default function OrdersPage() {
                 currency={currency}
                 effectiveBranchId={effectiveBranchId}
                 onViewDetail={setDetailOrder}
-                onPayment={setPayOrder}
-                showPayBtn
               />
             </Box>
           )}
@@ -150,8 +140,6 @@ export default function OrdersPage() {
             currency={currency}
             effectiveBranchId={effectiveBranchId}
             onViewDetail={setDetailOrder}
-            onPayment={setPayOrder}
-            showPayBtn
           />
         </Box>
       )}
@@ -162,16 +150,6 @@ export default function OrdersPage() {
         effectiveBranchId={effectiveBranchId}
         onClose={() => setDetailOrder(null)}
         onStatusChange={doRefresh}
-        onPaymentOpen={(o) => { setPayOrder(o); setDetailOrder(null); }}
-      />
-
-      <PaymentDialog
-        open={!!payOrder}
-        order={payOrder}
-        currency={currency}
-        effectiveBranchId={effectiveBranchId}
-        onClose={() => setPayOrder(null)}
-        onPaid={doRefresh}
       />
     </Box>
   );
