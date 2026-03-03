@@ -257,11 +257,18 @@ export interface OrderCardProps {
   onPayment?: (o: any) => void;
   onQuickStatus?: (o: any, status: string) => void;
   showPayBtn?: boolean;
+  showServedForPending?: boolean;
+  servedTargetStatus?: string;
+  showSource?: boolean;
 }
 
-export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickStatus, showPayBtn }: OrderCardProps) {
+export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickStatus, showPayBtn, showServedForPending, servedTargetStatus, showSource }: OrderCardProps) {
   const items: any[] = order.order_items ?? order.items ?? [];
   const itemCount = items.length;
+  const servedTarget = servedTargetStatus ?? 'awaiting_payment';
+  const showServed = showServedForPending
+    ? ['pending', 'confirmed', 'preparing', 'ready'].includes(order.status)
+    : order.status === 'ready';
 
   return (
     <Card
@@ -288,6 +295,16 @@ export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickSta
             sx={{ bgcolor: STATUS_COLORS[order.status] ?? '#6b7280', color: '#fff', fontSize: 10, height: 20 }}
           />
         </Box>
+
+        {showSource && (
+          <Chip
+            size="small"
+            label={order.source === 'online' ? '🌐 Online' : '🏪 Internal'}
+            variant="outlined"
+            color={order.source === 'online' ? 'info' : 'default'}
+            sx={{ fontSize: 10, height: 18, mt: 0.5 }}
+          />
+        )}
 
         {itemCount > 0 && (
           <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
@@ -316,8 +333,8 @@ export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickSta
             Approve
           </Button>
         )}
-        {order.status === 'ready' && order.order_type !== 'delivery' && onQuickStatus && (
-          <Button size="small" variant="contained" color="success" onClick={() => onQuickStatus(order, 'awaiting_payment')}>
+        {showServed && order.order_type !== 'delivery' && onQuickStatus && (
+          <Button size="small" variant="contained" color="success" onClick={() => onQuickStatus(order, servedTarget)}>
             Served?
           </Button>
         )}
@@ -344,6 +361,9 @@ export interface OrdersGridProps {
   defaultStatus?: string;
   statusOptions?: string[];
   showPayBtn?: boolean;
+  showServedForPending?: boolean;
+  servedTargetStatus?: string;
+  showSource?: boolean;
 }
 
 export function OrdersGrid({
@@ -358,6 +378,9 @@ export function OrdersGrid({
   defaultStatus = '',
   statusOptions,
   showPayBtn,
+  showServedForPending,
+  servedTargetStatus,
+  showSource,
 }: OrdersGridProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(defaultStatus);
@@ -445,6 +468,9 @@ export function OrdersGrid({
                 onPayment={onPayment}
                 onQuickStatus={handleStatusChange}
                 showPayBtn={showPayBtn}
+                showServedForPending={showServedForPending}
+                servedTargetStatus={servedTargetStatus}
+                showSource={showSource}
               />
             ))}
           </Box>

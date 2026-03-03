@@ -178,6 +178,8 @@ export interface AvailableMeal {
   menu_item_id: string;
   menu_item_name?: string;
   quantity_available: number;
+  quantity_label?: string;
+  availability_status?: string;
   menu_items?: {
     name: string;
     base_price: number;
@@ -203,7 +205,7 @@ export const useAvailableMealsStore = create<AvailableMealsState & AvailableMeal
   fetchMeals: async (branchId: string) => {
     set({ loading: true });
     try {
-      const data = await api<{ meals: AvailableMeal[] }>('kitchen', 'available-meals', { params: {}, branchId });
+      const data = await api<{ meals: AvailableMeal[] }>('kitchen', 'available-meals', { params: { exclude_status: 'unavailable' }, branchId });
       set({ meals: data.meals ?? [], loading: false });
     } catch (err) {
       console.error('Failed to load available meals:', err);

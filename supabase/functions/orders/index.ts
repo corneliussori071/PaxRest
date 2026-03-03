@@ -152,6 +152,12 @@ async function listOrders(req: Request, supabase: any, auth: AuthContext) {
   const source = url.searchParams.get('source');
   if (source) query = query.eq('source', source);
 
+  const excludeSource = url.searchParams.get('exclude_source');
+  if (excludeSource) query = query.neq('source', excludeSource);
+
+  const department = url.searchParams.get('department');
+  if (department) query = query.eq('department', department);
+
   const search = url.searchParams.get('search');
   if (search) {
     query = query.or(`order_number.ilike.%${search}%,customer_name.ilike.%${search}%`);
