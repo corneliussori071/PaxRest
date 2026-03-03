@@ -293,7 +293,8 @@ async function addPayment(req: Request, supabase: any, auth: AuthContext) {
   if (payments && order) {
     const totalPaid = payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
     if (totalPaid >= order.total && !order.is_paid) {
-      await supabase
+      const service = createServiceClient();
+      await service
         .from('orders')
         .update({
           is_paid: true,

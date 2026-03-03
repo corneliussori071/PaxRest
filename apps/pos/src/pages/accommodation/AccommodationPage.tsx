@@ -425,7 +425,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
               fontWeight: itemSubTab === 'meals' ? 700 : 400,
             }}
           >
-            <Badge badgeContent={meals.reduce((s, m) => s + m.quantity_available, 0)} color="info" max={99}>
+            <Badge badgeContent={meals.length} color="info" max={99}>
               Meals
             </Badge>
           </Button>
@@ -555,7 +555,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                       <Typography variant="body2" color="primary.main" fontWeight={600}>
                         {formatCurrency(meal.menu_items?.base_price ?? 0, currency)}
                       </Typography>
-                      <Chip size="small" label={notAvailable ? '0 avail' : `${meal.quantity_available} avail`} color={notAvailable ? 'error' : 'success'} />
+                      <Chip size="small" label={notAvailable ? '0 avail' : (meal.quantity_label || `${meal.quantity_available} avail`)} color={notAvailable ? 'error' : 'success'} />
                     </Stack>
                     {/* Availability status badge */}
                     {!notAvailable && meal.availability_status && meal.availability_status !== 'full' && (
