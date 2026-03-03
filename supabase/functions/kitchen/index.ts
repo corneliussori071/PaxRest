@@ -125,7 +125,7 @@ serve(async (req) => {
 
 async function getKitchenOrders(req: Request, supabase: any, auth: AuthContext, branchId: string) {
   const url = new URL(req.url);
-  const station = url.searchParams.get('station') ?? 'kitchen';
+  const station = url.searchParams.get('station') || '';  // empty = all stations
   const statusFilter = url.searchParams.get('status'); // 'active' or 'completed'
   const { page, pageSize } = validatePagination({
     page: Number(url.searchParams.get('page')),
@@ -168,7 +168,7 @@ async function getKitchenOrders(req: Request, supabase: any, auth: AuthContext, 
       created_at: order.created_at,
       elapsed_minutes: Math.round((now.getTime() - new Date(order.created_at).getTime()) / 60000),
       items: order.order_items
-        .filter((item: any) => item.station === station && item.status !== 'cancelled')
+        .filter((item: any) => (!station || item.station === station) && item.status !== 'cancelled')
         .map((item: any) => ({
           ...item,
           modifiers: item.modifiers ?? [],

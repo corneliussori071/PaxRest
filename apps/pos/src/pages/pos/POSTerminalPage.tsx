@@ -369,6 +369,13 @@ function POSTerminalContent() {
       return;
     }
 
+    // Check meal availability from kitchen
+    const availQty = mealCountMap.get(item.id) ?? 0;
+    if (availQty <= 0) {
+      toast.error(`${item.name} is not available. Check Kitchen Available Meals.`);
+      return;
+    }
+
     // If item has ingredients or extras, open customization dialog
     if ((item.ingredients?.length ?? 0) > 0 || (item.extras?.length ?? 0) > 0) {
       setCustomizeItem(item);
@@ -572,15 +579,17 @@ function POSTerminalContent() {
                   const mealCount = mealCountMap.get(item.id) ?? 0;
                   const mealLabel = mealLabelMap.get(item.id);
                   const isSoldOut = avail === 'sold_out';
+                  const notAvailable = !isSoldOut && mealCount <= 0;
+                  const isDisabled = isSoldOut || notAvailable;
 
                   return (
                     <Grid size={{ xs: 6, sm: 4, md: 3 }} key={item.id}>
                       <Paper
-                        onClick={() => !isSoldOut && handleAddItem(item as MenuItemWithDetails)}
+                        onClick={() => !isDisabled && handleAddItem(item as MenuItemWithDetails)}
                         sx={{
-                          p: 1.5, cursor: isSoldOut ? 'not-allowed' : 'pointer', textAlign: 'center',
-                          opacity: isSoldOut ? 0.4 : 1,
-                          '&:hover': isSoldOut ? {} : { boxShadow: 3, borderColor: 'primary.main' },
+                          p: 1.5, cursor: isDisabled ? 'not-allowed' : 'pointer', textAlign: 'center',
+                          opacity: isDisabled ? 0.4 : 1,
+                          '&:hover': isDisabled ? {} : { boxShadow: 3, borderColor: 'primary.main' },
                           transition: 'all 0.15s',
                           border: '1px solid', borderColor: 'divider',
                           borderRadius: 2, position: 'relative',
@@ -590,8 +599,8 @@ function POSTerminalContent() {
                           <Chip label="SOLD OUT" color="error" size="small"
                             sx={{ position: 'absolute', top: 4, right: 4, fontSize: '0.65rem' }} />
                         )}
-                        {avail === 'limited' && (
-                          <Chip label="LIMITED" color="warning" size="small"
+                        {notAvailable && (
+                          <Chip label="NOT AVAILABLE" color="default" size="small"
                             sx={{ position: 'absolute', top: 4, right: 4, fontSize: '0.65rem' }} />
                         )}
                         {/* Available meal badge — shows quantity_label (e.g. "2 pots") */}

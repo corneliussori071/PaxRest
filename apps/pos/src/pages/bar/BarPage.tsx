@@ -225,6 +225,15 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   };
 
   const addToCart = (item: BarCartItem) => {
+    // Check meal availability for menu items
+    if (item.source === 'menu') {
+      const mealAvail = meals.find((m) => m.menu_item_id === item.id);
+      if (!mealAvail || mealAvail.quantity_available <= 0) {
+        toast.error(`${item.name} is not available. Check Kitchen Available Meals.`);
+        return;
+      }
+    }
+
     setCart((prev) => {
       const existing = prev.find((c) => c.id === item.id && c.source === item.source);
       if (existing) {
