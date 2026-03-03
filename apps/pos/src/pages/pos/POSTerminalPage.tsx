@@ -27,8 +27,8 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 
 import toast from 'react-hot-toast';
-import { formatCurrency, MEAL_AVAILABILITY_LABELS } from '@paxrest/shared-utils';
-import type { MealAvailability } from '@paxrest/shared-types';
+import { formatCurrency, MEAL_AVAILABILITY_LABELS, AVAILABLE_MEAL_STATUS_LABELS, AVAILABLE_MEAL_STATUS_COLORS } from '@paxrest/shared-utils';
+import type { MealAvailability, AvailableMealStatus } from '@paxrest/shared-types';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
 import { useRealtime, useApi } from '@/hooks';
@@ -351,9 +351,17 @@ function POSTerminalContent() {
   // Create maps of available meal info by menu_item_id
   const mealCountMap = new Map<string, number>();
   const mealLabelMap = new Map<string, string>();
+  const mealStatusMap = new Map<string, string>();
+  const STATUS_PRIORITY: Record<string, number> = { full: 0, half: 1, thirty_pct: 2, ten_pct: 3, unavailable: 4 };
   meals.forEach((m) => {
     mealCountMap.set(m.menu_item_id, (mealCountMap.get(m.menu_item_id) ?? 0) + m.quantity_available);
     if (m.quantity_label) mealLabelMap.set(m.menu_item_id, m.quantity_label);
+    // Keep best (highest) availability status across all preparations
+    const curStatus = mealStatusMap.get(m.menu_item_id);
+    const newStatus = m.availability_status ?? 'full';
+    if (!curStatus || (STATUS_PRIORITY[newStatus] ?? 99) < (STATUS_PRIORITY[curStatus] ?? 99)) {
+      mealStatusMap.set(m.menu_item_id, newStatus);
+    }
   });
 
   // Filter items
@@ -611,6 +619,18 @@ function POSTerminalContent() {
                             sx={{ position: 'absolute', top: 4, left: 4, fontSize: '0.65rem' }}
                           />
                         )}
+                        {/* Availability status badge (100%, 50%, etc.) */}
+                        {mealCount > 0 && !isSoldOut && (() => {
+                          const ms = mealStatusMap.get(item.id) as AvailableMealStatus | undefined;
+                          return ms && ms !== 'full' ? (
+                            <Chip
+                              label={AVAILABLE_MEAL_STATUS_LABELS[ms] ?? ms}
+                              color={(AVAILABLE_MEAL_STATUS_COLORS[ms] ?? 'default') as any}
+                              size="small"
+                              sx={{ position: 'absolute', bottom: 4, left: 4, fontSize: '0.6rem' }}
+                            />
+                          ) : null;
+                        })()}
 
                         {item.image_url && (
                           <Box component="img" src={item.image_url} alt={item.name}

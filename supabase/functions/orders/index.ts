@@ -295,7 +295,11 @@ async function addPayment(req: Request, supabase: any, auth: AuthContext) {
     if (totalPaid >= order.total && !order.is_paid) {
       await supabase
         .from('orders')
-        .update({ is_paid: true, paid_at: new Date().toISOString() })
+        .update({
+          is_paid: true,
+          paid_at: new Date().toISOString(),
+          status: 'completed',
+        })
         .eq('id', body.order_id);
     }
   }

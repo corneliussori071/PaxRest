@@ -510,41 +510,22 @@ async function makeAvailableFromAssignment(req: Request, supabase: any, auth: Au
     }
   }
 
-  // Upsert into available_meals
-  const { data: existing } = await service
+  // Always insert a new available_meals record so each preparation appears as
+  // its own card — even if the same menu item was prepared before.
+  await service
     .from('available_meals')
-    .select('id, quantity_available')
-    .eq('branch_id', branchId)
-    .eq('menu_item_id', assignment.menu_item_id)
-    .maybeSingle();
-
-  if (existing) {
-    await service
-      .from('available_meals')
-      .update({
-        quantity_available: existing.quantity_available + qty,
-        quantity_label: quantityLabel,
-        availability_status: 'full',
-        prepared_by: auth.userId,
-        prepared_by_name: auth.name ?? auth.email,
-      })
-      .eq('id', existing.id);
-  } else {
-    await service
-      .from('available_meals')
-      .insert({
-        company_id: auth.companyId,
-        branch_id: branchId,
-        menu_item_id: assignment.menu_item_id,
-        menu_item_name: assignment.menu_item_name,
-        quantity_available: qty,
-        quantity_label: quantityLabel,
-        availability_status: 'full',
-        prepared_by: auth.userId,
-        prepared_by_name: auth.name ?? auth.email,
-        station: assignment.station,
-      });
-  }
+    .insert({
+      company_id: auth.companyId,
+      branch_id: branchId,
+      menu_item_id: assignment.menu_item_id,
+      menu_item_name: assignment.menu_item_name,
+      quantity_available: qty,
+      quantity_label: quantityLabel,
+      availability_status: 'full',
+      prepared_by: auth.userId,
+      prepared_by_name: auth.name ?? auth.email,
+      station: assignment.station,
+    });
 
   // Mark assignment as "available" so it's no longer actionable
   await service

@@ -35,8 +35,8 @@ import BedroomParentIcon from '@mui/icons-material/BedroomParent';
 import TableRestaurantIcon from '@mui/icons-material/TableRestaurant';
 import PeopleIcon from '@mui/icons-material/People';
 import ExitToAppIcon from '@mui/icons-material/ExitToApp';
-import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_STATUS_COLORS } from '@paxrest/shared-utils';
-import type { IngredientRequestStatus, Permission } from '@paxrest/shared-types';
+import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_STATUS_COLORS, AVAILABLE_MEAL_STATUS_LABELS, AVAILABLE_MEAL_STATUS_COLORS } from '@paxrest/shared-utils';
+import type { IngredientRequestStatus, Permission, AvailableMealStatus } from '@paxrest/shared-types';
 import { useApi, usePaginated, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, supabase } from '@/lib/supabase';
@@ -557,6 +557,15 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                       </Typography>
                       <Chip size="small" label={notAvailable ? '0 avail' : `${meal.quantity_available} avail`} color={notAvailable ? 'error' : 'success'} />
                     </Stack>
+                    {/* Availability status badge */}
+                    {!notAvailable && meal.availability_status && meal.availability_status !== 'full' && (
+                      <Chip
+                        size="small"
+                        label={AVAILABLE_MEAL_STATUS_LABELS[meal.availability_status as AvailableMealStatus] ?? meal.availability_status}
+                        color={(AVAILABLE_MEAL_STATUS_COLORS[meal.availability_status as AvailableMealStatus] ?? 'default') as any}
+                        sx={{ mt: 0.5, fontSize: 10, width: '100%' }}
+                      />
+                    )}
                     <Box sx={{ mt: 0.5, display: 'flex', justifyContent: 'center' }}>
                       <Button
                         size="small" variant="outlined" startIcon={<VisibilityIcon />}
