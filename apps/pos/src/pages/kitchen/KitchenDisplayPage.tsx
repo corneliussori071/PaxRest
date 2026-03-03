@@ -34,7 +34,8 @@ import BlockIcon from '@mui/icons-material/Block';
 import CallReceivedIcon from '@mui/icons-material/CallReceived';
 import UndoIcon from '@mui/icons-material/Undo';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { KDSOrderCard, DataTable, type Column } from '@paxrest/ui';
+import { DataTable, type Column } from '@paxrest/ui';
+import { OrderDetailDialog, OrdersGrid } from '@/components/OrderComponents';
 import {
   formatCurrency,
   MEAL_AVAILABILITY_LABELS,
@@ -52,12 +53,6 @@ import { api } from '@/lib/supabase';
 import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
-const STATIONS = [
-  { id: '', label: 'All' },
-  { id: 'kitchen', label: 'Kitchen' },
-  { id: 'bar', label: 'Bar' },
-  { id: 'shisha', label: 'Shisha' },
-];
 
 export default function KitchenDisplayPage() {
   return <BranchGuard><KitchenDisplayContent /></BranchGuard>;
@@ -77,7 +72,7 @@ function KitchenDisplayContent() {
   const tabs = useMemo(() => {
     const all: { key: string; label: string; icon: React.ReactElement; component: React.ReactNode }[] = [];
     if (can('kitchen_orders'))
-      all.push({ key: 'orders', label: 'Pending Orders', icon: <KitchenIcon />, component: <PendingOrdersTab branchId={activeBranchId!} /> });
+      all.push({ key: 'orders', label: 'Pending Orders', icon: <KitchenIcon />, component: <PendingOrdersTab branchId={activeBranchId!} currency={currency} /> });
     if (can('kitchen_assignments'))
       all.push({ key: 'assignments', label: 'Assignments', icon: <PersonIcon />, component: <AssignmentsTab branchId={activeBranchId!} currency={currency} /> });
     if (can('kitchen_make_dish'))
@@ -119,109 +114,31 @@ function KitchenDisplayContent() {
 }
 
 /* ═══════════════════════════════════════════════════════
-   Tab 0 — Pending Orders (KDS cards)
+   Tab 0 — Pending Orders (consistent OrderCard UI)
+   Uses the same OrdersGrid + OrderDetailDialog as
+   POS Terminal, Bar, Accommodation, and Orders pages.
    ═══════════════════════════════════════════════════════ */
-function PendingOrdersTab({ branchId }: { branchId: string }) {
-  const [station, setStation] = useState('');
-  const [orders, setOrders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(0);
-
-  const fetchOrders = useCallback(async () => {
-    try {
-      const params: Record<string, string> = {
-        page: String(page + 1),
-        page_size: String(pageSize),
-      };
-      if (station) params.station = station;
-      const data = await api<{ orders: any[]; total: number }>('kitchen', 'orders', { params, branchId });
-      setOrders(data.orders ?? []);
-      setTotal(data.total ?? 0);
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
-  }, [station, branchId, page, pageSize]);
-
-  useEffect(() => { fetchOrders(); }, [fetchOrders]);
-  useEffect(() => {
-    const iv = setInterval(fetchOrders, 15_000);
-    return () => clearInterval(iv);
-  }, [fetchOrders]);
-
-  useRealtime('orders', branchId ? { column: 'branch_id', value: branchId } : undefined, () => fetchOrders());
-
-  const handleItemReady = async (orderId: string, itemId: string) => {
-    try {
-      await api('kitchen', 'update-item', { body: { order_item_id: itemId, status: 'ready' }, branchId });
-      toast.success('Item marked ready');
-      fetchOrders();
-    } catch (err: any) { toast.error(err.message); }
-  };
-
-  const handleBump = async (orderId: string) => {
-    try {
-      await api('kitchen', 'bump', { body: { order_id: orderId, station: station || 'kitchen' }, branchId });
-      toast.success('Order bumped');
-      fetchOrders();
-    } catch (err: any) { toast.error(err.message); }
-  };
-
-  const now = Date.now();
+function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const [detailOrder, setDetailOrder] = useState<any>(null);
 
   return (
     <Box>
-      <Box sx={{ mb: 2 }}>
-        <ToggleButtonGroup value={station} exclusive onChange={(_, v) => v !== null && setStation(v)} size="small">
-          {STATIONS.map((s) => <ToggleButton key={s.id} value={s.id}>{s.label}</ToggleButton>)}
-        </ToggleButtonGroup>
-      </Box>
-
-      {loading ? (
-        <Typography color="text.secondary">Loading orders…</Typography>
-      ) : orders.length === 0 ? (
-        <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-          No active orders for this station
-        </Typography>
-      ) : (
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-          {orders.map((order) => {
-            const elapsed = order.elapsed_minutes ?? Math.floor((now - new Date(order.created_at).getTime()) / 60_000);
-            return (
-              <KDSOrderCard
-                key={order.id}
-                orderNumber={order.order_number}
-                orderType={order.order_type}
-                tableName={order.table_name}
-                customerName={order.customer_name}
-                items={(order.items ?? []).map((i: any) => ({
-                  id: i.id,
-                  name: i.menu_item_name || i.name || 'Item',
-                  quantity: i.quantity,
-                  modifiers: (i.modifiers ?? []).map((m: any) => typeof m === 'string' ? m : m.name || '').filter(Boolean),
-                  removedIngredients: (i.removed_ingredients ?? []).map((ri: any) => typeof ri === 'string' ? ri : ri.name || '').filter(Boolean),
-                  selectedExtras: (i.selected_extras ?? []).map((ex: any) => typeof ex === 'string' ? ex : ex.name || '').filter(Boolean),
-                  notes: i.special_instructions || i.notes || '',
-                  status: i.status,
-                }))}
-                createdAt={order.created_at}
-                elapsedMinutes={elapsed}
-                onItemReady={(itemId) => handleItemReady(order.id, itemId)}
-                onBump={() => handleBump(order.id)}
-              />
-            );
-          })}
-        </Box>
-      )}
-
-      {total > 0 && (
-        <TablePagination
-          component="div" count={total} page={page} rowsPerPage={pageSize}
-          onPageChange={(_, p) => { setPage(p); setLoading(true); }}
-          onRowsPerPageChange={(e) => { setPageSize(+e.target.value); setPage(0); setLoading(true); }}
-          rowsPerPageOptions={[10, 25, 50]}
-        />
-      )}
+      <OrdersGrid
+        defaultStatus="pending"
+        statusOptions={['pending', 'confirmed', 'preparing', 'ready']}
+        currency={currency}
+        effectiveBranchId={branchId}
+        onViewDetail={setDetailOrder}
+        showServedForPending
+        servedTargetStatus="awaiting_payment"
+        showSource
+      />
+      <OrderDetailDialog
+        order={detailOrder}
+        currency={currency}
+        effectiveBranchId={branchId}
+        onClose={() => setDetailOrder(null)}
+      />
     </Box>
   );
 }
