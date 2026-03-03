@@ -322,7 +322,7 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
     quantity: it.quantity,
     unit_price: it.unit_price,
     item_total: it.unit_price * it.quantity,
-    station: 'bar' as const,
+    station: (it.source === 'menu' ? 'kitchen' : 'bar') as any,
     status: 'pending' as const,
     modifiers: it.ingredients ?? [],
     selected_extras: it.extras ?? [],

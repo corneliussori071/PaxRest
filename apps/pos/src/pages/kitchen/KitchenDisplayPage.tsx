@@ -195,13 +195,14 @@ function PendingOrdersTab({ branchId }: { branchId: string }) {
                 tableName={order.table_name}
                 customerName={order.customer_name}
                 items={(order.items ?? []).map((i: any) => ({
-                  id: i.id, name: i.name, quantity: i.quantity,
-                  modifiers: [
-                    ...(i.modifiers ?? []),
-                    ...(i.removed_ingredients?.length ? [`Remove: ${i.removed_ingredients.map((ri: any) => ri.name).join(', ')}`] : []),
-                    ...(i.selected_extras?.length ? [`Extras: ${i.selected_extras.map((ex: any) => ex.name).join(', ')}`] : []),
-                  ],
-                  notes: i.notes, status: i.status,
+                  id: i.id,
+                  name: i.menu_item_name || i.name || 'Item',
+                  quantity: i.quantity,
+                  modifiers: (i.modifiers ?? []).map((m: any) => typeof m === 'string' ? m : m.name || '').filter(Boolean),
+                  removedIngredients: (i.removed_ingredients ?? []).map((ri: any) => typeof ri === 'string' ? ri : ri.name || '').filter(Boolean),
+                  selectedExtras: (i.selected_extras ?? []).map((ex: any) => typeof ex === 'string' ? ex : ex.name || '').filter(Boolean),
+                  notes: i.special_instructions || i.notes || '',
+                  status: i.status,
                 }))}
                 createdAt={order.created_at}
                 elapsedMinutes={elapsed}

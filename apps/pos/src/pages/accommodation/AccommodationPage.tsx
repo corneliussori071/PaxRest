@@ -508,11 +508,20 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
             )
           ) : itemSubTab === 'meals' ? (
             <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-              {meals.filter((m) => m.quantity_available > 0).map((meal) => (
+              {meals.map((meal) => {
+                const notAvailable = meal.quantity_available <= 0;
+                return (
                 <Card
                   key={meal.id}
-                  sx={{ width: 180, cursor: 'pointer', '&:hover': { boxShadow: 4 }, transition: '0.15s' }}
-                  onClick={() => addToCart({
+                  sx={{
+                    width: 180,
+                    cursor: notAvailable ? 'not-allowed' : 'pointer',
+                    opacity: notAvailable ? 0.4 : 1,
+                    '&:hover': notAvailable ? {} : { boxShadow: 4 },
+                    transition: '0.15s',
+                    position: 'relative',
+                  }}
+                  onClick={() => !notAvailable && addToCart({
                     id: meal.menu_item_id,
                     name: meal.menu_item_name ?? meal.menu_items?.name ?? 'Meal',
                     unit_price: meal.menu_items?.base_price ?? 0,
@@ -532,6 +541,10 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   })}
                 >
                   <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                    {notAvailable && (
+                      <Chip label="NOT AVAILABLE" color="default" size="small"
+                        sx={{ position: 'absolute', top: 6, right: 6, fontWeight: 700, fontSize: 10 }} />
+                    )}
                     {meal.menu_items?.media_url && (
                       <Box sx={{ width: '100%', height: 60, borderRadius: 1, overflow: 'hidden', mb: 0.5 }}>
                         <img src={meal.menu_items.media_url} alt={meal.menu_item_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -542,7 +555,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                       <Typography variant="body2" color="primary.main" fontWeight={600}>
                         {formatCurrency(meal.menu_items?.base_price ?? 0, currency)}
                       </Typography>
-                      <Chip size="small" label={`${meal.quantity_available} avail`} color="success" />
+                      <Chip size="small" label={notAvailable ? '0 avail' : `${meal.quantity_available} avail`} color={notAvailable ? 'error' : 'success'} />
                     </Stack>
                     <Box sx={{ mt: 0.5, display: 'flex', justifyContent: 'center' }}>
                       <Button
@@ -555,8 +568,9 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                     </Box>
                   </CardContent>
                 </Card>
-              ))}
-              {meals.filter((m) => m.quantity_available > 0).length === 0 && (
+                );
+              })}
+              {meals.length === 0 && (
                 <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center', width: '100%' }}>
                   No available meals from kitchen
                 </Typography>
