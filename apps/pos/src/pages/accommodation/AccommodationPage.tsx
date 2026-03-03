@@ -31,6 +31,7 @@ import InventoryIcon from '@mui/icons-material/Inventory';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import LocalBarIcon from '@mui/icons-material/LocalBar';
+import SpaIcon from '@mui/icons-material/Spa';
 import BedroomParentIcon from '@mui/icons-material/BedroomParent';
 import TableRestaurantIcon from '@mui/icons-material/TableRestaurant';
 import PeopleIcon from '@mui/icons-material/People';
@@ -115,11 +116,12 @@ interface AccomCartItem {
   name: string;
   unit_price: number;
   quantity: number;
-  source: 'accom_store' | 'menu' | 'room' | 'bar_store';
+  source: 'accom_store' | 'menu' | 'room' | 'bar_store' | 'other_service';
   accom_store_item_id?: string;
   bar_store_item_id?: string;
   menu_item_id?: string;
   room_id?: string;
+  other_service_id?: string;
   max_qty?: number;
   ingredients?: CartIngredient[];
   extras?: CartExtra[];
@@ -133,7 +135,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
   const [cart, setCart] = useState<AccomCartItem[]>([]);
-  const [itemSubTab, setItemSubTab] = useState<'store' | 'meals' | 'rooms' | 'bar'>('store');
+  const [itemSubTab, setItemSubTab] = useState<'store' | 'meals' | 'rooms' | 'bar' | 'services'>('store');
 
   // Internal store items
   const [storeItems, setStoreItems] = useState<any[]>([]);
@@ -194,6 +196,24 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   }, [branchId]);
 
   useEffect(() => { fetchBarStore(); }, [fetchBarStore]);
+
+  // Other Services
+  const [otherServices, setOtherServices] = useState<any[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
+
+  const fetchOtherServices = useCallback(async () => {
+    setServicesLoading(true);
+    try {
+      const data = await api<{ services: any[]; total: number }>('other-services', 'list', {
+        params: { page: '1', page_size: '200', available_only: 'true' },
+        branchId,
+      });
+      setOtherServices(data.services ?? []);
+    } catch (err) { console.error(err); }
+    finally { setServicesLoading(false); }
+  }, [branchId]);
+
+  useEffect(() => { fetchOtherServices(); }, [fetchOtherServices]);
 
   // Fetch all rooms (all statuses; occupied displayed but not bookable)
   const fetchRooms = useCallback(async () => {
@@ -345,6 +365,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         bar_store_item_id: c.bar_store_item_id,
         menu_item_id: c.menu_item_id,
         room_id: c.room_id,
+        other_service_id: c.other_service_id ?? null,
         ingredients: c.ingredients ?? [],
         extras: c.extras ?? [],
         booking_details: c.booking_details,
@@ -455,6 +476,22 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           >
             <Badge badgeContent={barStoreItems.filter((i: any) => Number(i.quantity) > 0).length} color="warning" max={99}>
               Bar Items
+            </Badge>
+          </Button>
+          <Button
+            variant="text"
+            onClick={() => setItemSubTab('services')}
+            startIcon={<SpaIcon />}
+            sx={{
+              borderBottom: itemSubTab === 'services' ? '2px solid' : '2px solid transparent',
+              borderColor: itemSubTab === 'services' ? 'secondary.main' : 'transparent',
+              borderRadius: 0, px: 2, py: 0.75,
+              color: itemSubTab === 'services' ? 'secondary.main' : 'text.secondary',
+              fontWeight: itemSubTab === 'services' ? 700 : 400,
+            }}
+          >
+            <Badge badgeContent={otherServices.length} color="secondary" max={99}>
+              Services
             </Badge>
           </Button>
         </Stack>
@@ -719,6 +756,53 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                 )}
               </Box>
             )
+          ) : itemSubTab === 'services' ? (
+            // Other Services
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+              {servicesLoading ? <LinearProgress /> : otherServices.map((svc) => {
+                const DURATION_LABELS_SVC: Record<string, string> = {
+                  once: '', per_session: '/session', hourly: '/hr', daily: '/day', weekly: '/wk', monthly: '/mo',
+                };
+                return (
+                  <Card
+                    key={svc.id}
+                    sx={{ width: 200, cursor: 'pointer', '&:hover': { boxShadow: 4 }, transition: '0.15s' }}
+                    onClick={() => addToCart({
+                      id: svc.id,
+                      name: svc.name,
+                      unit_price: svc.charge_amount,
+                      quantity: 1,
+                      source: 'other_service',
+                      other_service_id: svc.id,
+                    })}
+                  >
+                    <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                      {svc.media_url && (
+                        <Box sx={{ width: '100%', height: 80, borderRadius: 1, overflow: 'hidden', mb: 0.5 }}>
+                          {svc.media_type === 'video' ? (
+                            <video src={svc.media_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted />
+                          ) : (
+                            <img src={svc.media_url} alt={svc.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          )}
+                        </Box>
+                      )}
+                      <Typography variant="body2" fontWeight={700} noWrap>{svc.name}</Typography>
+                      {svc.description && (
+                        <Typography variant="caption" color="text.secondary" noWrap>{svc.description}</Typography>
+                      )}
+                      <Typography variant="body2" color="secondary.main" fontWeight={600} sx={{ mt: 0.5 }}>
+                        {formatCurrency(svc.charge_amount, currency)}{DURATION_LABELS_SVC[svc.charge_duration] ?? ''}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+              {otherServices.length === 0 && !servicesLoading && (
+                <Alert severity="info" sx={{ mt: 2, width: '100%' }}>
+                  No services available. Create services from the Other Services page.
+                </Alert>
+              )}
+            </Box>
           ) : null}
         </Box>
       </Box>

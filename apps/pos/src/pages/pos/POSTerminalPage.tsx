@@ -17,6 +17,7 @@ import PaymentIcon from '@mui/icons-material/Payment';
 import CloseIcon from '@mui/icons-material/Close';
 import HotelIcon from '@mui/icons-material/Hotel';
 import LocalBarIcon from '@mui/icons-material/LocalBar';
+import SpaIcon from '@mui/icons-material/Spa';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import InventoryIcon from '@mui/icons-material/Inventory';
@@ -51,9 +52,10 @@ interface RoomBarCartItem {
   name: string;
   unit_price: number;
   quantity: number;
-  source: 'room' | 'bar_store';
+  source: 'room' | 'bar_store' | 'other_service';
   room_id?: string;
   bar_store_item_id?: string;
+  other_service_id?: string;
   max_qty?: number;
   booking_details?: {
     num_people: number;
@@ -73,7 +75,7 @@ function POSTerminalContent() {
   // ── Top-level tab: 0 = New Order, 1 = Manage Orders ──
   const [topTab, setTopTab] = useState(0);
 
-  // ── New Order sub-tab: 0 = Meals (menu), 1 = Rooms, 2 = Bar ──
+  // ── New Order sub-tab: 0 = Meals (menu), 1 = Rooms, 2 = Bar, 3 = Services ──
   const [newOrderSubTab, setNewOrderSubTab] = useState(0);
 
   const [activeCat, setActiveCat] = useState<string | null>(null);
@@ -100,6 +102,10 @@ function POSTerminalContent() {
   const [barCustomerName, setBarCustomerName] = useState('');
   const [barNotes, setBarNotes] = useState('');
   const [barSubmitting, setBarSubmitting] = useState(false);
+
+  // ── Services sub-tab state ──
+  const [otherServices, setOtherServices] = useState<any[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
 
   // Delivery assignment state
   const [deliveryZoneId, setDeliveryZoneId] = useState<string>('');
@@ -216,6 +222,22 @@ function POSTerminalContent() {
   }, [activeBranchId, barSearch]);
 
   useEffect(() => { fetchBarStore(); }, [fetchBarStore]);
+
+  // ── Services: fetch available other services ──
+  const fetchOtherServices = useCallback(async () => {
+    if (!activeBranchId) return;
+    setServicesLoading(true);
+    try {
+      const data = await api<{ services: any[]; total: number }>('other-services', 'list', {
+        params: { page: '1', page_size: '200', available_only: 'true' },
+        branchId: activeBranchId,
+      });
+      setOtherServices(data.services ?? []);
+    } catch (err) { console.error(err); }
+    finally { setServicesLoading(false); }
+  }, [activeBranchId]);
+
+  useEffect(() => { fetchOtherServices(); }, [fetchOtherServices]);
 
   // ── Room cart helpers ──
   const addToRoomCart = (item: RoomBarCartItem) => {
@@ -550,6 +572,12 @@ function POSTerminalContent() {
             label={<Badge badgeContent={barStoreItems.filter((i: any) => Number(i.quantity) > 0).length} color="warning" max={99}>Bar</Badge>}
             sx={{ fontWeight: newOrderSubTab === 2 ? 700 : 400 }}
           />
+          <Tab
+            icon={<SpaIcon sx={{ fontSize: 16 }} />}
+            iconPosition="start"
+            label={<Badge badgeContent={otherServices.length} color="secondary" max={99}>Services</Badge>}
+            sx={{ fontWeight: newOrderSubTab === 3 ? 700 : 400 }}
+          />
         </Tabs>
 
         {/* ─── Sub-tab 0: Meals (Menu) ─── */}
@@ -773,6 +801,61 @@ function POSTerminalContent() {
               )}
             </Box>
           </>
+        )}
+
+        {/* ─── Sub-tab 3: Services ─── */}
+        {newOrderSubTab === 3 && (
+          <Box sx={{ flex: 1, overflow: 'auto' }}>
+            {servicesLoading ? <LinearProgress /> : (
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                {otherServices.map((svc) => {
+                  const DURATION_LABELS: Record<string, string> = {
+                    once: '', per_session: '/session', hourly: '/hr', daily: '/day', weekly: '/wk', monthly: '/mo',
+                  };
+                  return (
+                    <Card
+                      key={svc.id}
+                      sx={{ width: 200, cursor: 'pointer', '&:hover': { boxShadow: 4 }, transition: '0.15s' }}
+                      onClick={() => addToBarCart({
+                        id: svc.id,
+                        name: svc.name,
+                        unit_price: svc.charge_amount,
+                        quantity: 1,
+                        source: 'other_service',
+                        other_service_id: svc.id,
+                      })}
+                    >
+                      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                        {svc.media_url && (
+                          <Box sx={{ width: '100%', height: 80, borderRadius: 1, overflow: 'hidden', mb: 0.5 }}>
+                            {svc.media_type === 'video' ? (
+                              <video src={svc.media_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted />
+                            ) : (
+                              <img src={svc.media_url} alt={svc.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            )}
+                          </Box>
+                        )}
+                        <Typography variant="body2" fontWeight={700} noWrap>{svc.name}</Typography>
+                        {svc.description && (
+                          <Typography variant="caption" color="text.secondary" noWrap>{svc.description}</Typography>
+                        )}
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5 }}>
+                          <Typography variant="body2" color="secondary.main" fontWeight={600}>
+                            {fmt(svc.charge_amount)}{DURATION_LABELS[svc.charge_duration] ?? ''}
+                          </Typography>
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+                {otherServices.length === 0 && !servicesLoading && (
+                  <Alert severity="info" sx={{ mt: 2, width: '100%' }}>
+                    No services available. Create services from the Other Services page.
+                  </Alert>
+                )}
+              </Box>
+            )}
+          </Box>
         )}
       </Box>
 
@@ -1111,6 +1194,71 @@ function POSTerminalContent() {
             onClick={handleBarSubmit}
           >
             {barSubmitting ? 'Placing…' : `Place Bar Order — ${fmt(barCartSubtotal)}`}
+          </Button>
+        </>)}
+
+        {/* ═══ Services Cart (sub-tab 3) ═══ */}
+        {newOrderSubTab === 3 && (<>
+          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>🧖 Services Cart</Typography>
+
+          <TextField
+            fullWidth size="small" label="Customer Name" placeholder="Customer name (optional)"
+            value={barCustomerName} onChange={(e) => setBarCustomerName(e.target.value)}
+            sx={{ mb: 1 }}
+          />
+          <TextField
+            fullWidth size="small" label="Notes" placeholder="Special requests…"
+            value={barNotes} onChange={(e) => setBarNotes(e.target.value)}
+            multiline maxRows={2} sx={{ mb: 1 }}
+          />
+
+          <Divider sx={{ mb: 1 }} />
+
+          <Box sx={{ flex: 1, overflow: 'auto' }}>
+            {barCart.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+                Add services to cart
+              </Typography>
+            ) : (
+              barCart.map((item, i) => (
+                <Box key={i} sx={{ py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Typography variant="body2" fontWeight={600} noWrap sx={{ flex: 1 }}>{item.name}</Typography>
+                    <Typography variant="body2" fontWeight={600}>{fmt(item.unit_price * item.quantity)}</Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                    <Stack direction="row" alignItems="center" spacing={0.5}>
+                      <IconButton size="small" onClick={() => { setBarCart((prev) => prev.map((c, j) => j === i ? { ...c, quantity: Math.max(1, c.quantity - 1) } : c)); }}>
+                        <RemoveIcon fontSize="small" />
+                      </IconButton>
+                      <Typography variant="body2">{item.quantity}</Typography>
+                      <IconButton size="small" onClick={() => { setBarCart((prev) => prev.map((c, j) => j === i ? { ...c, quantity: c.quantity + 1 } : c)); }}>
+                        <AddIcon fontSize="small" />
+                      </IconButton>
+                    </Stack>
+                    <IconButton size="small" color="error" onClick={() => { setBarCart((prev) => prev.filter((_, j) => j !== i)); }}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+                </Box>
+              ))
+            )}
+          </Box>
+
+          <Divider sx={{ my: 1 }} />
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+            <Typography variant="h6" fontWeight={700}>Total</Typography>
+            <Typography variant="h6" fontWeight={700} color="primary">
+              {fmt(barCart.reduce((s, i) => s + i.unit_price * i.quantity, 0))}
+            </Typography>
+          </Box>
+
+          <Button
+            fullWidth variant="contained" size="large" color="secondary"
+            disabled={barSubmitting || barCart.length === 0}
+            onClick={handleBarSubmit}
+          >
+            {barSubmitting ? 'Submitting…' : 'Submit Service Order'}
           </Button>
         </>)}
       </Paper>

@@ -25,6 +25,7 @@ import CustomersPage from '@/pages/customers/CustomersPage';
 import SuppliersPage from '@/pages/suppliers/SuppliersPage';
 import ReportsPage from '@/pages/reports/ReportsPage';
 import SettingsPage from '@/pages/settings/SettingsPage';
+import OtherServicesPage from '@/pages/other-services/OtherServicesPage';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { session, loading, initialized } = useAuth();
@@ -63,6 +64,7 @@ export default function App() {
               <Route path="/bar" element={<BarPage />} />
               <Route path="/accommodation" element={<AccommodationPage />} />
               <Route path="/inventory" element={<InventoryPage />} />
+              <Route path="/other-services" element={<OtherServicesPage />} />
               <Route path="/suppliers" element={<SuppliersPage />} />
               <Route path="/delivery" element={<DeliveryPage />} />
               <Route path="/shifts" element={<ShiftsPage />} />

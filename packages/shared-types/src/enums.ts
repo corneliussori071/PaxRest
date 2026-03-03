@@ -36,6 +36,7 @@ export type Permission =
   | 'accom_create_rooms'
   | 'accom_request_items'
   | 'accom_guests'
+  | 'manage_other_services'
   | 'view_shisha'
   | 'manage_delivery'
   | 'manage_inventory'

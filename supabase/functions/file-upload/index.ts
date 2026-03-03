@@ -16,6 +16,7 @@ const BUCKETS: Record<string, string> = {
   'wastage': 'wastage-photos',
   'profile': 'profile-avatars',
   'document': 'documents',
+  'other-services': 'media',
 };
 
 serve(async (req) => {
