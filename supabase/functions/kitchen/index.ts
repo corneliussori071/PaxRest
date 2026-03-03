@@ -143,7 +143,7 @@ async function getKitchenOrders(req: Request, supabase: any, auth: AuthContext, 
     .select(`
       id, order_number, order_type, table_id, customer_name, notes, created_at, status, source,
       order_items(id, menu_item_name, variant_name, quantity, special_instructions, station, status, modifiers, removed_ingredients, selected_extras),
-      tables(name)
+      tables!table_id(name)
     `, { count: 'exact' })
     .eq('branch_id', branchId)
     .in('status', orderStatuses);
