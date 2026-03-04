@@ -34,8 +34,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
 import { useRealtime, useApi } from '@/hooks';
 import {
-  useMenuStore, useCartStore, useAvailableMealsStore,
-  type CartItem, type CartItemExtra, type CartItemRemovedIngredient,
+  useMenuStore, useAvailableMealsStore,
+  type CartItemExtra, type CartItemRemovedIngredient,
 } from '@/stores';
 import type { MenuCategoryWithItems, MenuItemWithDetails } from '@paxrest/shared-types';
 import BranchGuard from '@/components/BranchGuard';
@@ -46,17 +46,21 @@ export default function POSTerminalPage() {
   return <BranchGuard><POSTerminalContent /></BranchGuard>;
 }
 
-/* ─── Type for room & bar cart items ─── */
-interface RoomBarCartItem {
+interface POSCartItem {
   id: string;
   name: string;
   unit_price: number;
   quantity: number;
-  source: 'room' | 'bar_store' | 'other_service';
-  room_id?: string;
+  source: 'menu' | 'bar_store' | 'room' | 'other_service';
+  menu_item_id?: string;
+  variant_id?: string;
+  variant_name?: string;
   bar_store_item_id?: string;
+  room_id?: string;
   other_service_id?: string;
   max_qty?: number;
+  removed_ingredients?: { ingredient_id: string; name: string; cost_contribution: number }[];
+  selected_extras?: { id: string; name: string; price: number }[];
   booking_details?: {
     num_people: number;
     check_in: string;
@@ -70,7 +74,6 @@ function POSTerminalContent() {
   const { activeBranchId, company, activeBranch } = useAuth();
   const { categories, loading: menuLoading, fetchMenu } = useMenuStore();
   const { meals, fetchMeals } = useAvailableMealsStore();
-  const cart = useCartStore();
 
   // ── Top-level tab: 0 = New Order, 1 = Manage Orders ──
   const [topTab, setTopTab] = useState(0);
@@ -85,23 +88,24 @@ function POSTerminalContent() {
   const [customizeItem, setCustomizeItem] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // ── Rooms sub-tab state (reuses accommodation logic) ──
+  // ── Unified cart (shared across all sub-tabs) ──
+  const [cart, setCart] = useState<POSCartItem[]>([]);
+  const [orderType, setOrderType] = useState<'dine_in' | 'takeaway' | 'delivery' | 'pickup'>('dine_in');
+  const [customerName, setCustomerName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [tableId, setTableId] = useState('');
+  const [numPeople, setNumPeople] = useState(1);
+  const [tables, setTables] = useState<any[]>([]);
+
+  // ── Rooms browsing state ──
   const [rooms, setRooms] = useState<any[]>([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [bookingDialogRoom, setBookingDialogRoom] = useState<any>(null);
-  const [roomCart, setRoomCart] = useState<RoomBarCartItem[]>([]);
-  const [roomCustomerName, setRoomCustomerName] = useState('');
-  const [roomNotes, setRoomNotes] = useState('');
-  const [roomSubmitting, setRoomSubmitting] = useState(false);
 
-  // ── Bar sub-tab state (reuses bar logic) ──
+  // ── Bar store browsing state ──
   const [barStoreItems, setBarStoreItems] = useState<any[]>([]);
   const [barStoreLoading, setBarStoreLoading] = useState(false);
   const [barSearch, setBarSearch] = useState('');
-  const [barCart, setBarCart] = useState<RoomBarCartItem[]>([]);
-  const [barCustomerName, setBarCustomerName] = useState('');
-  const [barNotes, setBarNotes] = useState('');
-  const [barSubmitting, setBarSubmitting] = useState(false);
 
   // ── Services sub-tab state ──
   const [otherServices, setOtherServices] = useState<any[]>([]);
@@ -117,7 +121,7 @@ function POSTerminalContent() {
   const [deliveryCustomerPhone, setDeliveryCustomerPhone] = useState<string>('');
   const [deliveryAddress, setDeliveryAddress] = useState<string>('');
 
-  const isDelivery = cart.orderType === 'delivery';
+  const isDelivery = orderType === 'delivery';
 
   // Load zones + riders only when delivery mode is active
   const { data: zonesData } = useApi<{ zones: any[] }>(
@@ -132,8 +136,8 @@ function POSTerminalContent() {
   const deliveryFee = isDelivery && selectedZone ? Number(selectedZone.delivery_fee) : 0;
 
   // Reset delivery fields when order type changes
-  const handleOrderTypeChange = (t: typeof cart.orderType) => {
-    cart.setOrderType(t);
+  const handleOrderTypeChange = (t: 'dine_in' | 'takeaway' | 'delivery' | 'pickup') => {
+    setOrderType(t);
     if (t !== 'delivery') {
       setDeliveryZoneId('');
       setDeliveryRiderId('');
@@ -239,9 +243,21 @@ function POSTerminalContent() {
 
   useEffect(() => { fetchOtherServices(); }, [fetchOtherServices]);
 
-  // ── Room cart helpers ──
-  const addToRoomCart = (item: RoomBarCartItem) => {
-    setRoomCart((prev) => {
+  // ── Tables: fetch available tables ──
+  useEffect(() => {
+    if (!activeBranchId) return;
+    (async () => {
+      try {
+        const data = await api<{ tables: any[] }>('tables', 'list', { branchId: activeBranchId });
+        setTables(data.tables ?? []);
+      } catch (err) { console.error(err); }
+    })();
+  }, [activeBranchId]);
+
+  // ── Unified cart helpers ──
+  const addToCart = (item: POSCartItem) => {
+    setCart((prev) => {
+      // Room: prevent duplicate
       if (item.source === 'room') {
         if (prev.some((c) => c.id === item.id && c.source === 'room')) {
           toast.error('This room is already in your cart');
@@ -249,64 +265,18 @@ function POSTerminalContent() {
         }
         return [...prev, { ...item, quantity: item.quantity || 1 }];
       }
-      return prev;
-    });
-  };
-
-  const removeFromRoomCart = (id: string, source: string) => {
-    setRoomCart((prev) => prev.filter((c) => !(c.id === id && c.source === source)));
-  };
-
-  const handleRoomSubmit = async () => {
-    if (roomCart.length === 0) return toast.error('Cart is empty');
-    for (const c of roomCart.filter((x) => x.source === 'room')) {
-      if (!c.booking_details?.check_in || !c.booking_details?.duration_count) {
-        return toast.error(`Missing booking details for ${c.name}. Remove and re-add it.`);
-      }
-    }
-    setRoomSubmitting(true);
-    try {
-      const items = roomCart.map((c) => ({
-        name: c.name,
-        quantity: c.quantity,
-        unit_price: c.unit_price,
-        source: c.source,
-        room_id: c.room_id,
-        booking_details: c.booking_details,
-        ingredients: [],
-        extras: [],
-      }));
-      const data = await api<{ order_id: string; order_number: string; total: number }>('accommodation', 'create-order', {
-        body: {
-          items,
-          customer_name: roomCustomerName.trim() || 'Walk In Customer',
-          notes: roomNotes || undefined,
-          order_type: 'accommodation',
-        },
-        branchId: activeBranchId ?? undefined,
-      });
-      toast.success(`Room order #${data.order_number} created — ${fmt(data.total)}`);
-      setRoomCart([]);
-      setRoomCustomerName('');
-      setRoomNotes('');
-      fetchRooms();
-    } catch (err: any) { toast.error(err.message); }
-    finally { setRoomSubmitting(false); }
-  };
-
-  // ── Bar cart helpers ──
-  const addToBarCart = (item: RoomBarCartItem) => {
-    setBarCart((prev) => {
       const existing = prev.find((c) => c.id === item.id && c.source === item.source);
       if (existing) {
         const newQty = existing.quantity + 1;
-        if (item.max_qty != null && newQty > Number(item.max_qty)) {
+        if (item.source === 'bar_store' && item.max_qty != null && newQty > Number(item.max_qty)) {
           toast.error(`Only ${Number(item.max_qty)} ${item.name} available in stock`);
           return prev;
         }
-        return prev.map((c) => c.id === item.id && c.source === item.source ? { ...c, quantity: newQty } : c);
+        return prev.map((c) =>
+          c.id === item.id && c.source === item.source ? { ...c, quantity: newQty } : c
+        );
       }
-      if (item.max_qty != null && Number(item.max_qty) < 1) {
+      if (item.source === 'bar_store' && item.max_qty != null && Number(item.max_qty) < 1) {
         toast.error(`${item.name} is out of stock`);
         return prev;
       }
@@ -314,12 +284,13 @@ function POSTerminalContent() {
     });
   };
 
-  const updateBarCartQty = (id: string, delta: number) => {
-    setBarCart((prev) => prev.map((c) => {
-      if (c.id !== id) return c;
+  const updateQty = (id: string, source: string, delta: number) => {
+    setCart((prev) => prev.map((c) => {
+      if (c.id !== id || c.source !== source) return c;
+      if (c.source === 'room') return c; // Rooms always qty as-is
       const newQty = c.quantity + delta;
       if (newQty < 1) return c;
-      if (c.max_qty != null && newQty > Number(c.max_qty)) {
+      if (c.source === 'bar_store' && c.max_qty != null && newQty > Number(c.max_qty)) {
         toast.error(`Only ${Number(c.max_qty)} ${c.name} available in stock`);
         return c;
       }
@@ -327,42 +298,11 @@ function POSTerminalContent() {
     }));
   };
 
-  const removeFromBarCart = (id: string) => {
-    setBarCart((prev) => prev.filter((c) => c.id !== id));
+  const removeFromCart = (id: string, source: string) => {
+    setCart((prev) => prev.filter((c) => !(c.id === id && c.source === source)));
   };
 
-  const barCartSubtotal = barCart.reduce((s, c) => s + c.unit_price * c.quantity, 0);
-
-  const handleBarSubmit = async () => {
-    if (barCart.length === 0) return toast.error('Cart is empty');
-    setBarSubmitting(true);
-    try {
-      const items = barCart.map((c) => ({
-        name: c.name,
-        quantity: c.quantity,
-        unit_price: c.unit_price,
-        source: c.source,
-        bar_store_item_id: c.bar_store_item_id,
-        ingredients: [],
-        extras: [],
-      }));
-      const data = await api<{ order_id: string; order_number: string; total: number }>('bar', 'create-order', {
-        body: {
-          items,
-          customer_name: barCustomerName.trim() || 'Walk In Customer',
-          notes: barNotes || undefined,
-          order_type: 'bar',
-        },
-        branchId: activeBranchId ?? undefined,
-      });
-      toast.success(`Bar order #${data.order_number} created — ${fmt(data.total)}`);
-      setBarCart([]);
-      setBarCustomerName('');
-      setBarNotes('');
-      fetchBarStore();
-    } catch (err: any) { toast.error(err.message); }
-    finally { setBarSubmitting(false); }
-  };
+  const subtotal = cart.reduce((s, c) => s + c.unit_price * c.quantity, 0);
 
 
 
@@ -415,13 +355,15 @@ function POSTerminalContent() {
 
     // Simple add
     const variant = item.variants?.[0];
-    cart.addItem({
-      menuItemId: item.id,
-      variantId: variant?.id,
+    addToCart({
+      id: item.id,
       name: item.name,
-      variantName: variant?.name,
-      basePrice: variant ? item.base_price + (variant.price_adjustment ?? 0) : item.base_price,
-      modifiers: [],
+      unit_price: variant ? item.base_price + (variant.price_adjustment ?? 0) : item.base_price,
+      quantity: 1,
+      source: 'menu',
+      menu_item_id: item.id,
+      variant_id: variant?.id,
+      variant_name: variant?.name,
     });
   };
 
@@ -432,55 +374,68 @@ function POSTerminalContent() {
     }
     const name = meal.menu_item_name ?? meal.menu_items?.name ?? 'Meal';
     const price = meal.menu_items?.base_price ?? 0;
-    cart.addItem({
-      menuItemId: meal.menu_item_id,
+    addToCart({
+      id: meal.menu_item_id,
       name,
-      basePrice: price,
-      modifiers: [],
+      unit_price: price,
+      quantity: 1,
+      source: 'menu',
+      menu_item_id: meal.menu_item_id,
     });
     toast.success(`Added ${name}`);
   };
 
-  const handleSubmitOrder = async () => {
-    if (cart.items.length === 0) return toast.error('Cart is empty');
+  const handleSubmit = async () => {
+    if (cart.length === 0) return toast.error('Cart is empty');
+
+    const hasRooms = cart.some((c) => c.source === 'room');
+    if (orderType === 'dine_in' && !tableId && !hasRooms) {
+      return toast.error('Select a table or add a room booking');
+    }
+
+    // Validate room bookings
+    for (const c of cart.filter((x) => x.source === 'room')) {
+      if (!c.booking_details?.check_in || !c.booking_details?.duration_count) {
+        return toast.error(`Missing booking details for ${c.name}. Remove and re-add it.`);
+      }
+    }
+
     setSubmitting(true);
     try {
-      const items = cart.items.map((ci) => ({
-        menu_item_id: ci.menuItemId,
-        menu_item_name: ci.name,
-        variant_id: ci.variantId ?? null,
-        variant_name: ci.variantName ?? null,
-        quantity: ci.quantity,
-        unit_price: ci.basePrice,
-        modifiers: ci.modifiers.map((m) => ({ modifier_id: m.id, name: m.name, price: m.price })),
-        notes: ci.notes,
-        removed_ingredients: ci.removedIngredients?.map((r) => ({ ingredient_id: r.ingredient_id, name: r.name, cost_contribution: r.cost_contribution })),
-        selected_extras: ci.selectedExtras?.map((e) => ({ extra_id: e.id, name: e.name, price: e.price })),
-        extras_total: (ci.selectedExtras ?? []).reduce((s, e) => s + e.price, 0),
-        ingredients_discount: (ci.removedIngredients ?? []).reduce((s, r) => s + r.cost_contribution, 0),
+      const items = cart.map((c) => ({
+        name: c.name,
+        quantity: c.quantity,
+        unit_price: c.unit_price,
+        source: c.source,
+        menu_item_id: c.menu_item_id,
+        bar_store_item_id: c.bar_store_item_id,
+        room_id: c.room_id,
+        other_service_id: c.other_service_id,
+        ingredients: c.removed_ingredients?.map((r) => ({ ...r, removed: true })) ?? [],
+        extras: c.selected_extras ?? [],
+        booking_details: c.booking_details,
       }));
 
-      const orderRes = await api<{ order: any }>('orders', 'create', {
+      const data = await api<{ order_id: string; order_number: string; total: number }>('bar', 'create-order', {
         body: {
-          order_type: cart.orderType,
-          table_id: cart.tableId,
-          customer_id: cart.customerId,
-          customer_name: cart.customerName,
-          notes: cart.notes,
-          discount_percent: cart.discountPercent,
-          redeem_points: cart.redeemPoints,
           items,
+          table_id: tableId || undefined,
+          num_people: numPeople || 1,
+          customer_name: customerName.trim() || 'Walk In Customer',
+          notes: notes || undefined,
+          order_type: orderType,
+          source: 'pos',
         },
         branchId: activeBranchId ?? undefined,
       });
 
-      // For delivery orders: create the delivery record immediately
-      if (cart.orderType === 'delivery' && orderRes?.order?.id) {
+      // For delivery orders: create the delivery record
+      if (orderType === 'delivery' && data.order_id) {
         try {
           await api('delivery', 'assign', {
             method: 'POST',
             body: {
-              order_id: orderRes.order.id,
+              order_id: data.order_id,
               rider_id: deliveryAssignMode === 'manual' && deliveryRiderId ? deliveryRiderId : null,
               auto_assign: deliveryAssignMode === 'auto',
               delivery_zone_id: deliveryZoneId || null,
@@ -492,14 +447,18 @@ function POSTerminalContent() {
             branchId: activeBranchId ?? undefined,
           });
         } catch (deliveryErr: any) {
-          // Order is placed — don't block; show a warning
-          toast(deliveryErr.message?.includes('No available') 
+          toast(deliveryErr.message?.includes('No available')
             ? 'Order placed — no riders available, assign manually from Delivery page'
             : `Order placed — delivery assignment pending: ${deliveryErr.message}`);
         }
       }
 
-      toast.success('Order placed!');
+      toast.success(`Order #${data.order_number} created — ${fmt(data.total)}`);
+      setCart([]);
+      setCustomerName('');
+      setNotes('');
+      setTableId('');
+      setNumPeople(1);
       setDeliveryZoneId('');
       setDeliveryRiderId('');
       setDeliveryAssignMode('auto');
@@ -507,8 +466,8 @@ function POSTerminalContent() {
       setDeliveryCustomerName('');
       setDeliveryCustomerPhone('');
       setDeliveryAddress('');
-      cart.clearCart();
-      // Refresh meals in case available counts changed
+      fetchBarStore();
+      fetchRooms();
       if (activeBranchId) fetchMeals(activeBranchId);
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to place order');
@@ -687,7 +646,7 @@ function POSTerminalContent() {
                 {rooms.map((room) => {
                   const CATEGORY_COLORS: Record<string, string> = { vip: '#FFD700', express: '#2196F3', luxury: '#9C27B0', regular: '#4CAF50' };
                   const catColor = CATEGORY_COLORS[room.category?.toLowerCase()] ?? '#757575';
-                  const inCart = roomCart.some((c) => c.source === 'room' && c.id === room.id);
+                  const inCart = cart.some((c) => c.source === 'room' && c.id === room.id);
                   const isBookable = room.status === 'available' || room.status === 'partially_occupied';
                   const canBook = !inCart && isBookable;
                   const availableCapacity = Math.max(0, Number(room.max_occupants) - Number(room.current_occupants ?? 0));
@@ -766,7 +725,7 @@ function POSTerminalContent() {
                     <Card
                       key={item.id}
                       sx={{ width: 180, cursor: 'pointer', '&:hover': { boxShadow: 4 }, transition: '0.15s' }}
-                      onClick={() => addToBarCart({
+                      onClick={() => addToCart({
                         id: item.id,
                         name: item.item_name,
                         unit_price: item.selling_price ?? 0,
@@ -816,7 +775,7 @@ function POSTerminalContent() {
                     <Card
                       key={svc.id}
                       sx={{ width: 200, cursor: 'pointer', '&:hover': { boxShadow: 4 }, transition: '0.15s' }}
-                      onClick={() => addToBarCart({
+                      onClick={() => addToCart({
                         id: svc.id,
                         name: svc.name,
                         unit_price: svc.charge_amount,
@@ -864,28 +823,53 @@ function POSTerminalContent() {
         width: 360, display: 'flex', flexDirection: 'column',
         borderRadius: 2, p: 2, flexShrink: 0,
       }}>
-        {/* ═══ Meals Cart (sub-tab 0) ═══ */}
-        {newOrderSubTab === 0 && (<>
+        {/* ═══ Unified Cart ═══ */}
+        <>
           {/* Order type */}
-          <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
             {(['dine_in', 'takeaway', 'delivery', 'pickup'] as const).map((t) => (
               <Chip
                 key={t}
                 label={t.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-                color={cart.orderType === t ? 'primary' : 'default'}
-                variant={cart.orderType === t ? 'filled' : 'outlined'}
+                color={orderType === t ? 'primary' : 'default'}
+                variant={orderType === t ? 'filled' : 'outlined'}
                 onClick={() => handleOrderTypeChange(t)}
                 size="small"
               />
             ))}
           </Box>
 
-          {/* Delivery Details — shown only when order type is delivery */}
-          {isDelivery && (
-            <Box sx={{ mb: 2, p: 1.5, border: '1px solid', borderColor: 'warning.main', borderRadius: 1, bgcolor: 'warning.50' }}>
-              <Typography variant="caption" fontWeight={700} color="warning.dark" display="block" sx={{ mb: 1 }}>Delivery Details</Typography>
+          {/* Table Selection — shown for dine-in */}
+          {orderType === 'dine_in' && (
+            <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+              <InputLabel>Table</InputLabel>
+              <Select value={tableId} label="Table" onChange={(e) => {
+                const tid = e.target.value;
+                setTableId(tid);
+                const tbl = tables.find((t) => t.id === tid);
+                if (tbl && numPeople > tbl.capacity) setNumPeople(tbl.capacity);
+              }}>
+                {tables.map((t) => {
+                  const status = t.status ?? 'available';
+                  const isAvailable = status === 'available';
+                  return (
+                    <MenuItem key={t.id} value={t.id} disabled={!isAvailable}>
+                      <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%' }}>
+                        <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: status === 'available' ? '#4caf50' : status === 'occupied' ? '#f44336' : '#ff9800', flexShrink: 0 }} />
+                        <Typography variant="body2" sx={{ flex: 1 }}>{t.name ?? `Table ${t.table_number}`}</Typography>
+                        <Typography variant="caption" color="text.secondary">{t.capacity} seats · {status}</Typography>
+                      </Stack>
+                    </MenuItem>
+                  );
+                })}
+              </Select>
+            </FormControl>
+          )}
 
-              {/* Zone selector */}
+          {/* Delivery Details */}
+          {isDelivery && (
+            <Box sx={{ mb: 1, p: 1.5, border: '1px solid', borderColor: 'warning.main', borderRadius: 1, bgcolor: 'warning.50' }}>
+              <Typography variant="caption" fontWeight={700} color="warning.dark" display="block" sx={{ mb: 1 }}>Delivery Details</Typography>
               <FormControl fullWidth size="small" sx={{ mb: 1 }}>
                 <InputLabel>Delivery Zone</InputLabel>
                 <Select label="Delivery Zone" value={deliveryZoneId} onChange={(e) => setDeliveryZoneId(e.target.value)}>
@@ -895,13 +879,9 @@ function POSTerminalContent() {
                   ))}
                 </Select>
               </FormControl>
-
-              {/* Assignment mode */}
               <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
                 {(['auto', 'manual'] as const).map((m) => (
-                  <Chip
-                    key={m}
-                    size="small"
+                  <Chip key={m} size="small"
                     label={m === 'auto' ? 'Auto-assign' : 'Manual'}
                     color={deliveryAssignMode === m ? 'primary' : 'default'}
                     variant={deliveryAssignMode === m ? 'filled' : 'outlined'}
@@ -909,8 +889,6 @@ function POSTerminalContent() {
                   />
                 ))}
               </Box>
-
-              {/* Manual rider selection */}
               {deliveryAssignMode === 'manual' && (
                 <FormControl fullWidth size="small" sx={{ mb: 1 }}>
                   <InputLabel>Assign Rider</InputLabel>
@@ -922,103 +900,102 @@ function POSTerminalContent() {
                   </Select>
                 </FormControl>
               )}
-              {deliveryAssignMode === 'manual' && availableRiders.length === 0 && (
-                <Typography variant="caption" color="warning.dark">No available riders — switch to Auto or assign later</Typography>
-              )}
-
-              {/* Customer contact info — required for delivery */}
-              <TextField
-                fullWidth size="small" label="Customer Name *" placeholder="Customer name"
-                value={deliveryCustomerName} onChange={(e) => setDeliveryCustomerName(e.target.value)}
-                sx={{ mb: 1 }}
-              />
-              <TextField
-                fullWidth size="small" label="Contact Number *" placeholder="Phone number"
-                value={deliveryCustomerPhone} onChange={(e) => setDeliveryCustomerPhone(e.target.value)}
-                sx={{ mb: 1 }}
-              />
-              <TextField
-                fullWidth size="small" label="Delivery Address *" placeholder="Delivery address"
-                value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)}
-                sx={{ mb: 1 }}
-              />
-              {/* Delivery notes */}
-              <TextField
-                fullWidth size="small" placeholder="Delivery notes (optional)"
-                value={deliveryNotes} onChange={(e) => setDeliveryNotes(e.target.value)}
-              />
+              <TextField fullWidth size="small" label="Customer Name *" placeholder="Customer name"
+                value={deliveryCustomerName} onChange={(e) => setDeliveryCustomerName(e.target.value)} sx={{ mb: 1 }} />
+              <TextField fullWidth size="small" label="Contact Number *" placeholder="Phone number"
+                value={deliveryCustomerPhone} onChange={(e) => setDeliveryCustomerPhone(e.target.value)} sx={{ mb: 1 }} />
+              <TextField fullWidth size="small" label="Delivery Address *" placeholder="Delivery address"
+                value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} sx={{ mb: 1 }} />
+              <TextField fullWidth size="small" placeholder="Delivery notes (optional)"
+                value={deliveryNotes} onChange={(e) => setDeliveryNotes(e.target.value)} />
             </Box>
           )}
 
-          {/* Customer */}
-          <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center' }}>
-            <Button
-              size="small" variant="outlined" startIcon={<PersonIcon />}
-              onClick={() => setCustomerDialog(true)}
-              sx={{ flex: 1 }}
-            >
-              {cart.customerName ?? 'Add Customer'}
-            </Button>
-            {cart.customerId && (
-              <IconButton size="small" onClick={() => cart.setCustomer(null, null, null)}>
-                <DeleteIcon fontSize="small" />
-              </IconButton>
+          {/* Customer + Seaters */}
+          <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+            {orderType === 'dine_in' && (
+              <TextField size="small" label="Seaters" type="number" sx={{ width: 90 }}
+                value={numPeople}
+                onChange={(e) => {
+                  const val = Math.max(1, Number(e.target.value));
+                  const tbl = tables.find((t) => t.id === tableId);
+                  if (tbl && val > tbl.capacity) {
+                    toast.error(`Max capacity for this table is ${tbl.capacity}`);
+                    setNumPeople(tbl.capacity);
+                  } else { setNumPeople(val); }
+                }}
+                inputProps={{ min: 1 }}
+              />
             )}
-          </Box>
+            <TextField size="small" label="Customer Name" fullWidth
+              value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+          </Stack>
 
-          <Divider sx={{ mb: 1 }} />
+          <TextField size="small" label="Notes" fullWidth multiline maxRows={2} sx={{ mb: 1 }}
+            value={notes} onChange={(e) => setNotes(e.target.value)} />
 
-          {/* Cart items */}
-          <Box sx={{ flex: 1, overflow: 'auto' }}>
-            {cart.items.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-                Tap menu items to add
+          <Divider sx={{ my: 1 }} />
+
+          {/* Cart Items (all sources) */}
+          <Box sx={{ flex: 1, overflow: 'auto', mb: 1 }}>
+            {cart.length === 0 ? (
+              <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+                Tap items to add to cart
               </Typography>
             ) : (
-              cart.items.map((item, i) => {
-                const extrasTotal = (item.selectedExtras ?? []).reduce((s, e) => s + e.price, 0);
-                const ingredientsDiscount = (item.removedIngredients ?? []).reduce((s, r) => s + r.cost_contribution, 0);
-                const linePrice = (item.basePrice + item.modifiers.reduce((s, m) => s + m.price, 0) + extrasTotal - ingredientsDiscount) * item.quantity;
-
+              cart.map((item) => {
+                const SOURCE_LABELS: Record<string, string> = { menu: 'Menu', bar_store: 'Bar', room: 'Room', other_service: 'Service' };
+                const SOURCE_COLORS: Record<string, string> = { menu: 'success', bar_store: 'primary', room: 'info', other_service: 'secondary' };
                 return (
-                  <Box key={i} sx={{ py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography variant="body2" fontWeight={600} noWrap>
-                          {item.name}{item.variantName ? ` (${item.variantName})` : ''}
+                  <Box key={`${item.source}-${item.id}`} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, py: 0.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="body2" fontWeight={600} noWrap>
+                        {item.name}{item.variant_name ? ` (${item.variant_name})` : ''}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {fmt(item.unit_price)} × {item.quantity} = {fmt(item.unit_price * item.quantity)}
+                      </Typography>
+                      <Chip size="small" label={SOURCE_LABELS[item.source] ?? item.source} sx={{ ml: 1 }}
+                        color={(SOURCE_COLORS[item.source] ?? 'default') as any} variant="outlined" />
+                      {item.source === 'bar_store' && item.max_qty != null && (
+                        <Typography variant="caption" color={item.quantity >= Number(item.max_qty) ? 'error.main' : 'text.secondary'} sx={{ ml: 1 }}>
+                          ({item.quantity}/{Number(item.max_qty)} in stock)
                         </Typography>
-                        {item.modifiers.length > 0 && (
-                          <Typography variant="caption" color="text.secondary" display="block">
-                            {item.modifiers.map((m) => m.name).join(', ')}
-                          </Typography>
-                        )}
-                        {(item.removedIngredients?.length ?? 0) > 0 && (
-                          <Typography variant="caption" color="error" display="block">
-                            Remove: {item.removedIngredients!.map((r) => r.name).join(', ')}
-                            {ingredientsDiscount > 0 && ` (−${fmt(ingredientsDiscount)})`}
-                          </Typography>
-                        )}
-                        {(item.selectedExtras?.length ?? 0) > 0 && (
-                          <Typography variant="caption" color="success.main" display="block">
-                            Extras: {item.selectedExtras!.map((e) => `${e.name} +${fmt(e.price)}`).join(', ')}
-                          </Typography>
-                        )}
-                      </Box>
-                      <Typography variant="body2" fontWeight={600}>{fmt(linePrice)}</Typography>
+                      )}
+                      {(item.removed_ingredients?.length ?? 0) > 0 && (
+                        <Typography variant="caption" color="error" display="block">
+                          Remove: {item.removed_ingredients!.map((r) => r.name).join(', ')}
+                          {item.removed_ingredients!.reduce((s, r) => s + r.cost_contribution, 0) > 0
+                            && ` (−${fmt(item.removed_ingredients!.reduce((s, r) => s + r.cost_contribution, 0))})`}
+                        </Typography>
+                      )}
+                      {(item.selected_extras?.length ?? 0) > 0 && (
+                        <Typography variant="caption" color="success.main" display="block">
+                          Extras: {item.selected_extras!.map((e) => `${e.name} +${fmt(e.price)}`).join(', ')}
+                        </Typography>
+                      )}
+                      {item.booking_details && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {item.booking_details.num_people} guest(s) · {item.booking_details.duration_count} {item.booking_details.duration_unit}(s)
+                        </Typography>
+                      )}
                     </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-                      <IconButton size="small" onClick={() => cart.updateQuantity(item.menuItemId, item.quantity - 1, item.variantId)}>
-                        <RemoveIcon fontSize="small" />
-                      </IconButton>
-                      <Typography variant="body2" sx={{ minWidth: 24, textAlign: 'center' }}>{item.quantity}</Typography>
-                      <IconButton size="small" onClick={() => cart.updateQuantity(item.menuItemId, item.quantity + 1, item.variantId)}>
-                        <AddIcon fontSize="small" />
-                      </IconButton>
-                      <Box sx={{ flex: 1 }} />
-                      <IconButton size="small" color="error" onClick={() => cart.removeItem(item.menuItemId, item.variantId)}>
+                    <Stack direction="row" alignItems="center" spacing={0}>
+                      {item.source !== 'room' && (
+                        <>
+                          <IconButton size="small" onClick={() => updateQty(item.id, item.source, -1)}>
+                            <RemoveIcon fontSize="small" />
+                          </IconButton>
+                          <Typography sx={{ minWidth: 24, textAlign: 'center' }}>{item.quantity}</Typography>
+                          <IconButton size="small" onClick={() => updateQty(item.id, item.source, 1)}>
+                            <AddIcon fontSize="small" />
+                          </IconButton>
+                        </>
+                      )}
+                      <IconButton size="small" color="error" onClick={() => removeFromCart(item.id, item.source)}>
                         <DeleteIcon fontSize="small" />
                       </IconButton>
-                    </Box>
+                    </Stack>
                   </Box>
                 );
               })
@@ -1026,17 +1003,11 @@ function POSTerminalContent() {
           </Box>
 
           {/* Totals */}
-          <Divider sx={{ my: 1 }} />
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+          <Divider />
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5, mt: 1 }}>
             <Typography variant="body2">Subtotal</Typography>
-            <Typography variant="body2">{fmt(cart.subtotal())}</Typography>
+            <Typography variant="body2">{fmt(subtotal)}</Typography>
           </Box>
-          {cart.discountPercent > 0 && (
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-              <Typography variant="body2" color="error">Discount ({cart.discountPercent}%)</Typography>
-              <Typography variant="body2" color="error">-{fmt(cart.subtotal() * cart.discountPercent / 100)}</Typography>
-            </Box>
-          )}
           {deliveryFee > 0 && (
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
               <Typography variant="body2" color="info.main">Delivery Fee ({selectedZone?.name})</Typography>
@@ -1045,226 +1016,22 @@ function POSTerminalContent() {
           )}
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
             <Typography variant="h6" fontWeight={700}>Total</Typography>
-            <Typography variant="h6" fontWeight={700} color="primary">{fmt(cart.total() + deliveryFee)}</Typography>
+            <Typography variant="h6" fontWeight={700} color="primary">{fmt(subtotal + deliveryFee)}</Typography>
           </Box>
-
-          {/* Notes + discount */}
-          <TextField
-            size="small" fullWidth placeholder="Order notes…" multiline maxRows={2}
-            value={cart.notes} onChange={(e) => cart.setNotes(e.target.value)}
-            sx={{ mb: 1 }}
-          />
-          <TextField
-            size="small" fullWidth placeholder="Discount %" type="number"
-            value={cart.discountPercent || ''}
-            onChange={(e) => cart.setDiscount(Number(e.target.value))}
-            sx={{ mb: 2 }}
-          />
 
           {/* Submit */}
           <Button
-            fullWidth variant="contained" size="large" disabled={submitting || cart.items.length === 0}
-            onClick={handleSubmitOrder}
+            fullWidth variant="contained" size="large"
+            disabled={submitting || cart.length === 0}
+            onClick={handleSubmit}
           >
-            {submitting ? 'Placing Order…' : `Place Order — ${fmt(cart.total() + deliveryFee)}`}
+            {submitting ? 'Placing Order…' : `Place Order — ${fmt(subtotal + deliveryFee)}`}
           </Button>
-        </>)}
-
-        {/* ═══ Rooms Cart (sub-tab 1) ═══ */}
-        {newOrderSubTab === 1 && (<>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>🏨 Room Booking Cart</Typography>
-
-          <TextField
-            fullWidth size="small" label="Customer Name *" placeholder="Guest name"
-            value={roomCustomerName} onChange={(e) => setRoomCustomerName(e.target.value)}
-            sx={{ mb: 1 }}
-          />
-          <TextField
-            fullWidth size="small" label="Notes" placeholder="Special requests…"
-            value={roomNotes} onChange={(e) => setRoomNotes(e.target.value)}
-            multiline maxRows={2} sx={{ mb: 1 }}
-          />
-
-          <Divider sx={{ mb: 1 }} />
-
-          <Box sx={{ flex: 1, overflow: 'auto' }}>
-            {roomCart.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-                Select a room to book
-              </Typography>
-            ) : (
-              roomCart.map((item, i) => (
-                <Box key={i} sx={{ py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography variant="body2" fontWeight={600} noWrap>{item.name}</Typography>
-                      {item.booking_details && (
-                        <Typography variant="caption" color="text.secondary" display="block">
-                          {item.booking_details.num_people} guest(s) • {item.booking_details.duration_count} {item.booking_details.duration_unit}(s)
-                        </Typography>
-                      )}
-                    </Box>
-                    <Typography variant="body2" fontWeight={600}>{fmt(item.unit_price * item.quantity)}</Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
-                    <IconButton size="small" color="error" onClick={() => removeFromRoomCart(item.id, item.source)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-                </Box>
-              ))
-            )}
-          </Box>
-
-          <Divider sx={{ my: 1 }} />
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-            <Typography variant="h6" fontWeight={700}>Total</Typography>
-            <Typography variant="h6" fontWeight={700} color="primary">
-              {fmt(roomCart.reduce((s, i) => s + i.unit_price * i.quantity, 0))}
-            </Typography>
-          </Box>
-
-          <Button
-            fullWidth variant="contained" size="large" color="info"
-            disabled={roomSubmitting || roomCart.length === 0 || !roomCustomerName.trim()}
-            onClick={handleRoomSubmit}
-          >
-            {roomSubmitting ? 'Booking…' : 'Book Room'}
-          </Button>
-        </>)}
-
-        {/* ═══ Bar Cart (sub-tab 2) ═══ */}
-        {newOrderSubTab === 2 && (<>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>🍸 Bar Cart</Typography>
-
-          <TextField
-            fullWidth size="small" label="Customer Name" placeholder="Customer name (optional)"
-            value={barCustomerName} onChange={(e) => setBarCustomerName(e.target.value)}
-            sx={{ mb: 1 }}
-          />
-          <TextField
-            fullWidth size="small" label="Notes" placeholder="Order notes…"
-            value={barNotes} onChange={(e) => setBarNotes(e.target.value)}
-            multiline maxRows={2} sx={{ mb: 1 }}
-          />
-
-          <Divider sx={{ mb: 1 }} />
-
-          <Box sx={{ flex: 1, overflow: 'auto' }}>
-            {barCart.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-                Tap bar items to add
-              </Typography>
-            ) : (
-              barCart.map((item, i) => (
-                <Box key={i} sx={{ py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography variant="body2" fontWeight={600} noWrap>{item.name}</Typography>
-                    </Box>
-                    <Typography variant="body2" fontWeight={600}>{fmt(item.unit_price * item.quantity)}</Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-                    <IconButton size="small" onClick={() => updateBarCartQty(item.id, item.quantity - 1)}>
-                      <RemoveIcon fontSize="small" />
-                    </IconButton>
-                    <Typography variant="body2" sx={{ minWidth: 24, textAlign: 'center' }}>{item.quantity}</Typography>
-                    <IconButton size="small" onClick={() => updateBarCartQty(item.id, item.quantity + 1)}>
-                      <AddIcon fontSize="small" />
-                    </IconButton>
-                    <Box sx={{ flex: 1 }} />
-                    <IconButton size="small" color="error" onClick={() => removeFromBarCart(item.id)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-                </Box>
-              ))
-            )}
-          </Box>
-
-          <Divider sx={{ my: 1 }} />
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-            <Typography variant="h6" fontWeight={700}>Total</Typography>
-            <Typography variant="h6" fontWeight={700} color="primary">{fmt(barCartSubtotal)}</Typography>
-          </Box>
-
-          <Button
-            fullWidth variant="contained" size="large" color="warning"
-            disabled={barSubmitting || barCart.length === 0}
-            onClick={handleBarSubmit}
-          >
-            {barSubmitting ? 'Placing…' : `Place Bar Order — ${fmt(barCartSubtotal)}`}
-          </Button>
-        </>)}
-
-        {/* ═══ Services Cart (sub-tab 3) ═══ */}
-        {newOrderSubTab === 3 && (<>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>🧖 Services Cart</Typography>
-
-          <TextField
-            fullWidth size="small" label="Customer Name" placeholder="Customer name (optional)"
-            value={barCustomerName} onChange={(e) => setBarCustomerName(e.target.value)}
-            sx={{ mb: 1 }}
-          />
-          <TextField
-            fullWidth size="small" label="Notes" placeholder="Special requests…"
-            value={barNotes} onChange={(e) => setBarNotes(e.target.value)}
-            multiline maxRows={2} sx={{ mb: 1 }}
-          />
-
-          <Divider sx={{ mb: 1 }} />
-
-          <Box sx={{ flex: 1, overflow: 'auto' }}>
-            {barCart.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-                Add services to cart
-              </Typography>
-            ) : (
-              barCart.map((item, i) => (
-                <Box key={i} sx={{ py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="body2" fontWeight={600} noWrap sx={{ flex: 1 }}>{item.name}</Typography>
-                    <Typography variant="body2" fontWeight={600}>{fmt(item.unit_price * item.quantity)}</Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
-                    <Stack direction="row" alignItems="center" spacing={0.5}>
-                      <IconButton size="small" onClick={() => { setBarCart((prev) => prev.map((c, j) => j === i ? { ...c, quantity: Math.max(1, c.quantity - 1) } : c)); }}>
-                        <RemoveIcon fontSize="small" />
-                      </IconButton>
-                      <Typography variant="body2">{item.quantity}</Typography>
-                      <IconButton size="small" onClick={() => { setBarCart((prev) => prev.map((c, j) => j === i ? { ...c, quantity: c.quantity + 1 } : c)); }}>
-                        <AddIcon fontSize="small" />
-                      </IconButton>
-                    </Stack>
-                    <IconButton size="small" color="error" onClick={() => { setBarCart((prev) => prev.filter((_, j) => j !== i)); }}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-                </Box>
-              ))
-            )}
-          </Box>
-
-          <Divider sx={{ my: 1 }} />
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-            <Typography variant="h6" fontWeight={700}>Total</Typography>
-            <Typography variant="h6" fontWeight={700} color="primary">
-              {fmt(barCart.reduce((s, i) => s + i.unit_price * i.quantity, 0))}
-            </Typography>
-          </Box>
-
-          <Button
-            fullWidth variant="contained" size="large" color="secondary"
-            disabled={barSubmitting || barCart.length === 0}
-            onClick={handleBarSubmit}
-          >
-            {barSubmitting ? 'Submitting…' : 'Submit Service Order'}
-          </Button>
-        </>)}
+        </>
       </Paper>
 
       {/* Customer search dialog */}
-      <CustomerSearchDialog open={customerDialog} onClose={() => setCustomerDialog(false)} />
+      <CustomerSearchDialog open={customerDialog} onClose={() => setCustomerDialog(false)} onSelect={(_, name) => setCustomerName(name)} />
 
       {/* Customize item dialog (ingredients & extras) */}
       {customizeItem && (
@@ -1275,15 +1042,20 @@ function POSTerminalContent() {
           onClose={() => { setCustomizeDialog(false); setCustomizeItem(null); }}
           onAdd={(removedIngredients, selectedExtras) => {
             const variant = customizeItem.variants?.[0];
-            cart.addItem({
-              menuItemId: customizeItem.id,
-              variantId: variant?.id,
-              name: customizeItem.name,
-              variantName: variant?.name,
-              basePrice: variant ? customizeItem.base_price + (variant.price_adjustment ?? 0) : customizeItem.base_price,
-              modifiers: [],
-              removedIngredients,
-              selectedExtras,
+            const basePrice = variant ? customizeItem.base_price + (variant.price_adjustment ?? 0) : customizeItem.base_price;
+            const extrasPrice = selectedExtras.reduce((s, e) => s + e.price, 0);
+            const discount = removedIngredients.reduce((s, r) => s + r.cost_contribution, 0);
+            addToCart({
+              id: customizeItem.id,
+              name: customizeItem.name + (variant?.name ? ` (${variant.name})` : ''),
+              unit_price: basePrice + extrasPrice - discount,
+              quantity: 1,
+              source: 'menu',
+              menu_item_id: customizeItem.id,
+              variant_id: variant?.id,
+              variant_name: variant?.name,
+              removed_ingredients: removedIngredients,
+              selected_extras: selectedExtras,
             });
             setCustomizeDialog(false);
             setCustomizeItem(null);
@@ -1297,8 +1069,8 @@ function POSTerminalContent() {
           room={bookingDialogRoom}
           currency={currency}
           onClose={() => setBookingDialogRoom(null)}
-          onConfirm={(booking: RoomBarCartItem) => {
-            addToRoomCart(booking);
+          onConfirm={(booking: POSCartItem) => {
+            addToCart(booking);
             setBookingDialogRoom(null);
           }}
         />
@@ -1553,8 +1325,7 @@ function CustomizeItemDialog({
 }
 
 /* ─── Customer Search Dialog ─── */
-function CustomerSearchDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const cart = useCartStore();
+function CustomerSearchDialog({ open, onClose, onSelect }: { open: boolean; onClose: () => void; onSelect?: (id: string, name: string) => void }) {
   const { activeBranchId } = useAuth();
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<any[]>([]);
@@ -1588,7 +1359,7 @@ function CustomerSearchDialog({ open, onClose }: { open: boolean; onClose: () =>
           {results.map((c) => (
             <ListItem key={c.id} disablePadding>
               <ListItemButton onClick={() => {
-                cart.setCustomer(c.id, c.name, c.phone);
+                if (onSelect) onSelect(c.id, c.name);
                 onClose();
               }}>
                 <ListItemText primary={c.name} secondary={`${c.phone ?? ''} • ${c.loyalty_points ?? 0} pts`} />
@@ -1626,7 +1397,7 @@ function RoomBookingDialog({
   room: any;
   currency: string;
   onClose: () => void;
-  onConfirm: (item: RoomBarCartItem) => void;
+  onConfirm: (item: POSCartItem) => void;
 }) {
   const [numPeople, setNumPeople] = useState(1);
   const [checkIn, setCheckIn] = useState('');

@@ -141,9 +141,13 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
 
   const body = await req.json();
   if (!body.items || body.items.length === 0) return errorResponse('No items in order');
+  const orderType = body.order_type ?? 'dine_in';
   const hasRooms = (body.items as any[]).some((i: any) => i.source === 'room');
-  if (!body.table_id && !hasRooms) return errorResponse('Table selection is required (or add a room booking)');
-  if (!body.num_people || body.num_people < 1) return errorResponse('Number of people is required');
+  // Table required for dine-in orders only (unless rooms are in the order)
+  if (orderType === 'dine_in' && !body.table_id && !hasRooms) {
+    return errorResponse('Table selection is required for dine-in orders (or add a room booking)');
+  }
+  const numPeople = body.num_people ?? 1;
 
   const service = createServiceClient();
 
@@ -269,6 +273,17 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
           .eq('id', item.room_id)
           .eq('branch_id', branchId);
       }
+    } else if (item.source === 'other_service') {
+      // Other service item — no stock deduction needed
+      orderItems.push({
+        name: item.name,
+        quantity: item.quantity ?? 1,
+        unit_price: item.unit_price ?? 0,
+        source: 'other_service',
+        other_service_id: item.other_service_id,
+        ingredients: [],
+        extras: [],
+      });
     } else {
       // Menu item (available meal)
       orderItems.push({
@@ -299,7 +314,7 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
       table_id: body.table_id ?? null,
       customer_name: body.customer_name?.trim() || 'Walk In Customer',
       notes: body.notes ?? null,
-      source: 'bar',
+      source: body.source ?? 'bar',
       department: 'bar',
       subtotal,
       total,
@@ -349,7 +364,7 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
       .from('tables')
       .update({
         status: 'occupied',
-        num_people: body.num_people,
+        num_people: numPeople,
         assigned_customer_name: body.customer_name ?? null,
         current_order_id: order.id,
       })
@@ -383,7 +398,7 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
         duration_unit: bd.duration_unit ?? 'night',
         room_rate: Number(roomItem.unit_price ?? 0),
         status: 'pending_checkin',
-        source: 'bar',
+        source: body.source ?? 'bar',
         created_by: auth.userId,
         created_by_name: auth.name,
       });
