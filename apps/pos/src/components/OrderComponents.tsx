@@ -143,7 +143,7 @@ export function OrderDetailDialog({
           <>
             <Typography variant="body2" color="text.secondary" gutterBottom>
               {(d?.order_type && ORDER_TYPE_LABELS[d.order_type]) || d?.order_type}
-              {d?.source === 'online' ? ' · 🌐 Online' : ' · 🏪 POS'}
+              {d?.source === 'online' ? ' · 🌐 Online' : d?.source === 'other_services' ? ' · 🛎️ Services' : ' · 🏪 POS'}
               {d?.customer_name ? ` · ${d.customer_name}` : ''}
               {d?.customer_phone ? ` · ${d.customer_phone}` : ''}
               {d?.table_name ? ` · Table: ${d.table_name}` : ''}
@@ -527,9 +527,9 @@ export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickSta
         {showSource && (
           <Chip
             size="small"
-            label={order.source === 'online' ? '🌐 Online' : '🏪 Internal'}
+            label={order.source === 'online' ? '🌐 Online' : order.source === 'other_services' ? '🛎️ Services' : '🏪 Internal'}
             variant="outlined"
-            color={order.source === 'online' ? 'info' : 'default'}
+            color={order.source === 'online' ? 'info' : order.source === 'other_services' ? 'secondary' : 'default'}
             sx={{ fontSize: 10, height: 18, mt: 0.5 }}
           />
         )}

@@ -522,6 +522,29 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
         performed_by: auth.userId,
         performed_by_name: auth.name,
       });
+    } else if (item.source === 'other_service') {
+      // Other service item — no stock deduction needed
+      const sbd = item.booking_details ?? {};
+      const sDurationCount = Number(sbd.duration_count ?? item.quantity ?? 1);
+      const sDurationUnit = sbd.duration_unit ?? 'hourly';
+      const sScheduledStart = sbd.scheduled_start ?? null;
+      const sScheduledEnd = sbd.scheduled_end ?? null;
+
+      orderItems.push({
+        name: item.name,
+        quantity: sDurationCount,
+        unit_price: item.unit_price ?? 0,
+        source: 'other_service',
+        other_service_id: item.other_service_id,
+        ingredients: [{
+          type: 'service_booking',
+          duration_count: sDurationCount,
+          duration_unit: sDurationUnit,
+          scheduled_start: sScheduledStart,
+          scheduled_end: sScheduledEnd,
+        }],
+        extras: [],
+      });
     } else {
       // Menu item (available meal)
       orderItems.push({
@@ -541,6 +564,10 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
   const discountAmount = body.discount_amount ?? 0;
   const total = Math.max(0, subtotal - discountAmount);
 
+  // Service/room-only orders skip 'pending' → go directly to 'awaiting_payment'
+  const needsServing = orderItems.some((it: any) => it.source === 'menu' || it.source === 'accom_store' || it.source === 'bar_store');
+  const allServices = orderItems.every((it: any) => it.source === 'other_service');
+
   // Create order
   const { data: order, error: orderErr } = await service
     .from('orders')
@@ -548,13 +575,13 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
       company_id: auth.companyId,
       branch_id: branchId,
       order_type: body.order_type ?? 'dine_in',
-      status: 'pending',
+      status: needsServing ? 'pending' : 'awaiting_payment',
       table_id: body.table_id ?? null,
       linked_room_id: body.linked_room_id ?? null,
       linked_room_number: body.linked_room_number ?? null,
       customer_name: body.customer_name?.trim() || 'Walk In Customer',
       notes: body.notes ?? null,
-      source: 'accommodation',
+      source: allServices ? 'other_services' : 'accommodation',
       department: 'accommodation',
       subtotal,
       total,
@@ -582,7 +609,7 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
       quantity: it.quantity,
       unit_price: it.unit_price,
       item_total: it.unit_price * it.quantity,
-      station: (it.source === 'menu' ? 'kitchen' : 'accommodation') as any,
+      station: (it.source === 'other_service' ? 'other_services' : it.source === 'menu' ? 'kitchen' : 'accommodation') as any,
       status: 'pending' as const,
       modifiers: (it.ingredients ?? []).filter((i: any) => !i.removed),
       selected_extras: extras,
@@ -642,6 +669,40 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
         duration_count: Number(bd.duration_count ?? 1),
         duration_unit: bd.duration_unit ?? 'night',
         status: 'pending_checkin',
+      });
+    }
+  }
+
+  // Create service_bookings for any other_service items
+  const serviceItems = body.items.filter((i: any) => i.source === 'other_service');
+  for (const svcItem of serviceItems) {
+    const sbd = svcItem.booking_details ?? {};
+    if (svcItem.other_service_id) {
+      const { data: otherSvc } = await service
+        .from('other_services')
+        .select('name, charge_amount, charge_duration')
+        .eq('id', svcItem.other_service_id)
+        .single();
+
+      const durationCount = Number(sbd.duration_count ?? svcItem.quantity ?? 1);
+      const durationUnit = sbd.duration_unit ?? otherSvc?.charge_duration ?? 'hourly';
+
+      await service.from('service_bookings').insert({
+        company_id: auth.companyId,
+        branch_id: branchId,
+        service_id: svcItem.other_service_id,
+        service_name: otherSvc?.name ?? svcItem.name ?? '',
+        order_id: order.id,
+        order_number: order.order_number,
+        customer_name: body.customer_name?.trim() || 'Walk In Customer',
+        scheduled_start: sbd.scheduled_start ?? null,
+        scheduled_end: sbd.scheduled_end ?? null,
+        duration_count: durationCount,
+        duration_unit: durationUnit,
+        unit_price: Number(otherSvc?.charge_amount ?? svcItem.unit_price ?? 0),
+        status: 'pending_start',
+        created_by: auth.userId,
+        created_by_name: auth.name,
       });
     }
   }

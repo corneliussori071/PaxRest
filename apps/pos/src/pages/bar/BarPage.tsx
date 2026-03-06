@@ -266,6 +266,10 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           toast.error('This room is already in your cart');
           return prev;
         }
+        if (item.source === 'other_service') {
+          toast.error('This service is already in your cart');
+          return prev;
+        }
         const newQty = existing.quantity + 1;
         // Enforce stock limit for bar_store items
         if (item.source === 'bar_store' && item.max_qty != null && newQty > Number(item.max_qty)) {
@@ -283,7 +287,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
         toast.error(`${item.name} is out of stock`);
         return prev;
       }
-      return [...prev, { ...item, quantity: 1 }];
+      return [...prev, { ...item, quantity: item.quantity || 1 }];
     });
   };
 
@@ -291,7 +295,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
     setCart((prev) =>
       prev.map((c) => {
         if (c.id !== id || c.source !== source) return c;
-        if (c.source === 'room') return c; // Rooms always qty 1
+        if (c.source === 'room' || c.source === 'other_service') return c; // Rooms/services fixed qty
         const newQty = c.quantity + delta;
         if (newQty < 1) return c;
         // Enforce stock limit for bar_store items
@@ -351,7 +355,8 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const handleSubmit = async () => {
     if (cart.length === 0) return toast.error('Cart is empty');
     const hasRooms = cart.some((c) => c.source === 'room');
-    if (!selectedTable && !hasRooms) return toast.error('Select a table or add a room booking');
+    const hasServices = cart.some((c) => c.source === 'other_service');
+    if (!selectedTable && !hasRooms && !hasServices) return toast.error('Select a table or add a room/service booking');
     if (!numPeople || numPeople < 1) return toast.error('Enter number of people');
     // Validate room bookings
     for (const c of cart.filter((x) => x.source === 'room')) {

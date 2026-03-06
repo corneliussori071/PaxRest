@@ -400,7 +400,8 @@ function POSTerminalContent() {
     if (cart.length === 0) return toast.error('Cart is empty');
 
     const hasRooms = cart.some((c) => c.source === 'room');
-    if (orderType === 'dine_in' && !tableId && !hasRooms) {
+    const hasServices = cart.some((c) => c.source === 'other_service');
+    if (orderType === 'dine_in' && !tableId && !hasRooms && !hasServices) {
       return toast.error('Select a table or add a room booking');
     }
 

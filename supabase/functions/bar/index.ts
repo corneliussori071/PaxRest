@@ -315,6 +315,10 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
   const discountAmount = body.discount_amount ?? 0;
   const total = Math.max(0, subtotal - discountAmount);
 
+  // Service/room-only orders skip 'pending' → go directly to 'awaiting_payment'
+  const needsServing = orderItems.some((it: any) => it.source === 'menu' || it.source === 'bar_store');
+  const allServices = orderItems.every((it: any) => it.source === 'other_service');
+
   // Create order
   const { data: order, error: orderErr } = await service
     .from('orders')
@@ -322,11 +326,11 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
       company_id: auth.companyId,
       branch_id: branchId,
       order_type: body.order_type ?? 'dine_in',
-      status: 'pending',
+      status: needsServing ? 'pending' : 'awaiting_payment',
       table_id: body.table_id ?? null,
       customer_name: body.customer_name?.trim() || 'Walk In Customer',
       notes: body.notes ?? null,
-      source: body.source ?? 'bar',
+      source: allServices ? 'other_services' : (body.source ?? 'bar'),
       department: 'bar',
       subtotal,
       total,
