@@ -657,28 +657,44 @@ async function createSpecialRequest(req: Request) {
 
   if (!branch) return errorResponse('Branch not found', 404);
 
-  // Upsert customer
-  let customerId: string | null = null;
-  const { data: existing } = await service
-    .from('customers')
-    .select('id')
-    .eq('company_id', branch.company_id)
-    .eq('phone', body.customer_phone)
-    .maybeSingle();
+  // Prefer authenticated customer (same pattern as regular order endpoint)
+  const authedCustomer = await resolveCustomer(req);
+  let customerId: string | null = authedCustomer?.id ?? null;
 
-  if (existing) {
-    customerId = existing.id;
-  } else {
-    const { data: newCust } = await service
+  if (customerId) {
+    // Keep name/phone up-to-date on the auth-linked row
+    await service
       .from('customers')
-      .insert({
-        company_id: branch.company_id,
+      .update({
         name: sanitizeString(body.customer_name),
         phone: body.customer_phone,
-        email: body.customer_email ?? null,
+        email: body.customer_email ?? undefined,
+        updated_at: new Date().toISOString(),
       })
-      .select('id').single();
-    customerId = newCust?.id ?? null;
+      .eq('id', customerId);
+  } else {
+    // Fall back: find-or-create by phone (unauthenticated users)
+    const { data: existing } = await service
+      .from('customers')
+      .select('id')
+      .eq('company_id', branch.company_id)
+      .eq('phone', body.customer_phone)
+      .maybeSingle();
+
+    if (existing) {
+      customerId = existing.id;
+    } else {
+      const { data: newCust } = await service
+        .from('customers')
+        .insert({
+          company_id: branch.company_id,
+          name: sanitizeString(body.customer_name),
+          phone: body.customer_phone,
+          email: body.customer_email ?? null,
+        })
+        .select('id').single();
+      customerId = newCust?.id ?? null;
+    }
   }
 
   // Build items array from various input formats:

@@ -163,17 +163,31 @@ export function OrderDetailDialog({
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {items.map((it: any, idx: number) => (
+                  {items.map((it: any, idx: number) => {
+                    const extras: any[] = Array.isArray(it.selected_extras) ? it.selected_extras : [];
+                    const removed: any[] = Array.isArray(it.removed_ingredients) ? it.removed_ingredients : [];
+                    return (
                     <TableRow key={it.id ?? idx}>
                       <TableCell>
                         {it.item_name ?? it.menu_item_name ?? it.name}
                         {it.variant_name ? <Typography variant="caption" display="block" color="text.secondary">{it.variant_name}</Typography> : null}
+                        {extras.length > 0 && extras.map((e: any, i: number) => (
+                          <Typography key={i} variant="caption" display="block" color="success.main">
+                            + {e.name} (+{formatCurrency(e.price ?? 0, currency)})
+                          </Typography>
+                        ))}
+                        {removed.length > 0 && removed.map((r: any, i: number) => (
+                          <Typography key={i} variant="caption" display="block" color="error.main">
+                            − {r.name}{(r.cost_contribution ?? 0) > 0 ? ` (−${formatCurrency(r.cost_contribution, currency)})` : ''}
+                          </Typography>
+                        ))}
                       </TableCell>
                       <TableCell align="right">{it.quantity}</TableCell>
                       <TableCell align="right">{formatCurrency(it.unit_price ?? it.price ?? 0, currency)}</TableCell>
                       <TableCell align="right">{formatCurrency(it.line_total ?? it.item_total ?? ((it.quantity ?? 0) * (it.unit_price ?? it.price ?? 0)), currency)}</TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             ) : (

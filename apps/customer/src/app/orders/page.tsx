@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Container, Typography, Card, CardContent, Stack,
   Chip, Divider, Button, Skeleton, TextField, InputAdornment, Alert,
+  Pagination,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
@@ -43,26 +44,43 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(false);
   const [phone, setPhone] = useState('');
   const [searched, setSearched] = useState(false);
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+
+  const fetchOrders = (pg: number) => {
+    setLoading(true);
+    setSearched(true);
+    const params = new URLSearchParams({ page: String(pg), page_size: String(PAGE_SIZE) });
+    if (branchId) params.set('branch_id', branchId);
+    publicApi<{ orders: OrderSummary[]; total: number; total_pages?: number }>(`/customer/my-orders?${params}`)
+      .then((res) => {
+        setOrders(res.data?.orders ?? []);
+        const tp = res.data?.total_pages ?? Math.ceil((res.data?.total ?? 0) / PAGE_SIZE);
+        setTotalPages(Math.max(1, tp));
+      })
+      .catch(() => { setOrders([]); setTotalPages(1); })
+      .finally(() => setLoading(false));
+  };
 
   // Auto-load account orders when signed in
   useEffect(() => {
     if (!profile) return;
-    setLoading(true);
-    setSearched(true);
-    const params = new URLSearchParams({ page: '1', page_size: '20' });
-    if (branchId) params.set('branch_id', branchId);
-    publicApi<{ orders: OrderSummary[]; total: number }>(`/customer/my-orders?${params}`)
-      .then((res) => setOrders(res.data?.orders ?? []))
-      .catch(() => setOrders([]))
-      .finally(() => setLoading(false));
+    setPage(1);
+    fetchOrders(1);
   }, [profile, branchId]);
+
+  const handlePageChange = (_: unknown, value: number) => {
+    setPage(value);
+    if (profile) fetchOrders(value);
+  };
 
   const handleSearch = async () => {
     if (!phone.trim()) return;
     setLoading(true);
     setSearched(true);
     try {
-      const res = await publicApi<{ data: OrderSummary[] }>(`/orders/list?customer_phone=${encodeURIComponent(phone)}&page_size=20`);
+      const res = await publicApi<{ data: OrderSummary[] }>(`/orders/list?customer_phone=${encodeURIComponent(phone)}&page_size=${PAGE_SIZE}`);
       setOrders(res.data?.data ?? []);
     } catch {
       setOrders([]);
@@ -147,6 +165,12 @@ export default function OrdersPage() {
           </CardContent>
         </Card>
       ))}
+
+      {!loading && profile && totalPages > 1 && (
+        <Box display="flex" justifyContent="center" sx={{ mt: 3 }}>
+          <Pagination count={totalPages} page={page} onChange={handlePageChange} color="primary" />
+        </Box>
+      )}
     </Container>
   );
 }

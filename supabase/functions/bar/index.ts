@@ -342,18 +342,27 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
 
   // Insert order items — use null for non-menu items (bar-store/internal) since they
   // have no menu_items FK reference. menu_item_id is now nullable in the schema.
-  const orderItemRows = orderItems.map((it) => ({
-    order_id: order.id,
-    menu_item_id: it.menu_item_id ?? null,
-    menu_item_name: it.name,
-    quantity: it.quantity,
-    unit_price: it.unit_price,
-    item_total: it.unit_price * it.quantity,
-    station: (it.source === 'room' ? 'accommodation' : it.source === 'other_service' ? 'other_services' : it.source === 'menu' ? 'kitchen' : 'bar') as any,
-    status: 'pending' as const,
-    modifiers: it.ingredients ?? [],
-    selected_extras: it.extras ?? [],
-  }));
+  const orderItemRows = orderItems.map((it) => {
+    const extras = it.extras ?? [];
+    const removedIngredients = (it.ingredients ?? []).filter((i: any) => i.removed);
+    const extrasTotal = extras.reduce((s: number, e: any) => s + (Number(e.price) || 0), 0);
+    const ingredientsDiscount = removedIngredients.reduce((s: number, r: any) => s + (Number(r.cost_contribution) || 0), 0);
+    return {
+      order_id: order.id,
+      menu_item_id: it.menu_item_id ?? null,
+      menu_item_name: it.name,
+      quantity: it.quantity,
+      unit_price: it.unit_price,
+      item_total: it.unit_price * it.quantity,
+      station: (it.source === 'room' ? 'accommodation' : it.source === 'other_service' ? 'other_services' : it.source === 'menu' ? 'kitchen' : 'bar') as any,
+      status: 'pending' as const,
+      modifiers: (it.ingredients ?? []).filter((i: any) => !i.removed),
+      selected_extras: extras,
+      removed_ingredients: removedIngredients,
+      extras_total: extrasTotal,
+      ingredients_discount: ingredientsDiscount,
+    };
+  });
 
   const { error: itemsErr } = await service.from('order_items').insert(orderItemRows);
   if (itemsErr) return errorResponse(`Failed to save order items: ${itemsErr.message}`);

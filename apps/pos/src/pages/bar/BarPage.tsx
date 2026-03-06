@@ -99,11 +99,13 @@ interface CartExtra {
 }
 
 interface BookingDetails {
-  num_people: number;
-  check_in: string;
+  num_people?: number;
+  check_in?: string;
   check_out?: string;
   duration_count: number;
   duration_unit: string;
+  scheduled_start?: string;
+  scheduled_end?: string;
 }
 
 interface BarCartItem {
@@ -135,6 +137,9 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [rooms, setRooms] = useState<any[]>([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [bookingDialogRoom, setBookingDialogRoom] = useState<any>(null);
+
+  // Service booking dialog (opened when user clicks a service in the picker)
+  const [bookingDialogService, setBookingDialogService] = useState<any>(null);
 
   // Bar store items
   const [storeItems, setStoreItems] = useState<any[]>([]);
@@ -351,6 +356,12 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
     // Validate room bookings
     for (const c of cart.filter((x) => x.source === 'room')) {
       if (!c.booking_details?.check_in || !c.booking_details?.duration_count) {
+        return toast.error(`Missing booking details for ${c.name}. Remove and re-add it.`);
+      }
+    }
+    // Validate service bookings
+    for (const c of cart.filter((x) => x.source === 'other_service')) {
+      if (!c.booking_details?.scheduled_start || !c.booking_details?.duration_count) {
         return toast.error(`Missing booking details for ${c.name}. Remove and re-add it.`);
       }
     }
@@ -647,14 +658,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   <Card
                     key={svc.id}
                     sx={{ width: 200, cursor: 'pointer', '&:hover': { boxShadow: 4 }, transition: '0.15s' }}
-                    onClick={() => addToCart({
-                      id: svc.id,
-                      name: svc.name,
-                      unit_price: svc.charge_amount,
-                      quantity: 1,
-                      source: 'other_service',
-                      other_service_id: svc.id,
-                    })}
+                    onClick={() => setBookingDialogService(svc)}
                   >
                     <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
                       {svc.media_url && (
@@ -874,6 +878,19 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
           setBookingDialogRoom(null);
         }}
       />
+
+      {/* Service Booking Dialog */}
+      {bookingDialogService && (
+        <ServiceBookingDialog
+          service={bookingDialogService}
+          currency={currency}
+          onClose={() => setBookingDialogService(null)}
+          onConfirm={(item) => {
+            addToCart(item);
+            setBookingDialogService(null);
+          }}
+        />
+      )}
 
       {/* Meal Detail Dialog — ingredients, extras, print/PDF */}
       <Dialog open={mealDetailOpen} onClose={() => setMealDetailOpen(false)} maxWidth="md" fullWidth>
@@ -1132,6 +1149,158 @@ function BarRoomBookingDialog({
 
 // Alias so CreateOrderTab uses BarRoomBookingDialog as RoomBookingDialog
 const RoomBookingDialog = BarRoomBookingDialog;
+
+/* ─── Duration calculator (calendar-night / day / hour) ─── */
+function calcServiceDuration(ciStr: string, coStr: string, unit: string): number {
+  if (!ciStr || !coStr) return 0;
+  const ci = new Date(ciStr).getTime();
+  const co = new Date(coStr).getTime();
+  if (isNaN(ci) || isNaN(co) || co <= ci) return 0;
+  const diffMs = co - ci;
+  if (unit === 'hour') return Math.max(1, Math.ceil(diffMs / 3_600_000));
+  if (unit === 'day')  return Math.max(1, Math.ceil(diffMs / 86_400_000));
+  const ciMidnight = new Date(new Date(ciStr).toDateString()).getTime();
+  const coMidnight = new Date(new Date(coStr).toDateString()).getTime();
+  return Math.max(1, Math.round((coMidnight - ciMidnight) / 86_400_000));
+}
+
+function serviceDurationUnit(chargeDuration: string): string {
+  switch (chargeDuration) {
+    case 'hourly': return 'hour';
+    case 'daily': return 'day';
+    case 'weekly': return 'week';
+    case 'monthly': return 'month';
+    case 'per_session': case 'once': return 'session';
+    default: return 'hour';
+  }
+}
+
+/* ─── Service Booking Dialog ─── */
+function ServiceBookingDialog({
+  service, currency, onClose, onConfirm,
+}: {
+  service: any;
+  currency: string;
+  onClose: () => void;
+  onConfirm: (item: BarCartItem) => void;
+}) {
+  const [scheduledStart, setScheduledStart] = useState('');
+  const [scheduledEnd, setScheduledEnd] = useState('');
+  const [durationCount, setDurationCount] = useState(1);
+
+  useEffect(() => {
+    if (service) { setScheduledStart(''); setScheduledEnd(''); setDurationCount(1); }
+  }, [service]);
+
+  const DURATION_LABELS: Record<string, string> = {
+    once: '', per_session: '/session', hourly: '/hr', daily: '/day', weekly: '/wk', monthly: '/mo',
+  };
+
+  const chargeDuration = service?.charge_duration ?? 'hourly';
+  const dUnit = serviceDurationUnit(chargeDuration);
+  const autoDuration = (scheduledStart && scheduledEnd) ? calcServiceDuration(scheduledStart, scheduledEnd, dUnit) : 0;
+  const effectiveDuration = autoDuration > 0 ? autoDuration : durationCount;
+  const unitPrice = Number(service?.charge_amount ?? 0);
+  const total = unitPrice * effectiveDuration;
+
+  const handleConfirm = () => {
+    if (!scheduledStart) return toast.error('Start date & time is required');
+    if (effectiveDuration < 1) return toast.error(`Duration must be at least 1 ${dUnit}`);
+
+    onConfirm({
+      id: service.id,
+      name: service.name,
+      unit_price: unitPrice,
+      quantity: effectiveDuration,
+      source: 'other_service',
+      other_service_id: service.id,
+      booking_details: {
+        duration_count: effectiveDuration,
+        duration_unit: chargeDuration,
+        scheduled_start: new Date(scheduledStart).toISOString(),
+        scheduled_end: scheduledEnd ? new Date(scheduledEnd).toISOString() : undefined,
+      },
+    });
+  };
+
+  return (
+    <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <SpaIcon />
+          <Typography variant="h6">Book {service?.name}</Typography>
+        </Stack>
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
+            <Typography variant="body2"><strong>Service:</strong> {service?.name}</Typography>
+            <Typography variant="body2">
+              <strong>Rate:</strong> {formatCurrency(unitPrice, currency)}{DURATION_LABELS[chargeDuration] ?? ''}
+            </Typography>
+            {service?.description && (
+              <Typography variant="body2" color="text.secondary">{service.description}</Typography>
+            )}
+          </Paper>
+
+          <TextField
+            label="Start Date & Time *"
+            type="datetime-local"
+            fullWidth
+            value={scheduledStart}
+            onChange={(e) => setScheduledStart(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+          />
+
+          <TextField
+            label="End Date & Time (auto-calculates duration)"
+            type="datetime-local"
+            fullWidth
+            value={scheduledEnd}
+            onChange={(e) => setScheduledEnd(e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText={scheduledEnd && scheduledStart && autoDuration > 0
+              ? `${autoDuration} ${dUnit}${autoDuration !== 1 ? 's' : ''}`
+              : 'Optional — set to auto-calculate duration'}
+          />
+
+          {autoDuration > 0 ? (
+            <Alert severity="info" icon={<CalendarTodayIcon fontSize="small" />} sx={{ py: 0.5 }}>
+              <Typography variant="body2">
+                <strong>{effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''}</strong> — auto-calculated
+              </Typography>
+            </Alert>
+          ) : (
+            <TextField
+              label={`Duration (${dUnit}s) *`}
+              type="number"
+              fullWidth
+              value={durationCount}
+              onChange={(e) => setDurationCount(Math.max(1, Number(e.target.value)))}
+              inputProps={{ min: 1 }}
+              helperText="Set an end date to auto-calculate"
+            />
+          )}
+
+          <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'secondary.main', color: 'secondary.contrastText', borderRadius: 1 }}>
+            <Typography variant="h6" fontWeight={700}>
+              Total: {formatCurrency(total, currency)}
+            </Typography>
+            <Typography variant="caption">
+              {effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(unitPrice, currency)}
+            </Typography>
+          </Paper>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" color="secondary" startIcon={<AddIcon />} onClick={handleConfirm}>
+          Add to Cart
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
 
 /* ═══════════════════════════════════════════════════════
    Tab 2 — Pending Orders
