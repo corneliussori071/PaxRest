@@ -124,8 +124,8 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
   return (
     <Box>
       <OrdersGrid
-        defaultStatus="pending"
-        statusOptions={['pending', 'confirmed', 'preparing', 'ready']}
+        defaultStatus=""
+        statusOptions={['', 'awaiting_approval', 'pending', 'confirmed', 'preparing', 'ready']}
         currency={currency}
         effectiveBranchId={branchId}
         onViewDetail={setDetailOrder}

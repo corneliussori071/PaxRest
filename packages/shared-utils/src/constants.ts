@@ -85,6 +85,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<CompanyRole, Permission[]> = {
 // ─── Order Status Transitions ───────────────────────────────────────────────
 
 export const VALID_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  awaiting_approval: ['pending', 'awaiting_payment', 'cancelled'],
+  awaiting_payment: ['pending', 'completed', 'cancelled'],
   pending: ['confirmed', 'preparing', 'cancelled'],
   confirmed: ['preparing', 'cancelled'],
   preparing: ['ready', 'cancelled'],

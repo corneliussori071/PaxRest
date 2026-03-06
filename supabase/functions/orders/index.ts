@@ -35,6 +35,8 @@ serve(async (req) => {
       }
       case 'update-status':
         return await updateOrderStatus(req, supabase, auth);
+      case 'price-special-request':
+        return await priceSpecialRequest(req, supabase, auth);
       case 'add-payment':
         return await addPayment(req, supabase, auth);
       case 'void':
@@ -250,6 +252,66 @@ async function updateOrderStatus(req: Request, supabase: any, auth: AuthContext)
   return jsonResponse(data);
 }
 
+// ─── Price Special Request ──────────────────────────────────────────────────
+
+async function priceSpecialRequest(req: Request, supabase: any, auth: AuthContext) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_orders')) return errorResponse('Forbidden', 403);
+
+  const body = await req.json();
+  if (!body.order_id || body.price == null) {
+    return errorResponse('Missing order_id or price');
+  }
+
+  const price = Number(body.price);
+  if (isNaN(price) || price < 0) return errorResponse('Invalid price');
+
+  const service = createServiceClient();
+
+  // Verify order exists and is a special request in awaiting_approval
+  const { data: order, error: fetchErr } = await service
+    .from('orders')
+    .select('id, status, is_special_request, company_id, branch_id')
+    .eq('id', body.order_id)
+    .single();
+
+  if (fetchErr || !order) return errorResponse('Order not found', 404);
+  if (!order.is_special_request) return errorResponse('Order is not a special request');
+  if (order.status !== 'awaiting_approval') return errorResponse('Order is not awaiting approval');
+
+  // Update order_items price (set all items to this price / or just the first one)
+  const { data: items } = await service
+    .from('order_items')
+    .select('id')
+    .eq('order_id', body.order_id)
+    .order('created_at', { ascending: true });
+
+  if (items && items.length > 0) {
+    // Update the first (usually only) item
+    await service
+      .from('order_items')
+      .update({ unit_price: price, line_total: price })
+      .eq('id', items[0].id);
+  }
+
+  // Update order totals
+  await service
+    .from('orders')
+    .update({ subtotal: price, total: price })
+    .eq('id', body.order_id);
+
+  // Transition to awaiting_payment
+  await service.rpc('update_order_status', {
+    p_order_id: body.order_id,
+    p_new_status: 'awaiting_payment',
+    p_changed_by: auth.userId,
+    p_changed_by_name: auth.email,
+    p_notes: `Special request priced at ${price}`,
+  });
+
+  return jsonResponse({ success: true, price });
+}
+
 // ─── Add Payment to Order ───────────────────────────────────────────────────
 
 async function addPayment(req: Request, supabase: any, auth: AuthContext) {
@@ -286,21 +348,26 @@ async function addPayment(req: Request, supabase: any, auth: AuthContext) {
 
   const { data: order } = await supabase
     .from('orders')
-    .select('total, status')
+    .select('total, status, is_special_request')
     .eq('id', body.order_id)
     .single();
 
   if (payments && order) {
     const totalPaid = payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
     if (totalPaid >= Number(order.total) && order.status !== 'completed') {
-      // Use RPC to update status so history is recorded and table is freed
+      // Special requests: after payment, go to pending (kitchen needs to prepare)
+      // Normal orders: auto-complete
+      const nextStatus = order.is_special_request ? 'pending' : 'completed';
+      const note = order.is_special_request
+        ? 'Payment received — entering kitchen queue'
+        : 'Auto-completed: payment received in full';
       const service = createServiceClient();
       await service.rpc('update_order_status', {
         p_order_id: body.order_id,
-        p_new_status: 'completed',
+        p_new_status: nextStatus,
         p_changed_by: auth.userId,
         p_changed_by_name: body.processed_by_name ?? auth.email,
-        p_notes: 'Auto-completed: payment received in full',
+        p_notes: note,
       });
     }
   }

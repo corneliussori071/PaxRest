@@ -10,6 +10,7 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import RestaurantIcon from '@mui/icons-material/Restaurant';
 import DoneAllIcon from '@mui/icons-material/DoneAll';
+import PaymentIcon from '@mui/icons-material/Payment';
 import { publicApi, supabase } from '@/lib/supabase';
 import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
 import type { OrderStatus } from '@paxrest/shared-types';
@@ -18,6 +19,7 @@ import Link from 'next/link';
 
 const ORDER_STEPS = [
   { status: 'awaiting_approval' as OrderStatus, label: 'Awaiting Approval', icon: <AccessTimeIcon /> },
+  { status: 'awaiting_payment' as OrderStatus, label: 'Pending Payment', icon: <PaymentIcon /> },
   { status: 'pending' as OrderStatus, label: 'Order Placed', icon: <AccessTimeIcon /> },
   { status: 'confirmed' as OrderStatus, label: 'Confirmed', icon: <CheckCircleIcon /> },
   { status: 'preparing' as OrderStatus, label: 'Preparing', icon: <RestaurantIcon /> },
@@ -41,6 +43,8 @@ interface OrderDetail {
   customer_name: string;
   customer_phone: string;
   notes: string | null;
+  is_special_request?: boolean;
+  special_request_notes?: string | null;
   created_at: string;
   updated_at: string;
   items: { name: string; quantity: number; unit_price: number; modifiers: any[] }[];
@@ -104,10 +108,15 @@ export default function TrackOrderPage() {
     );
   }
 
-  const steps = order.order_type === 'delivery' ? ORDER_STEPS : PICKUP_STEPS;
+  const allSteps = order.order_type === 'delivery' ? ORDER_STEPS : PICKUP_STEPS;
+  // Only show approval/payment steps for special requests
+  const steps = order.is_special_request
+    ? allSteps
+    : allSteps.filter((s) => s.status !== 'awaiting_approval' && s.status !== 'awaiting_payment');
   const activeStepIdx = steps.findIndex((s) => s.status === order.status);
   const isCancelled = order.status === 'cancelled';
   const isComplete = order.status === 'delivered' || order.status === 'completed';
+  const isAwaitingPayment = order.status === 'awaiting_payment';
 
   return (
     <Container maxWidth="sm" sx={{ py: 4 }}>
@@ -118,13 +127,18 @@ export default function TrackOrderPage() {
       {/* Status banner */}
       <Card sx={{
         mb: 3,
-        bgcolor: isCancelled ? 'error.light' : isComplete ? 'success.light' : 'primary.light',
+        bgcolor: isCancelled ? 'error.light' : isComplete ? 'success.light' : isAwaitingPayment ? 'warning.light' : 'primary.light',
         color: '#fff',
       }}>
         <CardContent sx={{ textAlign: 'center' }}>
           <Typography variant="h5" fontWeight={700}>
-            {isCancelled ? '❌ Order Cancelled' : isComplete ? '✅ Order Complete' : '⏳ ' + (steps[activeStepIdx]?.label || order.status)}
+            {isCancelled ? '❌ Order Cancelled' : isComplete ? '✅ Order Complete' : isAwaitingPayment ? '💳 Payment Required' : '⏳ ' + (steps[activeStepIdx]?.label || order.status)}
           </Typography>
+          {isAwaitingPayment && (
+            <Typography variant="body1" sx={{ opacity: 0.95, mt: 1 }}>
+              Your special request has been priced at <strong>{formatCurrency(order.total)}</strong>. Please proceed to payment.
+            </Typography>
+          )}
           <Typography variant="body2" sx={{ opacity: 0.9, mt: 1 }}>
             Placed {formatDateTime(order.created_at)}
           </Typography>

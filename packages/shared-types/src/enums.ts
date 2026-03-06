@@ -71,6 +71,8 @@ export type SysAdminPermission =
 export type OrderType = 'dine_in' | 'takeaway' | 'delivery' | 'online';
 
 export type OrderStatus =
+  | 'awaiting_approval'
+  | 'awaiting_payment'
   | 'pending'
   | 'confirmed'
   | 'preparing'

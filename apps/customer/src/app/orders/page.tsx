@@ -25,6 +25,7 @@ interface OrderSummary {
 
 const STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'error' | 'info'> = {
   awaiting_approval: 'warning',
+  awaiting_payment: 'error',
   pending: 'warning',
   confirmed: 'info',
   preparing: 'primary',

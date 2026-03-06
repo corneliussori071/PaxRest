@@ -68,6 +68,7 @@ export function OrderDetailDialog({
   const [actioning, setActioning] = useState(false);
   const [riderDialogOpen, setRiderDialogOpen] = useState(false);
   const [deliveryRecord, setDeliveryRecord] = useState<any>(null);
+  const [pricingDialogOpen, setPricingDialogOpen] = useState(false);
 
   React.useEffect(() => {
     if (!order) { setDetail(null); setDeliveryRecord(null); return; }
@@ -223,9 +224,15 @@ export function OrderDetailDialog({
       <DialogActions sx={{ flexWrap: 'wrap', gap: 1, px: 3, py: 2 }}>
         {d?.status === 'awaiting_approval' && (
           <>
-            <Button variant="contained" color="success" size="small" disabled={actioning} onClick={() => doStatus('pending')}>
-              Approve
-            </Button>
+            {d?.is_special_request ? (
+              <Button variant="contained" color="success" size="small" disabled={actioning} onClick={() => setPricingDialogOpen(true)}>
+                Approve & Set Price
+              </Button>
+            ) : (
+              <Button variant="contained" color="success" size="small" disabled={actioning} onClick={() => doStatus('pending')}>
+                Approve
+              </Button>
+            )}
             <Button variant="outlined" color="error" size="small" disabled={actioning} onClick={() => doStatus('cancelled')}>
               Decline
             </Button>
@@ -288,6 +295,22 @@ export function OrderDetailDialog({
         onAssigned={() => {
           setRiderDialogOpen(false);
           doStatus('out_for_delivery');
+        }}
+      />
+
+      {/* Special Request Pricing Dialog */}
+      <SpecialRequestPricingDialog
+        open={pricingDialogOpen}
+        orderNumber={d?.order_number}
+        specialRequestNotes={d?.special_request_notes}
+        orderId={d?.id}
+        branchId={effectiveBranchId}
+        currency={currency}
+        onClose={() => setPricingDialogOpen(false)}
+        onPriced={() => {
+          setPricingDialogOpen(false);
+          setDetail((prev: any) => ({ ...prev, status: 'awaiting_payment' }));
+          onStatusChange?.();
         }}
       />
     </Dialog>
@@ -361,6 +384,78 @@ function RiderAssignDialog({ open, orderNumber, deliveryRecord, orderId, branchI
         <Button onClick={onClose} disabled={saving}>Cancel</Button>
         <Button variant="contained" onClick={handleAssign} disabled={saving || riders.length === 0 || !riderId}>
           {saving ? <CircularProgress size={20} /> : 'Assign & Dispatch'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ─── Special Request Pricing Dialog ─────────────────────────────────────────
+function SpecialRequestPricingDialog({ open, orderNumber, specialRequestNotes, orderId, branchId, currency, onClose, onPriced }: {
+  open: boolean;
+  orderNumber?: string;
+  specialRequestNotes?: string;
+  orderId?: string;
+  branchId: string;
+  currency: string;
+  onClose: () => void;
+  onPriced: () => void;
+}) {
+  const [price, setPrice] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    const numPrice = Number(price);
+    if (!price || isNaN(numPrice) || numPrice <= 0) {
+      toast.error('Enter a valid price');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api('orders', 'price-special-request', {
+        method: 'POST',
+        body: { order_id: orderId, price: numPrice },
+        branchId,
+      });
+      toast.success(`Order #${orderNumber} priced at ${formatCurrency(numPrice, currency)}`);
+      setPrice('');
+      onPriced();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to set price');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} fullWidth maxWidth="xs" onClose={onClose}>
+      <DialogTitle>Set Price — Order #{orderNumber}</DialogTitle>
+      <DialogContent sx={{ pt: 2 }}>
+        {specialRequestNotes && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2" fontWeight={700}>⭐ Customer Request</Typography>
+            <Typography variant="body2">{specialRequestNotes}</Typography>
+          </Alert>
+        )}
+        <TextField
+          fullWidth
+          label="Price"
+          type="number"
+          size="small"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          slotProps={{
+            input: { startAdornment: <InputAdornment position="start">{currency}</InputAdornment> },
+            htmlInput: { min: 0, step: 0.01 },
+          }}
+          sx={{ mt: 1 }}
+          autoFocus
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button variant="contained" color="success" onClick={handleSubmit} disabled={saving || !price}>
+          {saving ? <CircularProgress size={20} /> : 'Approve & Set Price'}
         </Button>
       </DialogActions>
     </Dialog>
@@ -447,10 +542,13 @@ export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickSta
 
       <CardActions sx={{ pt: 0, px: 2, pb: 1.5, gap: 0.75 }}>
         <Button size="small" startIcon={<VisibilityIcon />} onClick={() => onViewDetail(order)}>Details</Button>
-        {order.status === 'awaiting_approval' && onQuickStatus && (
+        {order.status === 'awaiting_approval' && !order.is_special_request && onQuickStatus && (
           <Button size="small" variant="contained" color="success" onClick={() => onQuickStatus(order, 'pending')}>
             Approve
           </Button>
+        )}
+        {order.status === 'awaiting_approval' && order.is_special_request && (
+          <Chip size="small" label="⭐ Needs Pricing" color="warning" sx={{ fontSize: 10, height: 22 }} />
         )}
         {showServed && order.order_type !== 'delivery' && onQuickStatus && (
           <Button size="small" variant="contained" color="success" onClick={() => onQuickStatus(order, servedTarget)}>
