@@ -856,7 +856,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
         <Button
           variant="contained" fullWidth size="large"
-          disabled={submitting || cart.length === 0 || (!selectedTable && !cart.some((c) => c.source === 'room'))}
+          disabled={submitting || cart.length === 0 || (!selectedTable && !cart.some((c) => c.source === 'room' || c.source === 'other_service'))}
           onClick={handleSubmit}
         >
           {submitting ? 'Processing…' : `Place Order — ${fmt(subtotal)}`}
