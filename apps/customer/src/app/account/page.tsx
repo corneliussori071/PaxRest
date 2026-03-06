@@ -283,7 +283,8 @@ function ProfilePanel() {
                             color={
                               o.status === 'delivered' || o.status === 'completed' ? 'success' :
                               o.status === 'cancelled' ? 'error' :
-                              o.status === 'awaiting_approval' ? 'warning' : 'default'
+                              o.status === 'awaiting_approval' ? 'warning' :
+                              o.status === 'awaiting_payment' ? 'error' : 'default'
                             }
                           />
                         </Stack>

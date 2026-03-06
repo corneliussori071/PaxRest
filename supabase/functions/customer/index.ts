@@ -76,6 +76,7 @@ serve(async (req) => {
       case 'book-room':       return await bookRoom(req);
       case 'services':        return await getPublicServices(req);
       case 'book-service':    return await bookService(req);
+      case 'pay-order':       return await payOrder(req);
       default:             return errorResponse('Unknown customer action', 404);
     }
   } catch (err) {
@@ -1129,4 +1130,60 @@ async function bookService(req: Request) {
     total,
     message: `Service booked! Your reference is #${orderNumber}.`,
   }, 201);
+}
+
+// ─── POST /customer/pay-order ────────────────────────────────────────────────
+// Creates a Stripe Checkout Session for an order in awaiting_payment status.
+// Public — requires order_id. Returns { url } for redirect.
+
+async function payOrder(req: Request) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+
+  const body = await req.json().catch(() => null);
+  if (!body?.order_id) return errorResponse('Missing order_id');
+
+  const service = createServiceClient();
+
+  const { data: order, error: fetchErr } = await service
+    .from('orders')
+    .select('id, order_number, total, status, is_special_request, company_id, branch_id, customer_name, customer_phone')
+    .eq('id', body.order_id)
+    .single();
+
+  if (fetchErr || !order) return errorResponse('Order not found', 404);
+  if (order.status !== 'awaiting_payment') {
+    return errorResponse('Order is not awaiting payment');
+  }
+  if (Number(order.total) <= 0) return errorResponse('Order has no total to pay');
+
+  const { getStripe } = await import('../_shared/stripe.ts');
+  const stripe = getStripe();
+
+  const customerAppUrl = Deno.env.get('APP_URL_CUSTOMER') ?? 'http://localhost:3000';
+
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    line_items: [{
+      price_data: {
+        currency: 'usd',
+        unit_amount: Math.round(Number(order.total) * 100),
+        product_data: {
+          name: `Order #${order.order_number}`,
+          description: order.is_special_request ? 'Special Request' : 'Food Order',
+        },
+      },
+      quantity: 1,
+    }],
+    metadata: {
+      order_id: order.id,
+      order_number: String(order.order_number),
+      company_id: order.company_id,
+      branch_id: order.branch_id,
+      type: 'order_payment',
+    },
+    success_url: `${customerAppUrl}/track/${order.id}?paid=1`,
+    cancel_url: `${customerAppUrl}/track/${order.id}`,
+  });
+
+  return jsonResponse({ url: session.url });
 }

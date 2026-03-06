@@ -69,6 +69,12 @@ async function handleWebhook(req: Request) {
 }
 
 async function handleCheckoutCompleted(supabase: any, session: any) {
+  // Route to the appropriate handler based on metadata.type
+  if (session.metadata?.type === 'order_payment') {
+    return handleOrderPaymentCompleted(supabase, session);
+  }
+
+  // Default: subscription payment
   const companyId = session.metadata?.company_id;
   const packageId = session.metadata?.package_id;
   if (!companyId) return;
@@ -152,6 +158,47 @@ async function handleSubscriptionDeleted(supabase: any, subscription: any) {
     subscription_status: 'cancelled',
     subscription_tier: 'free',
   }).eq('stripe_customer_id', customerId);
+}
+
+/* ─────────── Order Payment Handler ─────────── */
+async function handleOrderPaymentCompleted(supabase: any, session: any) {
+  const orderId = session.metadata?.order_id;
+  if (!orderId) return;
+
+  // Fetch order to determine next status
+  const { data: order } = await supabase
+    .from('orders')
+    .select('id, status, is_special_request, total')
+    .eq('id', orderId)
+    .single();
+
+  if (!order || order.status !== 'awaiting_payment') return;
+
+  // Record the payment
+  await supabase.from('order_payments').insert({
+    order_id: orderId,
+    payment_method: 'stripe',
+    amount: session.amount_total / 100,
+    status: 'paid',
+    reference: session.payment_intent ?? session.id,
+    processed_by: null,
+    processed_by_name: 'Online Payment (Stripe)',
+  });
+
+  // Special requests: after payment, go to pending (kitchen needs to prepare)
+  // Normal orders: auto-complete
+  const nextStatus = order.is_special_request ? 'pending' : 'completed';
+  const note = order.is_special_request
+    ? 'Online payment received — entering kitchen queue'
+    : 'Auto-completed: online payment received';
+
+  await supabase.rpc('update_order_status', {
+    p_order_id: orderId,
+    p_new_status: nextStatus,
+    p_changed_by: null,
+    p_changed_by_name: 'Online Payment (Stripe)',
+    p_notes: note,
+  });
 }
 
 /* ─────────── Checkout Session ─────────── */

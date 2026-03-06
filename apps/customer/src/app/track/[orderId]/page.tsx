@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Container, Typography, Card, CardContent, Stack,
   Stepper, Step, StepLabel, Chip, Divider, Button, Skeleton,
-  LinearProgress,
+  LinearProgress, CircularProgress,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
@@ -55,6 +55,7 @@ export default function TrackOrderPage() {
   const orderId = params.orderId as string;
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [paying, setPaying] = useState(false);
 
   // Fetch order
   useEffect(() => {
@@ -118,6 +119,20 @@ export default function TrackOrderPage() {
   const isComplete = order.status === 'delivered' || order.status === 'completed';
   const isAwaitingPayment = order.status === 'awaiting_payment';
 
+  const handlePayNow = async () => {
+    setPaying(true);
+    try {
+      const res = await publicApi<{ url: string }>('/customer/pay-order', {
+        method: 'POST',
+        body: JSON.stringify({ order_id: order.id }),
+      });
+      if (res.error) throw new Error(res.error.message);
+      if (res.data?.url) window.location.href = res.data.url;
+    } catch {
+      setPaying(false);
+    }
+  };
+
   return (
     <Container maxWidth="sm" sx={{ py: 4 }}>
       <Typography variant="h4" fontWeight={700} gutterBottom>
@@ -138,6 +153,18 @@ export default function TrackOrderPage() {
             <Typography variant="body1" sx={{ opacity: 0.95, mt: 1 }}>
               Your special request has been priced at <strong>{formatCurrency(order.total)}</strong>. Please proceed to payment.
             </Typography>
+          )}
+          {isAwaitingPayment && (
+            <Button
+              variant="contained"
+              size="large"
+              onClick={handlePayNow}
+              disabled={paying}
+              startIcon={paying ? <CircularProgress size={20} color="inherit" /> : <PaymentIcon />}
+              sx={{ mt: 2, bgcolor: '#fff', color: 'warning.dark', '&:hover': { bgcolor: '#f5f5f5' } }}
+            >
+              {paying ? 'Redirecting…' : `Pay ${formatCurrency(order.total)}`}
+            </Button>
           )}
           <Typography variant="body2" sx={{ opacity: 0.9, mt: 1 }}>
             Placed {formatDateTime(order.created_at)}

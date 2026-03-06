@@ -136,7 +136,14 @@ export default function OrdersPage() {
               </Typography>
               <Typography variant="subtitle2" fontWeight={600}>{formatCurrency(order.total)}</Typography>
             </Stack>
-            <Button component={Link} href={`/track/${order.id}`} size="small" sx={{ mt: 1 }}>View Details</Button>
+            <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+              <Button component={Link} href={`/track/${order.id}`} size="small">View Details</Button>
+              {order.status === 'awaiting_payment' && (
+                <Button component={Link} href={`/track/${order.id}`} size="small" variant="contained" color="error">
+                  Pay Now
+                </Button>
+              )}
+            </Stack>
           </CardContent>
         </Card>
       ))}
