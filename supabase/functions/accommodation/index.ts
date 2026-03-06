@@ -700,7 +700,7 @@ async function createAccomOrder(req: Request, supabase: any, auth: AuthContext, 
         duration_count: durationCount,
         duration_unit: durationUnit,
         unit_price: Number(otherSvc?.charge_amount ?? svcItem.unit_price ?? 0),
-        status: 'pending_start',
+        status: 'awaiting_payment',
         created_by: auth.userId,
         created_by_name: auth.name,
       });

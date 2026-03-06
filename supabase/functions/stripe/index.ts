@@ -199,6 +199,13 @@ async function handleOrderPaymentCompleted(supabase: any, session: any) {
     p_changed_by_name: 'Online Payment (Stripe)',
     p_notes: note,
   });
+
+  // Promote service_bookings from awaiting_payment → pending_start
+  await supabase
+    .from('service_bookings')
+    .update({ status: 'pending_start', updated_at: new Date().toISOString() })
+    .eq('order_id', orderId)
+    .eq('status', 'awaiting_payment');
 }
 
 /* ─────────── Checkout Session ─────────── */

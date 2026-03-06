@@ -369,6 +369,13 @@ async function addPayment(req: Request, supabase: any, auth: AuthContext) {
         p_changed_by_name: body.processed_by_name ?? auth.email,
         p_notes: note,
       });
+
+      // Promote service_bookings from awaiting_payment → pending_start
+      await service
+        .from('service_bookings')
+        .update({ status: 'pending_start', updated_at: new Date().toISOString() })
+        .eq('order_id', body.order_id)
+        .eq('status', 'awaiting_payment');
     }
   }
 
