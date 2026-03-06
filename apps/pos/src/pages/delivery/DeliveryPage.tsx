@@ -1,17 +1,23 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Tabs, Tab, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, Grid, Chip, Typography, IconButton,
   Menu, MenuItem, FormControl, InputLabel, Select, Alert,
   CircularProgress, Divider, Stack, InputAdornment,
+  Table, TableHead, TableRow, TableCell, TableBody, Card, CardContent, CardActions,
 } from '@mui/material';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import DirectionsBikeIcon from '@mui/icons-material/DirectionsBike';
+import TimerIcon from '@mui/icons-material/Timer';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { DataTable, StatusBadge, type Column } from '@paxrest/ui';
-import { usePaginated, useApi } from '@/hooks';
+import { usePaginated, useApi, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/supabase';
+import { formatCurrency } from '@paxrest/shared-utils';
 import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
 
@@ -38,7 +44,13 @@ export default function DeliveryPage() {
 }
 
 function DeliveryContent() {
+  const { profile } = useAuth();
+  const isRider = profile?.role === 'rider';
   const [tab, setTab] = useState(0);
+
+  // Riders see only their deliveries — no Riders/Zones management tabs
+  if (isRider) return <RiderDeliveriesView />;
+
   return (
     <Box>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
@@ -58,12 +70,16 @@ function DeliveryContent() {
 // 
 
 function DeliveriesTab() {
-  const { activeBranchId } = useAuth();
+  const { activeBranchId, activeBranch, company } = useAuth();
+  const currency = activeBranch?.currency ?? company?.currency ?? '';
   const [statusFilter, setStatusFilter] = useState('');
   const { items, total, loading, page, pageSize, setPage, setPageSize, refetch } =
     usePaginated<any>('delivery', 'deliveries', statusFilter ? { status: statusFilter } : undefined);
 
+  useRealtime('deliveries', activeBranchId ? { column: 'branch_id', value: activeBranchId } : undefined, () => refetch());
+
   const [reassignDlg, setReassignDlg] = useState<any>(null);
+  const [detailDlg, setDetailDlg] = useState<any>(null);
 
   const handleStatusChange = async (deliveryId: string, oldStatus: string, newStatus: string) => {
     if (!confirm(`Mark delivery as ${newStatus.replace(/_/g, ' ')}?`)) return;
@@ -127,19 +143,34 @@ function DeliveriesTab() {
       const color = r.rider_response === 'accepted' ? 'success' : r.rider_response === 'declined' ? 'error' : 'default';
       return <Chip label={r.rider_response ?? 'pending'} color={color} size="small" variant="outlined" />;
     }},
+    { id: 'zone', label: 'Zone', render: (r) => r.zone?.name ?? '—' },
     {
-      id: 'estimated_delivery_time', label: 'ETA',
-      render: (r) => r.estimated_delivery_time ? new Date(r.estimated_delivery_time).toLocaleTimeString() : '',
+      id: 'eta', label: 'ETA',
+      render: (r) => {
+        const isActive = ['assigned', 'picked_up', 'in_transit'].includes(r.status);
+        if (r.estimated_delivery_time && isActive) {
+          return <EtaCountdown target={r.estimated_delivery_time} />;
+        }
+        if (r.zone?.estimated_minutes && !r.estimated_delivery_time) {
+          return <Typography variant="caption" color="text.secondary">~{r.zone.estimated_minutes} min</Typography>;
+        }
+        return r.estimated_delivery_time ? new Date(r.estimated_delivery_time).toLocaleTimeString() : '';
+      },
     },
     { id: 'created_at', label: 'Created', render: (r) => new Date(r.created_at).toLocaleString() },
     {
       id: 'actions', label: '', render: (r) => (
-        <DeliveryActionsMenu
-          row={r}
-          onReassign={() => setReassignDlg(r)}
-          onStatusChange={handleStatusChange}
-          onCancel={handleCancel}
-        />
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <IconButton size="small" title="View details" onClick={() => setDetailDlg(r)}>
+            <VisibilityIcon fontSize="small" />
+          </IconButton>
+          <DeliveryActionsMenu
+            row={r}
+            onReassign={() => setReassignDlg(r)}
+            onStatusChange={handleStatusChange}
+            onCancel={handleCancel}
+          />
+        </Stack>
       ),
     },
   ];
@@ -170,6 +201,14 @@ function DeliveriesTab() {
           delivery={reassignDlg}
           onClose={() => setReassignDlg(null)}
           onSaved={() => { setReassignDlg(null); refetch(); }}
+        />
+      )}
+
+      {detailDlg && (
+        <DeliveryDetailDialog
+          delivery={detailDlg}
+          currency={currency}
+          onClose={() => setDetailDlg(null)}
         />
       )}
     </>
@@ -551,5 +590,402 @@ function ZonesTab() {
         </DialogActions>
       </Dialog>
     </>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ETA Countdown — counts down to estimated_delivery_time
+// ──────────────────────────────────────────────────────────────────────────────
+
+function EtaCountdown({ target }: { target: string }) {
+  const [remaining, setRemaining] = useState('');
+  const [overdue, setOverdue] = useState(false);
+
+  useEffect(() => {
+    const tick = () => {
+      const diff = new Date(target).getTime() - Date.now();
+      if (diff <= 0) {
+        const abs = Math.abs(diff);
+        const mins = Math.floor(abs / 60000);
+        const secs = Math.floor((abs % 60000) / 1000);
+        setRemaining(`-${mins}:${String(secs).padStart(2, '0')}`);
+        setOverdue(true);
+      } else {
+        const mins = Math.floor(diff / 60000);
+        const secs = Math.floor((diff % 60000) / 1000);
+        setRemaining(`${mins}:${String(secs).padStart(2, '0')}`);
+        setOverdue(false);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [target]);
+
+  return (
+    <Chip
+      icon={<TimerIcon />}
+      label={remaining}
+      size="small"
+      color={overdue ? 'error' : 'primary'}
+      variant="outlined"
+    />
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Delivery Detail Dialog — shows full order info per delivery
+// ──────────────────────────────────────────────────────────────────────────────
+
+function DeliveryDetailDialog({ delivery, currency, onClose }: { delivery: any; currency: string; onClose: () => void }) {
+  const d = delivery;
+  const order = d.orders ?? {};
+  const items = order.order_items ?? [];
+  const addr = d.delivery_address;
+  const addressStr = addr
+    ? typeof addr === 'object' ? [addr.street, addr.city].filter(Boolean).join(', ') : String(addr)
+    : '—';
+  const isActive = ['assigned', 'picked_up', 'in_transit'].includes(d.status);
+  const fmt = (v: number) => formatCurrency(v, currency);
+
+  return (
+    <Dialog open fullWidth maxWidth="sm" onClose={onClose}>
+      <DialogTitle>
+        <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Typography variant="h6">Delivery — Order #{d.order_number}</Typography>
+          <Chip label={d.status.replace(/_/g, ' ')} color={DELIVERY_STATUS_COLORS[d.status] ?? 'default'} size="small" />
+        </Stack>
+      </DialogTitle>
+      <DialogContent>
+        {/* Customer */}
+        <Typography variant="subtitle2" sx={{ mt: 1 }}>Customer</Typography>
+        <Typography variant="body2">{d.customer_name || order.customer_name || '—'}</Typography>
+        {(d.customer_phone || order.customer_phone) && (
+          <Typography variant="body2" color="text.secondary">{d.customer_phone || order.customer_phone}</Typography>
+        )}
+        <Typography variant="body2" color="text.secondary">{addressStr}</Typography>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Rider */}
+        <Typography variant="subtitle2">Rider</Typography>
+        <Typography variant="body2">{d.rider?.name ?? d.rider_name ?? 'Unassigned'}</Typography>
+        {d.rider_response && (
+          <Chip
+            label={d.rider_response}
+            size="small"
+            variant="outlined"
+            color={d.rider_response === 'accepted' ? 'success' : d.rider_response === 'declined' ? 'error' : 'default'}
+            sx={{ mt: 0.5 }}
+          />
+        )}
+        {d.decline_reason && (
+          <Typography variant="caption" color="error" display="block" sx={{ mt: 0.5 }}>
+            Reason: {d.decline_reason}
+          </Typography>
+        )}
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Zone & ETA */}
+        <Stack direction="row" spacing={2} alignItems="center">
+          <Box>
+            <Typography variant="subtitle2">Zone</Typography>
+            <Typography variant="body2">{d.zone?.name ?? '—'}</Typography>
+          </Box>
+          <Box>
+            <Typography variant="subtitle2">ETA</Typography>
+            {d.estimated_delivery_time && isActive ? (
+              <EtaCountdown target={d.estimated_delivery_time} />
+            ) : d.zone?.estimated_minutes ? (
+              <Typography variant="body2">~{d.zone.estimated_minutes} min</Typography>
+            ) : (
+              <Typography variant="body2">—</Typography>
+            )}
+          </Box>
+        </Stack>
+
+        <Divider sx={{ my: 1.5 }} />
+
+        {/* Order items */}
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>Order Items</Typography>
+        {items.length > 0 ? (
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Item</TableCell>
+                <TableCell align="right">Qty</TableCell>
+                <TableCell align="right">Unit</TableCell>
+                <TableCell align="right">Total</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {items.map((it: any, i: number) => (
+                <TableRow key={i}>
+                  <TableCell>{it.menu_item_name}</TableCell>
+                  <TableCell align="right">{it.quantity}</TableCell>
+                  <TableCell align="right">{fmt(it.unit_price)}</TableCell>
+                  <TableCell align="right">{fmt(it.item_total ?? it.unit_price * it.quantity)}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow>
+                <TableCell colSpan={3} align="right"><strong>Order Total</strong></TableCell>
+                <TableCell align="right"><strong>{fmt(order.total ?? 0)}</strong></TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        ) : (
+          <Typography variant="body2" color="text.secondary">No item details available.</Typography>
+        )}
+
+        {d.notes && (
+          <>
+            <Divider sx={{ my: 1.5 }} />
+            <Typography variant="subtitle2">Notes</Typography>
+            <Typography variant="body2">{d.notes}</Typography>
+          </>
+        )}
+
+        <Divider sx={{ my: 1.5 }} />
+        <Typography variant="caption" color="text.secondary">
+          Created: {new Date(d.created_at).toLocaleString()}
+          {d.actual_pickup_time && ` · Picked up: ${new Date(d.actual_pickup_time).toLocaleTimeString()}`}
+          {d.actual_delivery_time && ` · Delivered: ${new Date(d.actual_delivery_time).toLocaleTimeString()}`}
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// RIDER VIEW — riders only see their assigned deliveries + accept/decline
+// ──────────────────────────────────────────────────────────────────────────────
+
+function RiderDeliveriesView() {
+  const { activeBranchId, profile, activeBranch, company } = useAuth();
+  const currency = activeBranch?.currency ?? company?.currency ?? '';
+  const [deliveries, setDeliveries] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [detailDlg, setDetailDlg] = useState<any>(null);
+  const [declineDlg, setDeclineDlg] = useState<any>(null);
+  const [declineReason, setDeclineReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchDeliveries = async () => {
+    setLoading(true);
+    try {
+      const data = await api<{ deliveries: any[] }>('delivery', 'my-deliveries', {
+        branchId: activeBranchId ?? undefined,
+      });
+      setDeliveries(data.deliveries ?? []);
+    } catch (err: any) { toast.error(err.message); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchDeliveries(); }, [activeBranchId]);
+  useRealtime('deliveries', profile?.id ? { column: 'rider_id', value: profile.id } : undefined, () => fetchDeliveries());
+
+  const handleAccept = async (deliveryId: string) => {
+    setSubmitting(true);
+    try {
+      await api('delivery', 'accept-assignment', {
+        method: 'POST',
+        body: { delivery_id: deliveryId },
+        branchId: activeBranchId ?? undefined,
+      });
+      toast.success('Delivery accepted');
+      fetchDeliveries();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleDecline = async () => {
+    if (!declineDlg) return;
+    if (!declineReason.trim()) { toast.error('Reason is required'); return; }
+    setSubmitting(true);
+    try {
+      await api('delivery', 'decline-assignment', {
+        method: 'POST',
+        body: { delivery_id: declineDlg.id, reason: declineReason.trim() },
+        branchId: activeBranchId ?? undefined,
+      });
+      toast.success('Delivery declined');
+      setDeclineDlg(null);
+      setDeclineReason('');
+      fetchDeliveries();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleStatusChange = async (deliveryId: string, oldStatus: string, newStatus: string) => {
+    setSubmitting(true);
+    try {
+      await api('delivery', 'update-status', {
+        method: 'POST',
+        body: { delivery_id: deliveryId, old_status: oldStatus, new_status: newStatus },
+        branchId: activeBranchId ?? undefined,
+      });
+      toast.success('Status updated');
+      fetchDeliveries();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSubmitting(false); }
+  };
+
+  const NEXT_STATUS: Record<string, { status: string; label: string }> = {
+    assigned: { status: 'picked_up', label: 'Mark Picked Up' },
+    picked_up: { status: 'in_transit', label: 'Start Delivery' },
+    in_transit: { status: 'delivered', label: 'Mark Delivered' },
+  };
+
+  const fmt = (v: number) => formatCurrency(v, currency);
+
+  // Separate active from completed/cancelled
+  const active = deliveries.filter((d) => !['delivered', 'cancelled', 'returned', 'failed'].includes(d.status));
+  const past = deliveries.filter((d) => ['delivered', 'cancelled', 'returned', 'failed'].includes(d.status));
+
+  if (loading) return <CircularProgress sx={{ mt: 4, display: 'block', mx: 'auto' }} />;
+
+  return (
+    <Box>
+      <Typography variant="h6" sx={{ mb: 2 }}>My Deliveries</Typography>
+
+      {active.length === 0 && (
+        <Alert severity="info" sx={{ mb: 2 }}>No active deliveries assigned to you.</Alert>
+      )}
+
+      {active.map((d) => {
+        const order = d.orders ?? {};
+        const items = order.order_items ?? [];
+        const addr = d.delivery_address;
+        const addressStr = addr
+          ? typeof addr === 'object' ? [addr.street, addr.city].filter(Boolean).join(', ') : String(addr)
+          : '';
+        const next = NEXT_STATUS[d.status];
+        const isPending = d.rider_response === 'pending' || !d.rider_response;
+        const isActive = ['assigned', 'picked_up', 'in_transit'].includes(d.status);
+
+        return (
+          <Card key={d.id} sx={{ mb: 2 }}>
+            <CardContent sx={{ pb: 1 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography variant="subtitle1" fontWeight={700}>Order #{d.order_number}</Typography>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Chip label={d.status.replace(/_/g, ' ')} color={DELIVERY_STATUS_COLORS[d.status] ?? 'default'} size="small" />
+                  {d.estimated_delivery_time && isActive && <EtaCountdown target={d.estimated_delivery_time} />}
+                </Stack>
+              </Stack>
+
+              <Stack spacing={0.5} sx={{ mt: 1.5 }}>
+                <Typography variant="body2"><strong>Customer:</strong> {d.customer_name || '—'} {d.customer_phone ? `• ${d.customer_phone}` : ''}</Typography>
+                {addressStr && <Typography variant="body2" color="text.secondary">{addressStr}</Typography>}
+                {d.zone?.name && (
+                  <Typography variant="body2" color="text.secondary">
+                    Zone: {d.zone.name}
+                    {d.zone.estimated_minutes && !d.estimated_delivery_time ? ` (~${d.zone.estimated_minutes} min)` : ''}
+                  </Typography>
+                )}
+              </Stack>
+
+              {/* Order items summary */}
+              {items.length > 0 && (
+                <Box sx={{ mt: 1.5, p: 1, bgcolor: 'grey.50', borderRadius: 1 }}>
+                  <Typography variant="caption" fontWeight={600} sx={{ mb: 0.5, display: 'block' }}>
+                    Items ({items.length})
+                  </Typography>
+                  {items.map((it: any, i: number) => (
+                    <Typography key={i} variant="caption" display="block">
+                      {it.quantity}× {it.menu_item_name} — {fmt(it.item_total ?? it.unit_price * it.quantity)}
+                    </Typography>
+                  ))}
+                  <Divider sx={{ my: 0.5 }} />
+                  <Typography variant="body2" fontWeight={700}>Total: {fmt(order.total ?? 0)}</Typography>
+                </Box>
+              )}
+
+              {d.notes && (
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                  Notes: {d.notes}
+                </Typography>
+              )}
+            </CardContent>
+
+            <CardActions sx={{ px: 2, pb: 1.5, gap: 1 }}>
+              <Button size="small" startIcon={<VisibilityIcon />} onClick={() => setDetailDlg(d)}>Details</Button>
+
+              {/* Accept / Decline — only when response is pending */}
+              {isPending && d.status === 'assigned' && (
+                <>
+                  <Button size="small" variant="contained" color="success" startIcon={<CheckCircleIcon />}
+                    onClick={() => handleAccept(d.id)} disabled={submitting}>
+                    Accept
+                  </Button>
+                  <Button size="small" variant="outlined" color="error" startIcon={<CancelIcon />}
+                    onClick={() => { setDeclineDlg(d); setDeclineReason(''); }} disabled={submitting}>
+                    Decline
+                  </Button>
+                </>
+              )}
+
+              {/* Status progression — only after accepted */}
+              {d.rider_response === 'accepted' && next && (
+                <Button size="small" variant="contained"
+                  onClick={() => handleStatusChange(d.id, d.status, next.status)} disabled={submitting}>
+                  {next.label}
+                </Button>
+              )}
+            </CardActions>
+          </Card>
+        );
+      })}
+
+      {/* Past deliveries */}
+      {past.length > 0 && (
+        <>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 3, mb: 1 }}>
+            Completed ({past.length})
+          </Typography>
+          {past.map((d) => (
+            <Card key={d.id} sx={{ mb: 1, opacity: 0.7 }}>
+              <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Typography variant="body2">Order #{d.order_number} — {d.customer_name}</Typography>
+                  <Chip label={d.status.replace(/_/g, ' ')} color={DELIVERY_STATUS_COLORS[d.status] ?? 'default'} size="small" />
+                </Stack>
+              </CardContent>
+            </Card>
+          ))}
+        </>
+      )}
+
+      {/* Decline dialog */}
+      <Dialog open={!!declineDlg} onClose={() => setDeclineDlg(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Decline Delivery — Order #{declineDlg?.order_number}</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth multiline rows={3} label="Reason for declining *"
+            placeholder="Enter your reason…"
+            value={declineReason} onChange={(e) => setDeclineReason(e.target.value)}
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeclineDlg(null)} disabled={submitting}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleDecline} disabled={submitting || !declineReason.trim()}>
+            {submitting ? <CircularProgress size={20} /> : 'Decline'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {detailDlg && (
+        <DeliveryDetailDialog
+          delivery={detailDlg}
+          currency={currency}
+          onClose={() => setDetailDlg(null)}
+        />
+      )}
+    </Box>
   );
 }

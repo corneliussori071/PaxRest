@@ -68,7 +68,7 @@ async function listZones(supabase: any, auth: AuthContext, branchId: string) {
     .eq('branch_id', branchId)
     .order('name', { ascending: true });
   if (error) return errorResponse(error.message);
-  return jsonResponse({ zones: data });
+  return jsonResponse({ zones: data, items: data, total: data?.length ?? 0 });
 }
 
 async function upsertZone(req: Request, supabase: any, auth: AuthContext, branchId: string) {
@@ -211,7 +211,7 @@ async function listDeliveries(req: Request, supabase: any, auth: AuthContext, br
   let query = supabase
     .from('deliveries')
     .select(
-      '*, orders(order_number, total, customer_name, customer_phone, customer_address), rider:riders!deliveries_rider_id_fkey(id, name, phone, vehicle_type, license_plate, is_available)',
+      '*, orders(order_number, total, customer_name, customer_phone, customer_address, status, order_items(menu_item_name, quantity, unit_price, item_total, station)), rider:riders!deliveries_rider_id_fkey(id, name, phone, vehicle_type, license_plate, is_available), zone:delivery_zones!deliveries_delivery_zone_id_fkey(name, estimated_minutes)',
       { count: 'exact' }
     )
     .eq('branch_id', branchId);
@@ -383,7 +383,7 @@ async function getMyDeliveries(req: Request, supabase: any, auth: AuthContext) {
 
   let query = supabase
     .from('deliveries')
-    .select('*, orders(order_number, total, customer_name, customer_phone, customer_address, status)')
+    .select('*, orders(order_number, total, customer_name, customer_phone, customer_address, status, order_items(menu_item_name, quantity, unit_price, item_total, station)), zone:delivery_zones!deliveries_delivery_zone_id_fkey(name, estimated_minutes)')
     .eq('rider_id', auth.userId);
 
   if (activeOnly) query = query.in('status', ['assigned', 'picked_up', 'in_transit']);
@@ -419,6 +419,7 @@ async function declineAssignment(req: Request, supabase: any, auth: AuthContext)
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const body = await req.json();
   if (!body.delivery_id) return errorResponse('Missing delivery_id');
+  if (!body.reason || !body.reason.trim()) return errorResponse('A reason is required when declining');
 
   const { data, error } = await supabase
     .from('deliveries')
