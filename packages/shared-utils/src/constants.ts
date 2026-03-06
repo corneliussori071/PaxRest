@@ -90,7 +90,7 @@ export const VALID_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   preparing: ['ready', 'cancelled'],
   ready: ['served', 'out_for_delivery', 'completed', 'cancelled'],
   served: ['completed'],
-  out_for_delivery: ['delivered', 'failed'],
+  out_for_delivery: ['delivered', 'completed', 'failed'],
   delivered: ['completed'],
   completed: ['refunded'],
   cancelled: [],

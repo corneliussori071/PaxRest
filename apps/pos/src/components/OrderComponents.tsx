@@ -11,14 +11,15 @@ import {
   Card, CardContent, CardActions, Alert, IconButton,
   Table, TableHead, TableBody, TableRow, TableCell,
   InputAdornment, TextField, CircularProgress,
-  TablePagination,
+  TablePagination, FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import PaymentIcon from '@mui/icons-material/Payment';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloseIcon from '@mui/icons-material/Close';
+import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
-import { usePaginated } from '@/hooks';
+import { usePaginated, useApi } from '@/hooks';
 import { api } from '@/lib/supabase';
 import toast from 'react-hot-toast';
 
@@ -65,14 +66,28 @@ export function OrderDetailDialog({
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [actioning, setActioning] = useState(false);
+  const [riderDialogOpen, setRiderDialogOpen] = useState(false);
+  const [deliveryRecord, setDeliveryRecord] = useState<any>(null);
 
   React.useEffect(() => {
-    if (!order) { setDetail(null); return; }
+    if (!order) { setDetail(null); setDeliveryRecord(null); return; }
     setLoading(true);
     api('orders', 'get', { params: { id: order.id }, branchId: effectiveBranchId })
       .then((d: any) => setDetail(d.order))
       .catch(() => setDetail(null))
       .finally(() => setLoading(false));
+    // Fetch delivery record for delivery orders
+    if (order.order_type === 'delivery') {
+      api('delivery', 'deliveries', { params: { order_id: order.id }, branchId: effectiveBranchId })
+        .then((d: any) => {
+          const deliveries = d?.deliveries ?? d?.items ?? [];
+          const active = Array.isArray(deliveries)
+            ? deliveries.find((del: any) => del.status !== 'cancelled')
+            : null;
+          setDeliveryRecord(active ?? null);
+        })
+        .catch(() => setDeliveryRecord(null));
+    }
   }, [order?.id]);
 
   const doStatus = async (newStatus: string) => {
@@ -83,6 +98,14 @@ export function OrderDetailDialog({
         body: { order_id: detail.id, new_status: newStatus },
         branchId: effectiveBranchId,
       });
+      // If marking as delivered/completed on a delivery order, also update the delivery record
+      if ((newStatus === 'completed' || newStatus === 'delivered') && deliveryRecord?.id) {
+        await api('delivery', 'update-status', {
+          method: 'POST',
+          body: { delivery_id: deliveryRecord.id, old_status: deliveryRecord.status, new_status: 'delivered' },
+          branchId: effectiveBranchId,
+        }).catch(() => {/* non-critical */});
+      }
       toast.success(`Order #${detail.order_number} → ${newStatus.replace(/_/g, ' ')}`);
       setDetail((d: any) => ({ ...d, status: newStatus }));
       onStatusChange?.();
@@ -218,12 +241,20 @@ export function OrderDetailDialog({
           <Button variant="contained" size="small" disabled={actioning} onClick={() => doStatus('ready')}>Mark Ready</Button>
         )}
         {d?.status === 'ready' && d?.order_type === 'delivery' && (
-          <Button variant="contained" color="info" size="small" disabled={actioning} onClick={() => doStatus('out_for_delivery')}>
-            Out for Delivery
+          <Button variant="contained" color="info" size="small" disabled={actioning}
+            startIcon={<LocalShippingIcon />}
+            onClick={() => setRiderDialogOpen(true)}>
+            Assign to Rider
+          </Button>
+        )}
+        {d?.status === 'out_for_delivery' && (
+          <Button variant="contained" color="success" size="small" disabled={actioning} onClick={() => doStatus('completed')}>
+            Delivered
           </Button>
         )}
         {d?.status === 'ready' && d?.order_type !== 'delivery' && (
-          <Button variant="contained" color="success" size="small" disabled={actioning} onClick={() => doStatus('awaiting_payment')}>
+          <Button variant="contained" color="success" size="small" disabled={actioning}
+            onClick={() => doStatus(d?.source === 'online' ? 'completed' : 'awaiting_payment')}>
             Mark as Served
           </Button>
         )}
@@ -245,6 +276,93 @@ export function OrderDetailDialog({
         )}
         <Button size="small" onClick={onClose}>Close</Button>
       </DialogActions>
+
+      {/* Rider Assignment Dialog */}
+      <RiderAssignDialog
+        open={riderDialogOpen}
+        orderNumber={d?.order_number}
+        deliveryRecord={deliveryRecord}
+        orderId={d?.id}
+        branchId={effectiveBranchId}
+        onClose={() => setRiderDialogOpen(false)}
+        onAssigned={() => {
+          setRiderDialogOpen(false);
+          doStatus('out_for_delivery');
+        }}
+      />
+    </Dialog>
+  );
+}
+
+// ─── Rider Assignment Dialog ────────────────────────────────────────────────────
+function RiderAssignDialog({ open, orderNumber, deliveryRecord, orderId, branchId, onClose, onAssigned }: {
+  open: boolean;
+  orderNumber?: string;
+  deliveryRecord: any;
+  orderId?: string;
+  branchId: string;
+  onClose: () => void;
+  onAssigned: () => void;
+}) {
+  const { data: ridersData } = useApi<{ riders: any[] }>('delivery', 'riders');
+  const riders = (ridersData?.riders ?? []).filter((r: any) => r.is_available && r.is_active);
+  const [riderId, setRiderId] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleAssign = async () => {
+    if (!riderId) { toast.error('Select a rider'); return; }
+    setSaving(true);
+    try {
+      if (deliveryRecord?.id) {
+        // Existing delivery record (online orders) — reassign rider
+        await api('delivery', 'reassign', {
+          method: 'POST',
+          body: { delivery_id: deliveryRecord.id, rider_id: riderId },
+          branchId,
+        });
+      } else if (orderId) {
+        // No delivery record — create one with rider
+        await api('delivery', 'assign', {
+          method: 'POST',
+          body: { order_id: orderId, rider_id: riderId },
+          branchId,
+        });
+      }
+      toast.success('Rider assigned');
+      setRiderId('');
+      onAssigned();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Failed to assign rider');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} fullWidth maxWidth="xs" onClose={onClose}>
+      <DialogTitle>Assign Rider — Order #{orderNumber}</DialogTitle>
+      <DialogContent sx={{ pt: 2 }}>
+        {riders.length === 0 ? (
+          <Alert severity="warning">No available riders at this time.</Alert>
+        ) : (
+          <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+            <InputLabel>Select Rider</InputLabel>
+            <Select label="Select Rider" value={riderId} onChange={(e) => setRiderId(e.target.value)}>
+              {riders.map((r: any) => (
+                <MenuItem key={r.id} value={r.id}>
+                  {r.name} — {r.vehicle_type} {r.license_plate ? `(${r.license_plate})` : ''}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button variant="contained" onClick={handleAssign} disabled={saving || riders.length === 0 || !riderId}>
+          {saving ? <CircularProgress size={20} /> : 'Assign & Dispatch'}
+        </Button>
+      </DialogActions>
     </Dialog>
   );
 }
@@ -265,7 +383,8 @@ export interface OrderCardProps {
 export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickStatus, showPayBtn, showServedForPending, servedTargetStatus, showSource }: OrderCardProps) {
   const items: any[] = order.order_items ?? order.items ?? [];
   const itemCount = items.length;
-  const servedTarget = servedTargetStatus ?? 'awaiting_payment';
+  // Online orders go straight to completed (pre-paid); POS orders go to awaiting_payment
+  const servedTarget = order.source === 'online' ? 'completed' : (servedTargetStatus ?? 'awaiting_payment');
   const showServed = showServedForPending
     ? ['pending', 'confirmed', 'preparing', 'ready'].includes(order.status)
     : order.status === 'ready';

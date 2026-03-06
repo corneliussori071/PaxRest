@@ -18,6 +18,7 @@ const NAV = [
   { label: 'Dining', href: '/menu' },
   { label: 'Reservations', href: '/reservations' },
   { label: 'Events & Suites', href: '/events' },
+  { label: 'Services', href: '/services' },
   { label: 'My Orders', href: '/orders' },
 ];
 

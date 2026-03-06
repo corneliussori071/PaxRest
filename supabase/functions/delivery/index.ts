@@ -222,6 +222,9 @@ async function listDeliveries(req: Request, supabase: any, auth: AuthContext, br
   const riderId = url.searchParams.get('rider_id');
   if (riderId) query = query.eq('rider_id', riderId);
 
+  const orderId = url.searchParams.get('order_id');
+  if (orderId) query = query.eq('order_id', orderId);
+
   query = applyPagination(query, page, pageSize, 'created_at', false);
   const { data, count, error } = await query;
   if (error) return errorResponse(error.message);

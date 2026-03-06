@@ -74,6 +74,8 @@ serve(async (req) => {
       case 'my-orders':    return await getMyOrders(req);
       case 'special-request': return await createSpecialRequest(req);
       case 'book-room':       return await bookRoom(req);
+      case 'services':        return await getPublicServices(req);
+      case 'book-service':    return await bookService(req);
       default:             return errorResponse('Unknown customer action', 404);
     }
   } catch (err) {
@@ -908,6 +910,7 @@ async function bookRoom(req: Request) {
       menu_item_name: `Room Booking — ${room.category.charAt(0).toUpperCase() + room.category.slice(1)} (${room.room_number})`,
       quantity: durationCount,
       unit_price: room.cost_amount,
+      station: 'accommodation',
       modifiers: [],
       modifiers_total: 0,
       special_instructions: null,
@@ -919,10 +922,10 @@ async function bookRoom(req: Request) {
   const orderId = orderData?.order_id;
   const orderNumber = orderData?.order_number;
 
-  // Mark order as awaiting_approval so staff reviews it
+  // Mark order as completed (online pre-paid) and tag the accommodation department
   await service
     .from('orders')
-    .update({ status: 'awaiting_approval' as any, linked_room_id: room_id, linked_room_number: room.room_number })
+    .update({ status: 'completed' as any, department: 'accommodation', linked_room_id: room_id, linked_room_number: room.room_number })
     .eq('id', orderId);
 
   // Update room status → reserved
@@ -957,5 +960,173 @@ async function bookRoom(req: Request) {
     order_number: orderNumber,
     booking_id: booking?.id ?? null,
     message: 'Room reserved! Your booking reference is ready. Staff will confirm shortly.',
+  }, 201);
+}
+
+// ─── GET /customer/services ──────────────────────────────────────────────────
+// Public list of active & available other-services for a branch.
+
+async function getPublicServices(req: Request) {
+  if (req.method !== 'GET') return errorResponse('Method not allowed', 405);
+
+  const url = new URL(req.url);
+  const branchId = url.searchParams.get('branch_id');
+  if (!branchId) return errorResponse('Missing branch_id');
+
+  const service = createServiceClient();
+  const { data, error } = await service
+    .from('other_services')
+    .select('id, name, description, charge_amount, charge_duration, media_url, media_type, is_available')
+    .eq('branch_id', branchId)
+    .eq('is_active', true)
+    .order('name', { ascending: true });
+
+  if (error) return errorResponse(error.message, 500);
+  return jsonResponse({ services: data ?? [] });
+}
+
+// ─── POST /customer/book-service ─────────────────────────────────────────────
+// Creates a completed order + service_booking for an other-service.
+
+async function bookService(req: Request) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+
+  const body = await req.json().catch(() => null);
+  if (!body) return errorResponse('Invalid JSON');
+
+  const { branch_id, service_id, customer_name, customer_phone } = body;
+  if (!branch_id || !service_id || !customer_name || !customer_phone) {
+    return errorResponse('branch_id, service_id, customer_name, and customer_phone are required');
+  }
+
+  const service = createServiceClient();
+
+  // Fetch branch + other-service
+  const [{ data: branch }, { data: svc }] = await Promise.all([
+    service.from('branches').select('company_id').eq('id', branch_id).single(),
+    service
+      .from('other_services')
+      .select('id, name, charge_amount, charge_duration, company_id')
+      .eq('id', service_id)
+      .eq('is_active', true)
+      .single(),
+  ]);
+
+  if (!branch) return errorResponse('Branch not found', 404);
+  if (!svc) return errorResponse('Service not found', 404);
+  if (svc.company_id !== branch.company_id) return errorResponse('Service does not belong to this branch', 400);
+
+  // Resolve customer
+  let customerId: string | null = null;
+  const jwtCtx = await resolveCustomer(req);
+  if (jwtCtx) {
+    customerId = jwtCtx.id;
+    if (body.customer_email) {
+      await service.from('customers').update({ email: body.customer_email }).eq('id', customerId);
+    }
+  } else {
+    const { data: existing } = await service
+      .from('customers')
+      .select('id')
+      .eq('company_id', branch.company_id)
+      .eq('phone', customer_phone)
+      .maybeSingle();
+
+    if (existing) {
+      customerId = existing.id;
+    } else {
+      const { data: newCust } = await service
+        .from('customers')
+        .insert({
+          company_id: branch.company_id,
+          name: sanitizeString(customer_name),
+          phone: customer_phone,
+          email: body.customer_email ?? null,
+        })
+        .select('id').single();
+      customerId = newCust?.id ?? null;
+    }
+  }
+
+  // Duration + price
+  const durationCount = Math.max(1, Number(body.duration_count ?? 1));
+  const durationUnit = safeStr(body.duration_unit ?? svc.charge_duration);
+  const unitPrice = Number(svc.charge_amount);
+  const total = unitPrice * durationCount;
+  const notes = body.notes ? safeStr(body.notes, MAX_TEXT) : null;
+
+  const scheduledStart = body.scheduled_start ?? null;
+  const scheduledEnd = body.scheduled_end ?? null;
+
+  // Create order via RPC
+  const { data: orderData, error: rpcErr } = await service.rpc('create_order_with_deduction', {
+    p_company_id: branch.company_id,
+    p_branch_id: branch_id,
+    p_order_type: 'dine_in',
+    p_table_id: null,
+    p_customer_id: customerId,
+    p_customer_name: sanitizeString(customer_name),
+    p_customer_phone: customer_phone,
+    p_customer_email: body.customer_email ?? null,
+    p_customer_address: null,
+    p_notes: `${svc.name} — ${durationCount} ${durationUnit}(s)${notes ? ` | ${notes}` : ''}`,
+    p_source: 'online',
+    p_shift_id: null,
+    p_created_by: null,
+    p_created_by_name: 'Online Booking',
+    p_tax_rate: 0,
+    p_discount_amount: 0,
+    p_discount_reason: null,
+    p_tip_amount: 0,
+    p_delivery_fee: 0,
+    p_loyalty_points_used: 0,
+    p_loyalty_discount: 0,
+    p_items: [{
+      menu_item_id: null,
+      menu_item_name: `${svc.name} — Service Booking`,
+      quantity: durationCount,
+      unit_price: unitPrice,
+      station: 'other_services',
+      modifiers: [],
+      modifiers_total: 0,
+      special_instructions: null,
+    }],
+  });
+
+  if (rpcErr) return errorResponse(rpcErr.message, 400);
+
+  const orderId = orderData?.order_id;
+  const orderNumber = orderData?.order_number;
+
+  // Mark order as completed (pre-paid online)
+  await service
+    .from('orders')
+    .update({ status: 'completed' as any, department: 'other_services' })
+    .eq('id', orderId);
+
+  // Create service_booking
+  const { error: sbErr } = await service.from('service_bookings').insert({
+    company_id: branch.company_id,
+    branch_id: branch_id,
+    service_id: svc.id,
+    service_name: svc.name,
+    order_id: orderId,
+    order_number: orderNumber,
+    customer_name: sanitizeString(customer_name),
+    scheduled_start: scheduledStart,
+    scheduled_end: scheduledEnd,
+    duration_count: durationCount,
+    duration_unit: durationUnit,
+    unit_price: unitPrice,
+    status: 'pending_start',
+  });
+
+  if (sbErr) console.error('service_bookings insert failed:', sbErr.message);
+
+  return jsonResponse({
+    order_id: orderId,
+    order_number: orderNumber,
+    total,
+    message: `Service booked! Your reference is #${orderNumber}.`,
   }, 201);
 }

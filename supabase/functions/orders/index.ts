@@ -277,7 +277,7 @@ async function addPayment(req: Request, supabase: any, auth: AuthContext) {
 
   if (error) return errorResponse(error.message);
 
-  // Check if order is fully paid
+  // Check if order is fully paid → auto-complete
   const { data: payments } = await supabase
     .from('order_payments')
     .select('amount')
@@ -286,22 +286,22 @@ async function addPayment(req: Request, supabase: any, auth: AuthContext) {
 
   const { data: order } = await supabase
     .from('orders')
-    .select('total, is_paid')
+    .select('total, status')
     .eq('id', body.order_id)
     .single();
 
   if (payments && order) {
     const totalPaid = payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
-    if (totalPaid >= order.total && !order.is_paid) {
+    if (totalPaid >= Number(order.total) && order.status !== 'completed') {
+      // Use RPC to update status so history is recorded and table is freed
       const service = createServiceClient();
-      await service
-        .from('orders')
-        .update({
-          is_paid: true,
-          paid_at: new Date().toISOString(),
-          status: 'completed',
-        })
-        .eq('id', body.order_id);
+      await service.rpc('update_order_status', {
+        p_order_id: body.order_id,
+        p_new_status: 'completed',
+        p_changed_by: auth.userId,
+        p_changed_by_name: body.processed_by_name ?? auth.email,
+        p_notes: 'Auto-completed: payment received in full',
+      });
     }
   }
 
