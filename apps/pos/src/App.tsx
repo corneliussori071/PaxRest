@@ -26,6 +26,7 @@ import SuppliersPage from '@/pages/suppliers/SuppliersPage';
 import ReportsPage from '@/pages/reports/ReportsPage';
 import SettingsPage from '@/pages/settings/SettingsPage';
 import OtherServicesPage from '@/pages/other-services/OtherServicesPage';
+import HrPayrollPage from '@/pages/hr/HrPayrollPage';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { session, loading, initialized } = useAuth();
@@ -67,6 +68,7 @@ export default function App() {
               <Route path="/other-services" element={<OtherServicesPage />} />
               <Route path="/suppliers" element={<SuppliersPage />} />
               <Route path="/delivery" element={<DeliveryPage />} />
+              <Route path="/hr" element={<HrPayrollPage />} />
               <Route path="/shifts" element={<ShiftsPage />} />
               <Route path="/staff" element={<StaffPage />} />
               <Route path="/branches" element={<BranchesPage />} />

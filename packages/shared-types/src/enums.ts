@@ -52,7 +52,19 @@ export type Permission =
   | 'manage_branches'
   | 'manage_settings'
   | 'view_audit'
-  | 'admin_panel';
+  | 'admin_panel'
+  | 'manage_hr'
+  | 'hr_staff'
+  | 'hr_staff_view'
+  | 'hr_attendance'
+  | 'hr_attendance_view'
+  | 'hr_shifts'
+  | 'hr_shifts_view'
+  | 'hr_payroll'
+  | 'hr_payroll_view'
+  | 'hr_leave'
+  | 'hr_leave_view'
+  | 'hr_performance';
 
 export type SysAdminRole = 'super_admin' | 'admin' | 'support';
 

@@ -65,6 +65,7 @@ export function isGlobalRole(role: string | null): boolean {
 
 /** Check the auth context has a specific permission */
 export function hasPermission(auth: AuthContext, permission: string): boolean {
+  if (auth.role === 'owner') return true;
   return auth.permissions.includes(permission);
 }
 

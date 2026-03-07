@@ -12,6 +12,7 @@ import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import TableBarIcon from '@mui/icons-material/TableBar';
 import PeopleIcon from '@mui/icons-material/People';
+import BadgeIcon from '@mui/icons-material/Badge';
 import LoyaltyIcon from '@mui/icons-material/Loyalty';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -42,6 +43,7 @@ const NAV_ITEMS: NavItemWithPermission[] = [
   { id: 'other-services', label: 'Other Services',  icon: <SpaIcon />,              path: '/other-services', permission: 'manage_other_services' },
   { id: 'suppliers',  label: 'Suppliers',          icon: <ShoppingCartIcon />,     path: '/suppliers',  permission: 'manage_suppliers', dividerAfter: true },
   { id: 'delivery',   label: 'Delivery',           icon: <LocalShippingIcon />,    path: '/delivery',   permission: 'manage_delivery' },
+  { id: 'hr',         label: 'HR & Payroll',       icon: <BadgeIcon />,            path: '/hr',         permission: 'manage_hr' },
   { id: 'shifts',     label: 'Shifts & Cash',      icon: <AccessTimeIcon />,       path: '/shifts',     permission: 'manage_shifts' },
   { id: 'staff',      label: 'Staff Management',   icon: <PeopleIcon />,           path: '/staff',      permission: 'manage_staff' },
   { id: 'branches',   label: 'Branches',           icon: <StorefrontIcon />,       path: '/branches',   permission: 'manage_branches' },
@@ -64,12 +66,17 @@ export default function MainLayout() {
 
   // Filter nav items by user permissions
   const userPermissions = profile?.permissions ?? [];
+  const isOwner = profile?.role === 'owner';
+  const HR_PERMISSIONS = ['manage_hr', 'hr_staff', 'hr_staff_view', 'hr_attendance', 'hr_attendance_view', 'hr_shifts', 'hr_shifts_view', 'hr_payroll', 'hr_payroll_view', 'hr_leave', 'hr_leave_view', 'hr_performance'];
   const filteredNavItems: NavItem[] = useMemo(() => {
     return NAV_ITEMS.filter((item) => {
       if (!item.permission) return true;
+      if (isOwner) return true;
+      // HR page: visible if user has any HR permission
+      if (item.permission === 'manage_hr') return HR_PERMISSIONS.some((p) => userPermissions.includes(p as any));
       return userPermissions.includes(item.permission);
     });
-  }, [userPermissions]);
+  }, [userPermissions, isOwner]);
 
   const activeId = filteredNavItems.find((n) => location.pathname.startsWith(n.path))?.id ?? filteredNavItems[0]?.id ?? 'pos';
 

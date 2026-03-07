@@ -45,6 +45,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<CompanyRole, Permission[]> = {
     'manage_wastage', 'manage_purchases', 'manage_suppliers', 'manage_staff',
     'manage_shifts', 'manage_tables', 'view_reports', 'export_reports',
     'manage_loyalty', 'manage_branches', 'manage_settings', 'view_audit', 'admin_panel',
+    'manage_hr',
+    'hr_staff', 'hr_attendance', 'hr_shifts', 'hr_payroll', 'hr_leave', 'hr_performance',
   ],
   general_manager: [
     'manage_menu', 'manage_orders', 'process_pos', 'view_kitchen',
@@ -57,6 +59,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<CompanyRole, Permission[]> = {
     'manage_wastage', 'manage_purchases', 'manage_suppliers', 'manage_staff',
     'manage_shifts', 'manage_tables', 'view_reports', 'export_reports',
     'manage_loyalty', 'manage_branches', 'view_audit',
+    'manage_hr',
+    'hr_staff', 'hr_attendance', 'hr_shifts', 'hr_payroll', 'hr_leave', 'hr_performance',
   ],
   branch_manager: [
     'manage_menu', 'manage_orders', 'process_pos', 'view_kitchen',
@@ -68,6 +72,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<CompanyRole, Permission[]> = {
     'view_shisha', 'manage_delivery', 'manage_inventory',
     'manage_wastage', 'manage_purchases', 'manage_suppliers', 'manage_staff',
     'manage_shifts', 'manage_tables', 'view_reports', 'manage_loyalty', 'view_audit',
+    'manage_hr',
+    'hr_staff', 'hr_attendance', 'hr_shifts', 'hr_payroll', 'hr_leave', 'hr_performance',
   ],
   cashier: ['process_pos', 'manage_orders', 'manage_tables'],
   chef: [

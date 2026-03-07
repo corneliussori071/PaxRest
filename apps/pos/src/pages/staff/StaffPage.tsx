@@ -56,10 +56,23 @@ const PERMISSION_LABELS: { key: Permission; label: string; group: string }[] = [
   { key: 'manage_shifts', label: 'Shifts & Cash', group: 'Management' },
   // Admin
   { key: 'manage_staff', label: 'Staff Management', group: 'Admin' },
+  { key: 'manage_hr', label: 'Access HR & Payroll', group: 'Admin' },
   { key: 'view_reports', label: 'Access Reports', group: 'Admin' },
   { key: 'manage_settings', label: 'Store Settings', group: 'Admin' },
   { key: 'manage_loyalty', label: 'Loyalty Program', group: 'Admin' },
   { key: 'view_audit', label: 'Audit Log', group: 'Admin' },
+  // HR & Payroll — granular tab permissions
+  { key: 'hr_staff', label: 'Staff (Full Access)', group: 'HR & Payroll' },
+  { key: 'hr_staff_view', label: 'Staff (View Own Only)', group: 'HR & Payroll' },
+  { key: 'hr_attendance', label: 'Attendance (Full Access)', group: 'HR & Payroll' },
+  { key: 'hr_attendance_view', label: 'Attendance (Clock In/Out Only)', group: 'HR & Payroll' },
+  { key: 'hr_shifts', label: 'Shift Management (Full Access)', group: 'HR & Payroll' },
+  { key: 'hr_shifts_view', label: 'Shift Management (View Own Schedule)', group: 'HR & Payroll' },
+  { key: 'hr_payroll', label: 'Payroll (Full Access)', group: 'HR & Payroll' },
+  { key: 'hr_payroll_view', label: 'Payroll (View Own Payslip)', group: 'HR & Payroll' },
+  { key: 'hr_leave', label: 'Leave Management (Full Access)', group: 'HR & Payroll' },
+  { key: 'hr_leave_view', label: 'Leave Management (Request Only)', group: 'HR & Payroll' },
+  { key: 'hr_performance', label: 'Performance (View Only)', group: 'HR & Payroll' },
 ];
 
 const ALL_ROLES: { value: CompanyRole; label: string }[] = [
