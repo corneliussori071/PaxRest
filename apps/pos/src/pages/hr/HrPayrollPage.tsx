@@ -27,6 +27,9 @@ import PauseCircleIcon from '@mui/icons-material/PauseCircle';
 import PaymentIcon from '@mui/icons-material/Payment';
 import LoginIcon from '@mui/icons-material/Login';
 import LogoutIcon from '@mui/icons-material/Logout';
+import SettingsIcon from '@mui/icons-material/Settings';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import { DataTable, type Column } from '@paxrest/ui';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
@@ -96,7 +99,8 @@ function HrPayrollContent() {
 
 function StaffTab({ fullAccess }: { fullAccess: boolean }) {
   const { activeBranchId, profile } = useAuth();
-  const [branchFilter, setBranchFilter] = useState('');
+  const isGlobal = profile?.role === 'owner' || profile?.role === 'general_manager';
+  const [branchFilter, setBranchFilter] = useState(() => isGlobal ? '' : (activeBranchId ?? ''));
   const extraParams = useMemo<Record<string, string> | undefined>(() => {
     const p: Record<string, string> = {};
     if (branchFilter) p.branch_filter = branchFilter;
@@ -134,16 +138,18 @@ function StaffTab({ fullAccess }: { fullAccess: boolean }) {
     <>
       {fullAccess && (
         <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
-          <FormControl size="small" sx={{ minWidth: 160 }}>
-            <InputLabel>Branch Filter</InputLabel>
-          <Select value={branchFilter} label="Branch Filter" onChange={(e) => setBranchFilter(e.target.value)}>
-            <MenuItem value="">All Staff</MenuItem>
-            <MenuItem value="__none__">Global (No Branch)</MenuItem>
-          </Select>
-        </FormControl>
-        <Box sx={{ flex: 1 }} />
-        <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={() => { setEditData(null); setEditOpen(true); }}>Add HR Profile</Button>
-      </Stack>
+          {isGlobal && (
+            <FormControl size="small" sx={{ minWidth: 160 }}>
+              <InputLabel>Branch Filter</InputLabel>
+              <Select value={branchFilter} label="Branch Filter" onChange={(e) => setBranchFilter(e.target.value)}>
+                <MenuItem value="">All Staff</MenuItem>
+                <MenuItem value="__none__">Global (No Branch)</MenuItem>
+              </Select>
+            </FormControl>
+          )}
+          <Box sx={{ flex: 1 }} />
+          <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={() => { setEditData(null); setEditOpen(true); }}>Add HR Profile</Button>
+        </Stack>
       )}
       <DataTable
         columns={columns} rows={items} totalRows={total}
@@ -362,6 +368,7 @@ function AttendanceTab({ fullAccess }: { fullAccess: boolean }) {
 
   // ── Restricted: Clock In / Out view ──
   if (!fullAccess) return <AttendanceClockView />;
+  // (fullAccess continues below)
 
   // ── Full access: admin view ──
   const [dateFrom, setDateFrom] = useState('');
@@ -386,18 +393,22 @@ function AttendanceTab({ fullAccess }: { fullAccess: boolean }) {
   const columns: Column[] = [
     { id: 'staff', label: 'Staff', render: (r) => r.staff?.name ?? '—' },
     { id: 'date', label: 'Date', sortable: true, render: (r) => r.date },
-    { id: 'clock_in', label: 'Clock In', render: (r) => r.clock_in ? new Date(r.clock_in).toLocaleTimeString() : '—' },
-    { id: 'clock_out', label: 'Clock Out', render: (r) => r.clock_out ? new Date(r.clock_out).toLocaleTimeString() : '—' },
+    { id: 'clock_in', label: 'Clock In', render: (r) => r.clock_in ? r.clock_in.slice(11, 16) : '—' },
+    { id: 'clock_out', label: 'Clock Out', render: (r) => r.clock_out ? r.clock_out.slice(11, 16) : '—' },
     { id: 'total_hours', label: 'Hours', sortable: true, render: (r) => r.total_hours ?? '—' },
     { id: 'overtime_hours', label: 'OT Hours', render: (r) => r.overtime_hours > 0 ? r.overtime_hours : '—' },
     { id: 'status', label: 'Status', render: (r) => <Chip size="small" label={r.status?.replace('_', ' ')} color={statusColor[r.status] ?? 'default'} /> },
-    { id: 'actions', label: '', render: (r) => (
-      <IconButton size="small" onClick={() => { setEditData(r); setEditOpen(true); }}><EditIcon fontSize="small" /></IconButton>
-    )},
+    { id: 'actions', label: '', render: (r) => {
+      if (r.staff_id === profile?.id) return null;
+      return <IconButton size="small" onClick={() => { setEditData(r); setEditOpen(true); }}><EditIcon fontSize="small" /></IconButton>;
+    }},
   ];
 
   return (
     <>
+      {/* Clock-in/out widget for the current user */}
+      <AttendanceClockView compact />
+      <Divider sx={{ my: 2 }} />
       <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap">
         <TextField size="small" type="date" label="From" InputLabelProps={{ shrink: true }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <TextField size="small" type="date" label="To" InputLabelProps={{ shrink: true }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
@@ -428,7 +439,8 @@ function AttendanceTab({ fullAccess }: { fullAccess: boolean }) {
 }
 
 function AttendanceDialog({ open, onClose, data, onSaved }: any) {
-  const { data: staffList } = useApi<{ items: any[]; total: number }>('staff', 'list', { page: '1', page_size: '200' });
+  const { profile } = useAuth();
+  const { data: staffList } = useApi<{ items: any[]; total: number }>('hr', 'list-staff', { page: '1', page_size: '200' });
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
 
@@ -473,8 +485,8 @@ function AttendanceDialog({ open, onClose, data, onSaved }: any) {
               </Select>
             </FormControl>
           </Grid>
-          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock In" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_in?.slice(0, 16) ?? ''} onChange={(e) => setForm({ ...form, clock_in: e.target.value ? new Date(e.target.value).toISOString() : null })} /></Grid>
-          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock Out" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_out?.slice(0, 16) ?? ''} onChange={(e) => setForm({ ...form, clock_out: e.target.value ? new Date(e.target.value).toISOString() : null })} /></Grid>
+          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock In" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_in?.slice(0, 16) ?? ''} onChange={(e) => setForm({ ...form, clock_in: e.target.value ? `${e.target.value}:00.000Z` : null })} /></Grid>
+          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock Out" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_out?.slice(0, 16) ?? ''} onChange={(e) => setForm({ ...form, clock_out: e.target.value ? `${e.target.value}:00.000Z` : null })} /></Grid>
           <Grid size={{ xs: 4 }}><TextField fullWidth size="small" label="Break (min)" type="number" value={form.break_minutes ?? 0} onChange={(e) => setForm({ ...form, break_minutes: Number(e.target.value) })} /></Grid>
           <Grid size={{ xs: 4 }}><TextField fullWidth size="small" label="Total Hours" type="number" value={form.total_hours ?? ''} onChange={(e) => setForm({ ...form, total_hours: Number(e.target.value) })} /></Grid>
           <Grid size={{ xs: 4 }}><TextField fullWidth size="small" label="OT Hours" type="number" value={form.overtime_hours ?? 0} onChange={(e) => setForm({ ...form, overtime_hours: Number(e.target.value) })} /></Grid>
@@ -490,7 +502,7 @@ function AttendanceDialog({ open, onClose, data, onSaved }: any) {
 }
 
 // ── Restricted Attendance: Clock In / Clock Out ─────────────────────────────
-function AttendanceClockView() {
+function AttendanceClockView({ compact = false }: { compact?: boolean }) {
   const { profile } = useAuth();
   const [clockStatus, setClockStatus] = useState<any>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
@@ -500,7 +512,10 @@ function AttendanceClockView() {
   const fetchStatus = useCallback(async () => {
     setLoadingStatus(true);
     try {
-      const res = await api<any>('hr', 'my-clock-status');
+      const now = new Date();
+      const clientDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const clientTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const res = await api<any>('hr', 'my-clock-status', { params: { client_date: clientDate, client_time: clientTime } });
       setClockStatus(res);
     } catch {}
     finally { setLoadingStatus(false); }
@@ -513,24 +528,35 @@ function AttendanceClockView() {
     } catch {}
   }, []);
 
-  useEffect(() => { fetchStatus(); fetchHistory(); }, [fetchStatus, fetchHistory]);
+  useEffect(() => { fetchStatus(); if (!compact) fetchHistory(); }, [fetchStatus, fetchHistory, compact]);
 
   const handleClockIn = async () => {
     setActing(true);
     try {
-      await api('hr', 'clock-in', { body: {} });
-      toast.success('Clocked in!');
-      fetchStatus(); fetchHistory();
+      const now = new Date();
+      const clientDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const clientTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const result = await api<any>('hr', 'clock-in', { body: { client_date: clientDate, client_time: clientTime } });
+      toast.success(result.late ? `Clocked in \u2014 ${result.message}` : 'Clocked in!');
+      fetchStatus(); if (!compact) fetchHistory();
     } catch (err: any) { toast.error(err.message); }
     finally { setActing(false); }
   };
 
-  const handleClockOut = async () => {
+  const handleClockOut = async (force = false) => {
     setActing(true);
     try {
-      await api('hr', 'clock-out', { body: {} });
+      const now = new Date();
+      const clientDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const clientTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const result = await api<any>('hr', 'clock-out', { body: { client_date: clientDate, client_time: clientTime, force } });
+      if (result.early_clockout) {
+        setActing(false);
+        if (window.confirm(result.message)) handleClockOut(true);
+        return;
+      }
       toast.success('Clocked out!');
-      fetchStatus(); fetchHistory();
+      fetchStatus(); if (!compact) fetchHistory();
     } catch (err: any) { toast.error(err.message); }
     finally { setActing(false); }
   };
@@ -554,7 +580,7 @@ function AttendanceClockView() {
                 Since {clockStatus.clock_in_time ? new Date(clockStatus.clock_in_time).toLocaleTimeString() : '—'}
                 {clockStatus.shift_name && ` · Shift: ${clockStatus.shift_name}`}
               </Typography>
-              <Button variant="contained" color="error" size="large" startIcon={<LogoutIcon />} onClick={handleClockOut} disabled={acting}>
+              <Button variant="contained" color="error" size="large" startIcon={<LogoutIcon />} onClick={() => handleClockOut(false)} disabled={acting}>
                 {acting ? 'Clocking Out…' : 'Clock Out'}
               </Button>
             </>
@@ -579,6 +605,7 @@ function AttendanceClockView() {
         </CardContent>
       </Card>
 
+      {!compact && <>
       {/* Recent Attendance History */}
       <Typography variant="subtitle2" sx={{ mb: 1 }}>Recent Attendance</Typography>
       <TableContainer component={Paper} variant="outlined">
@@ -598,8 +625,8 @@ function AttendanceClockView() {
             ) : history.map((r: any) => (
               <TableRow key={r.id}>
                 <TableCell>{r.date}</TableCell>
-                <TableCell>{r.clock_in ? new Date(r.clock_in).toLocaleTimeString() : '—'}</TableCell>
-                <TableCell>{r.clock_out ? new Date(r.clock_out).toLocaleTimeString() : '—'}</TableCell>
+                <TableCell>{r.clock_in ? r.clock_in.slice(11, 16) : '—'}</TableCell>
+                <TableCell>{r.clock_out ? r.clock_out.slice(11, 16) : '—'}</TableCell>
                 <TableCell>{r.total_hours ?? '—'}</TableCell>
                 <TableCell><Chip size="small" label={r.status?.replace('_', ' ')} color={r.status === 'present' ? 'success' : r.status === 'late' ? 'warning' : 'default'} /></TableCell>
               </TableRow>
@@ -607,6 +634,7 @@ function AttendanceClockView() {
           </TableBody>
         </Table>
       </TableContainer>
+      </>}
     </Box>
   );
 }
@@ -942,9 +970,29 @@ function ScheduleDetailView({ schedule, onBack }: { schedule: any; onBack: () =>
   }, [detail]);
 
   const handleShiftChange = async (assignmentId: string, newShiftId: string) => {
+    if (newShiftId === '__delete__') {
+      // handled by MenuItem onClick – ignore onChange firing with this sentinel value
+      return;
+    }
     try {
       await api('hr', 'update-assignment', { body: { id: assignmentId, shift_id: newShiftId } });
       toast.success('Updated');
+      fetchDetail();
+    } catch (err: any) { toast.error(err.message); }
+    setEditingCell(null);
+  };
+
+  const handleCreateAssignment = async (staffId: string, date: string, shiftId: string) => {
+    if (!shiftId || shiftId === '__delete__') return;
+    try {
+      await api('hr', 'create-assignment', { body: {
+        staff_id: staffId,
+        shift_id: shiftId,
+        assignment_date: date,
+        schedule_id: detail?.schedule?.id,
+        station_id: (detail?.schedule as any)?.station?.id,
+      }});
+      toast.success('Assigned');
       fetchDetail();
     } catch (err: any) { toast.error(err.message); }
     setEditingCell(null);
@@ -1053,13 +1101,20 @@ function ScheduleDetailView({ schedule, onBack }: { schedule: any; onBack: () =>
                     const isEditing = editingCell === cellKey;
                     const isWeekend = (() => { const d = new Date(date + 'T00:00:00'); return d.getDay() === 0 || d.getDay() === 6; })();
 
-                    if (isEditing && assignment) {
+                    if (isEditing) {
                       return (
                         <TableCell key={date} align="center" sx={{ p: 0.5, bgcolor: isWeekend ? 'action.hover' : undefined }}>
                           <Select
                             size="small"
-                            value={assignment.shift?.id ?? ''}
-                            onChange={(e) => handleShiftChange(assignment.id, e.target.value)}
+                            value={assignment?.shift?.id ?? ''}
+                            onChange={(e) => {
+                              if (e.target.value === '__delete__') return;
+                              if (assignment) {
+                                handleShiftChange(assignment.id, e.target.value);
+                              } else {
+                                handleCreateAssignment(staff.id, date, e.target.value);
+                              }
+                            }}
                             onClose={() => setEditingCell(null)}
                             autoFocus
                             open
@@ -1068,10 +1123,14 @@ function ScheduleDetailView({ schedule, onBack }: { schedule: any; onBack: () =>
                             {(detail.shifts ?? []).map((sh: any) => (
                               <MenuItem key={sh.id} value={sh.id} sx={{ fontSize: '0.75rem' }}>{sh.shift_name}</MenuItem>
                             ))}
-                            <Divider />
-                            <MenuItem value="__delete__" sx={{ fontSize: '0.75rem', color: 'error.main' }} onClick={(e) => { e.stopPropagation(); handleDeleteAssignment(assignment.id); }}>
-                              Remove
-                            </MenuItem>
+                            {assignment && (
+                              <>
+                                <Divider />
+                                <MenuItem value="__delete__" sx={{ fontSize: '0.75rem', color: 'error.main' }} onClick={(e) => { e.stopPropagation(); handleDeleteAssignment(assignment.id); }}>
+                                  Remove
+                                </MenuItem>
+                              </>
+                            )}
                           </Select>
                         </TableCell>
                       );
@@ -1081,11 +1140,11 @@ function ScheduleDetailView({ schedule, onBack }: { schedule: any; onBack: () =>
                       <TableCell
                         key={date}
                         align="center"
-                        onClick={() => assignment && setEditingCell(cellKey)}
+                        onClick={() => setEditingCell(cellKey)}
                         sx={{
-                          cursor: assignment ? 'pointer' : 'default',
+                          cursor: 'pointer',
                           bgcolor: isWeekend ? 'action.hover' : undefined,
-                          '&:hover': assignment ? { bgcolor: 'action.selected' } : {},
+                          '&:hover': { bgcolor: 'action.selected' },
                           p: 0.5,
                         }}
                       >
@@ -1308,11 +1367,16 @@ function MyScheduleView() {
           </TableHead>
           <TableBody>
             {schedules.map((a: any, i: number) => (
-              <TableRow key={i}>
+              <TableRow key={i} sx={a.off ? { opacity: 0.55 } : {}}>
                 <TableCell>{a.assignment_date}</TableCell>
-                <TableCell>{a.station_name ?? '—'}</TableCell>
-                <TableCell>{a.shift_name ?? '—'}</TableCell>
-                <TableCell>{a.start_time ?? '—'} – {a.end_time ?? '—'}</TableCell>
+                <TableCell>{a.off ? '—' : (a.schedule?.station?.station_name ?? a.station ?? '—')}</TableCell>
+                <TableCell>
+                  {a.off
+                    ? <Chip size="small" label="OFF" variant="outlined" />
+                    : (a.shift?.shift_name ?? '—')
+                  }
+                </TableCell>
+                <TableCell>{a.off ? '—' : `${a.shift?.start_time ?? '—'} – ${a.shift?.end_time ?? '—'}`}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -2239,45 +2303,225 @@ function MyPayrollView() {
 // Tab 5: Leave Management
 // ═══════════════════════════════════════════════════════════════════════════
 
+const STANDARD_ROLES = ['owner', 'general_manager', 'branch_manager', 'cashier', 'chef'];
+
 function LeaveManagementTab({ fullAccess }: { fullAccess: boolean }) {
-  // Restricted: show only own leave requests, no types management
   if (!fullAccess) return <MyLeaveView />;
 
   const [subTab, setSubTab] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { data: leaveSettingsData, refetch: refetchSettings } = useApi<any>('hr', 'get-leave-settings');
+  const leaveSystem: 'fixed' | 'pto' = leaveSettingsData?.settings?.leave_system ?? 'fixed';
+
   return (
     <Box>
-      <Tabs value={subTab} onChange={(_, v) => setSubTab(v)} sx={{ mb: 2 }}>
-        <Tab label="Leave Requests" />
-        <Tab label="Leave Types" />
-      </Tabs>
-      {subTab === 0 && <LeaveRequestsSubTab />}
-      {subTab === 1 && <LeaveTypesSubTab />}
+      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+        <Tabs value={subTab} onChange={(_, v) => setSubTab(v)}>
+          <Tab label="Leave Requests" />
+          <Tab label="Leave Types" />
+        </Tabs>
+        <Tooltip title="Leave Settings">
+          <IconButton onClick={() => setSettingsOpen(true)}><SettingsIcon /></IconButton>
+        </Tooltip>
+      </Stack>
+      {subTab === 0 && <LeaveRequestsSubTab leaveSystem={leaveSystem} />}
+      {subTab === 1 && <LeaveTypesSubTab leaveSystem={leaveSystem} />}
+      <LeaveSettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        initialData={leaveSettingsData}
+        onSaved={() => { refetchSettings(); setSettingsOpen(false); }}
+      />
     </Box>
   );
 }
 
-// ── Restricted Leave: My Leave Requests ─────────────────────────────────────
+// ── Leave Settings Dialog ────────────────────────────────────────────────────
+function LeaveSettingsDialog({ open, onClose, initialData, onSaved }: any) {
+  const [leaveSystem, setLeaveSystem] = useState<'fixed' | 'pto'>('fixed');
+  const [ptoRates, setPtoRates] = useState<{ role: string; worked_hours: number; pto_hours: number }[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setLeaveSystem(initialData?.settings?.leave_system ?? 'fixed');
+    const rates = initialData?.pto_rates ?? [];
+    if (rates.length > 0) {
+      setPtoRates(rates);
+    } else {
+      setPtoRates(STANDARD_ROLES.map((r) => ({ role: r, worked_hours: 40, pto_hours: 1 })));
+    }
+  }, [open, initialData]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await api('hr', 'save-leave-settings', {
+        body: { leave_system: leaveSystem, pto_rates: leaveSystem === 'pto' ? ptoRates : [] },
+      });
+      toast.success('Leave settings saved');
+      onSaved();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSaving(false); }
+  };
+
+  const updateRate = (index: number, field: 'worked_hours' | 'pto_hours', value: number) => {
+    setPtoRates((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
+  };
+
+  const addRate = () => setPtoRates((prev) => [...prev, { role: '', worked_hours: 40, pto_hours: 1 }]);
+  const removeRate = (index: number) => setPtoRates((prev) => prev.filter((_, i) => i !== index));
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Leave Settings</DialogTitle>
+      <DialogContent>
+        <Stack spacing={3} sx={{ mt: 1 }}>
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>Leave System Type</Typography>
+            <RadioGroup row value={leaveSystem} onChange={(e) => setLeaveSystem(e.target.value as 'fixed' | 'pto')}>
+              <FormControlLabel value="fixed" control={<Radio />} label="Fixed Days Leave" />
+              <FormControlLabel value="pto" control={<Radio />} label="PTO (Paid Time Off)" />
+            </RadioGroup>
+            <Typography variant="caption" color="text.secondary">
+              {leaveSystem === 'fixed'
+                ? 'Each leave type has a fixed maximum number of days per role per year.'
+                : 'Staff accumulate PTO hours based on hours worked, which they can redeem as leave days.'}
+            </Typography>
+          </Box>
+
+          {leaveSystem === 'pto' && (
+            <Box>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">PTO Accrual Rates</Typography>
+                <Button size="small" startIcon={<AddIcon />} onClick={addRate}>Add Role</Button>
+              </Stack>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                For every X worked hours, the staff earns Y PTO hours (1 PTO day = 8 PTO hours).
+              </Typography>
+              <Stack spacing={1}>
+                {ptoRates.map((rate, i) => (
+                  <Stack key={i} direction="row" spacing={1} alignItems="center">
+                    <FormControl size="small" sx={{ minWidth: 150 }}>
+                      <InputLabel>Role</InputLabel>
+                      <Select
+                        value={rate.role}
+                        label="Role"
+                        onChange={(e) => setPtoRates((prev) => prev.map((r, idx) => idx === i ? { ...r, role: e.target.value } : r))}
+                      >
+                        {STANDARD_ROLES.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
+                        <MenuItem value={rate.role && !STANDARD_ROLES.includes(rate.role) ? rate.role : '__custom__'}>
+                          {rate.role && !STANDARD_ROLES.includes(rate.role) ? rate.role : 'Custom…'}
+                        </MenuItem>
+                      </Select>
+                    </FormControl>
+                    <TextField
+                      size="small" label="Worked Hrs" type="number" sx={{ width: 110 }}
+                      value={rate.worked_hours}
+                      onChange={(e) => updateRate(i, 'worked_hours', Number(e.target.value))}
+                      inputProps={{ min: 0.5, step: 0.5 }}
+                    />
+                    <Typography variant="body2">=</Typography>
+                    <TextField
+                      size="small" label="PTO Hrs" type="number" sx={{ width: 100 }}
+                      value={rate.pto_hours}
+                      onChange={(e) => updateRate(i, 'pto_hours', Number(e.target.value))}
+                      inputProps={{ min: 0.5, step: 0.5 }}
+                    />
+                    <IconButton size="small" color="error" onClick={() => removeRate(i)}><DeleteIcon fontSize="small" /></IconButton>
+                  </Stack>
+                ))}
+              </Stack>
+            </Box>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ── Restricted Leave: My Leave View ─────────────────────────────────────────
 function MyLeaveView() {
-  const { profile } = useAuth();
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const [leaveInfo, setLeaveInfo] = useState<any>(null);
 
-  const fetchMyLeaves = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api<any>('hr', 'my-leave-requests');
-      setRequests(res.items ?? []);
+      const [reqRes, infoRes] = await Promise.all([
+        api<any>('hr', 'my-leave-requests'),
+        api<any>('hr', 'my-leave-info'),
+      ]);
+      setRequests(reqRes.items ?? []);
+      setLeaveInfo(infoRes);
     } catch {}
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchMyLeaves(); }, [fetchMyLeaves]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   const statusColor: Record<string, 'warning' | 'success' | 'error'> = { pending: 'warning', approved: 'success', rejected: 'error' };
 
   return (
     <Box>
+      {/* PTO Balance Card */}
+      {leaveInfo?.leave_system === 'pto' && leaveInfo.pto_balance && (
+        <Card variant="outlined" sx={{ mb: 2 }}>
+          <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+            <Stack direction="row" spacing={3} alignItems="center">
+              <AccessTimeIcon color="primary" />
+              <Box>
+                <Typography variant="caption" color="text.secondary">Available PTO Balance</Typography>
+                <Typography variant="h6" color="primary">
+                  {leaveInfo.pto_balance.pto_hours.toFixed(1)} hrs
+                  <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                    ({(leaveInfo.pto_balance.pto_hours / 8).toFixed(1)} days)
+                  </Typography>
+                </Typography>
+              </Box>
+              <Divider orientation="vertical" flexItem />
+              <Box>
+                <Typography variant="caption" color="text.secondary">Total Worked</Typography>
+                <Typography variant="body2">{leaveInfo.pto_balance.worked_hours.toFixed(1)} hrs</Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary">PTO Used</Typography>
+                <Typography variant="body2">{leaveInfo.pto_balance.hours_used.toFixed(1)} hrs</Typography>
+              </Box>
+              {leaveInfo.pto_balance.rate && (
+                <Box>
+                  <Typography variant="caption" color="text.secondary">Accrual Rate</Typography>
+                  <Typography variant="body2">
+                    {leaveInfo.pto_balance.rate.pto_hours}h per {leaveInfo.pto_balance.rate.worked_hours}h worked
+                  </Typography>
+                </Box>
+              )}
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Fixed Days Leave — per-type balance pills */}
+      {leaveInfo?.leave_system === 'fixed' && Array.isArray(leaveInfo.role_limits) && leaveInfo.role_limits.length > 0 && (
+        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2 }}>
+          {leaveInfo.role_limits.map((l: any) => (
+            <Chip
+              key={l.leave_type_id}
+              size="small"
+              icon={<EventAvailableIcon />}
+              label={`${l.remaining_days}/${l.max_days} days remaining`}
+              color={l.remaining_days === 0 ? 'error' : l.remaining_days <= 2 ? 'warning' : 'default'}
+            />
+          ))}
+        </Stack>
+      )}
+
       <Stack direction="row" justifyContent="flex-end" sx={{ mb: 2 }}>
         <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={() => setCreateOpen(true)}>Request Leave</Button>
       </Stack>
@@ -2292,41 +2536,83 @@ function MyLeaveView() {
                 <TableCell>Type</TableCell>
                 <TableCell>From</TableCell>
                 <TableCell>To</TableCell>
+                <TableCell>Days</TableCell>
                 <TableCell>Reason</TableCell>
                 <TableCell>Status</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {requests.length === 0 ? (
-                <TableRow><TableCell colSpan={5} align="center"><Typography variant="body2" color="text.secondary">No leave requests</Typography></TableCell></TableRow>
-              ) : requests.map((r: any) => (
-                <TableRow key={r.id}>
-                  <TableCell>{r.leave_type?.name ?? '—'}</TableCell>
-                  <TableCell>{r.start_date}</TableCell>
-                  <TableCell>{r.end_date}</TableCell>
-                  <TableCell>{r.reason || '—'}</TableCell>
-                  <TableCell><Chip size="small" label={r.status} color={statusColor[r.status] ?? 'default'} /></TableCell>
-                </TableRow>
-              ))}
+                <TableRow><TableCell colSpan={6} align="center"><Typography variant="body2" color="text.secondary">No leave requests</Typography></TableCell></TableRow>
+              ) : requests.map((r: any) => {
+                const start = new Date(r.adjusted_start_date ?? r.start_date);
+                const end = new Date(r.adjusted_end_date ?? r.end_date);
+                const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                const hasAdjust = r.adjusted_start_date || r.adjusted_end_date;
+                return (
+                  <TableRow key={r.id}>
+                    <TableCell>{r.leave_type?.name ?? '—'}</TableCell>
+                    <TableCell>
+                      {hasAdjust ? (
+                        <Stack>
+                          <Typography variant="caption" sx={{ textDecoration: 'line-through', color: 'text.secondary' }}>{r.start_date}</Typography>
+                          <Typography variant="body2" color="primary">{r.adjusted_start_date}</Typography>
+                        </Stack>
+                      ) : r.start_date}
+                    </TableCell>
+                    <TableCell>
+                      {hasAdjust ? (
+                        <Stack>
+                          <Typography variant="caption" sx={{ textDecoration: 'line-through', color: 'text.secondary' }}>{r.end_date}</Typography>
+                          <Typography variant="body2" color="primary">{r.adjusted_end_date}</Typography>
+                        </Stack>
+                      ) : r.end_date}
+                    </TableCell>
+                    <TableCell>{days}</TableCell>
+                    <TableCell>{r.reason || '—'}</TableCell>
+                    <TableCell>
+                      <Stack spacing={0.25}>
+                        <Chip size="small" label={r.status} color={statusColor[r.status] ?? 'default'} />
+                        {r.review_notes && <Typography variant="caption" color="text.secondary">{r.review_notes}</Typography>}
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>
       )}
 
-      <MyLeaveRequestDialog open={createOpen} onClose={() => setCreateOpen(false)} onSaved={fetchMyLeaves} />
+      <MyLeaveRequestDialog open={createOpen} onClose={() => setCreateOpen(false)} onSaved={fetchData} leaveInfo={leaveInfo} />
     </Box>
   );
 }
 
-function MyLeaveRequestDialog({ open, onClose, onSaved }: any) {
-  const { data: leaveTypes } = useApi<{ items: any[]; total: number }>('hr', 'list-leave-types');
+function MyLeaveRequestDialog({ open, onClose, onSaved, leaveInfo }: any) {
+  const { data: leaveTypes } = useApi<{ items: any[] }>('hr', 'list-leave-types');
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
 
   React.useEffect(() => { setForm({}); }, [open]);
 
+  const isPto = leaveInfo?.leave_system === 'pto';
+  const ptoBalance = leaveInfo?.pto_balance;
+
+  const selectedType = leaveTypes?.items?.find((t: any) => t.id === form.leave_type_id);
+
+  const requestedDays = form.start_date && form.end_date
+    ? Math.ceil((new Date(form.end_date).getTime() - new Date(form.start_date).getTime()) / (1000 * 60 * 60 * 24)) + 1
+    : 0;
+
+  const getRoleLimitForType = (typeId: string) => {
+    if (!leaveInfo?.role_limits) return null;
+    return leaveInfo.role_limits.find((l: any) => l.leave_type_id === typeId) ?? null;
+  };
+
   const handleSave = async () => {
     if (!form.leave_type_id || !form.start_date || !form.end_date) { toast.error('Fill all required fields'); return; }
+    if (requestedDays <= 0) { toast.error('End date must be on or after start date'); return; }
     setSaving(true);
     try {
       await api('hr', 'my-request-leave', { body: form });
@@ -2340,31 +2626,96 @@ function MyLeaveRequestDialog({ open, onClose, onSaved }: any) {
       <DialogTitle>Request Leave</DialogTitle>
       <DialogContent>
         <Grid container spacing={2} sx={{ mt: 0.5 }}>
+          {/* PTO balance info */}
+          {isPto && ptoBalance && (
+            <Grid size={{ xs: 12 }}>
+              <Card variant="outlined" sx={{ bgcolor: 'primary.50' }}>
+                <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
+                  <Stack direction="row" spacing={2} alignItems="center">
+                    <AccessTimeIcon color="primary" fontSize="small" />
+                    <Typography variant="body2">
+                      PTO Balance: <strong>{ptoBalance.pto_hours.toFixed(1)} hrs</strong> ({(ptoBalance.pto_hours / 8).toFixed(1)} days available)
+                    </Typography>
+                    {requestedDays > 0 && (
+                      <Chip
+                        size="small"
+                        label={`${requestedDays * 8}h needed`}
+                        color={requestedDays * 8 > ptoBalance.pto_hours ? 'error' : 'success'}
+                      />
+                    )}
+                  </Stack>
+                </CardContent>
+              </Card>
+            </Grid>
+          )}
+
           <Grid size={{ xs: 12 }}>
-            <FormControl fullWidth size="small"><InputLabel>Leave Type</InputLabel>
+            <FormControl fullWidth size="small">
+              <InputLabel>Leave Type</InputLabel>
               <Select value={form.leave_type_id ?? ''} label="Leave Type" onChange={(e) => setForm({ ...form, leave_type_id: e.target.value })}>
-                {(leaveTypes?.items ?? []).filter((t: any) => t.is_active).map((t: any) => <MenuItem key={t.id} value={t.id}>{t.name} ({t.is_paid ? 'Paid' : 'Unpaid'}, max {t.max_days}d)</MenuItem>)}
+                {(leaveTypes?.items ?? []).filter((t: any) => t.is_active).map((t: any) => {
+                  const lim = getRoleLimitForType(t.id);
+                  return (
+                    <MenuItem key={t.id} value={t.id}>
+                      {t.name} ({t.is_paid ? 'Paid' : 'Unpaid'})
+                      {lim ? ` — ${lim.remaining_days}/${lim.max_days} days left` : ''}
+                    </MenuItem>
+                  );
+                })}
               </Select>
             </FormControl>
+            {/* Fixed days remaining for selected type */}
+            {!isPto && selectedType && (() => {
+              const lim = getRoleLimitForType(selectedType.id);
+              if (!lim) return null;
+              return (
+                <Typography variant="caption" color={lim.remaining_days === 0 ? 'error' : 'text.secondary'} sx={{ mt: 0.5, display: 'block' }}>
+                  {lim.remaining_days} of {lim.max_days} days remaining this year
+                  {requestedDays > 0 && requestedDays > lim.remaining_days && (
+                    <span style={{ color: 'red' }}> · {requestedDays} days requested exceeds limit</span>
+                  )}
+                </Typography>
+              );
+            })()}
           </Grid>
-          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Start Date" type="date" InputLabelProps={{ shrink: true }} value={form.start_date ?? ''} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></Grid>
-          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="End Date" type="date" InputLabelProps={{ shrink: true }} value={form.end_date ?? ''} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></Grid>
-          <Grid size={{ xs: 12 }}><TextField fullWidth size="small" label="Reason" multiline rows={2} value={form.reason ?? ''} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Grid>
+
+          <Grid size={{ xs: 6 }}>
+            <TextField fullWidth size="small" label="Start Date" type="date" InputLabelProps={{ shrink: true }}
+              value={form.start_date ?? ''} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
+          </Grid>
+          <Grid size={{ xs: 6 }}>
+            <TextField fullWidth size="small" label="End Date" type="date" InputLabelProps={{ shrink: true }}
+              value={form.end_date ?? ''} onChange={(e) => setForm({ ...form, end_date: e.target.value })} />
+          </Grid>
+          {requestedDays > 0 && (
+            <Grid size={{ xs: 12 }}>
+              <Typography variant="caption" color="text.secondary">
+                {requestedDays} day{requestedDays !== 1 ? 's' : ''} requested
+                {isPto ? ` (${requestedDays * 8} PTO hours)` : ''}
+              </Typography>
+            </Grid>
+          )}
+          <Grid size={{ xs: 12 }}>
+            <TextField fullWidth size="small" label="Reason" multiline rows={2}
+              value={form.reason ?? ''} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+          </Grid>
         </Grid>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Submit'}</Button>
+        <Button variant="contained" onClick={handleSave} disabled={saving}>{saving ? 'Submitting…' : 'Submit'}</Button>
       </DialogActions>
     </Dialog>
   );
 }
 
-function LeaveRequestsSubTab() {
+// ── Full Access: Leave Requests Sub-tab ────────────────────────────────────
+function LeaveRequestsSubTab({ leaveSystem }: { leaveSystem: 'fixed' | 'pto' }) {
   const [statusFilter, setStatusFilter] = useState('');
   const extraParams = useMemo<Record<string, string> | undefined>(() => statusFilter ? { status: statusFilter } : undefined, [statusFilter]);
   const { items, total, loading, page, pageSize, sortBy, sortDir, setPage, setPageSize, onSortChange, setSearch, refetch } = usePaginated<any>('hr', 'list-leave-requests', extraParams);
   const [createOpen, setCreateOpen] = useState(false);
+  const [adjustRequest, setAdjustRequest] = useState<any>(null);
 
   const statusColor: Record<string, 'warning' | 'success' | 'error'> = { pending: 'warning', approved: 'success', rejected: 'error' };
 
@@ -2374,23 +2725,60 @@ function LeaveRequestsSubTab() {
   };
 
   const columns: Column[] = [
-    { id: 'staff', label: 'Staff', render: (r) => r.staff?.name ?? '—' },
+    { id: 'staff', label: 'Staff', render: (r) => (
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Avatar src={r.staff?.avatar_url} sx={{ width: 26, height: 26 }}>{r.staff?.name?.[0]}</Avatar>
+        <Typography variant="body2">{r.staff?.name ?? '—'}</Typography>
+      </Stack>
+    )},
     { id: 'leave_type', label: 'Type', render: (r) => r.leave_type?.name ?? '—' },
-    { id: 'start_date', label: 'From', sortable: true },
-    { id: 'end_date', label: 'To' },
+    { id: 'start_date', label: 'From', sortable: true, render: (r) => {
+      const hasAdj = r.adjusted_start_date;
+      return hasAdj ? (
+        <Stack>
+          <Typography variant="caption" sx={{ textDecoration: 'line-through', color: 'text.secondary' }}>{r.start_date}</Typography>
+          <Typography variant="body2" color="primary">{r.adjusted_start_date}</Typography>
+        </Stack>
+      ) : r.start_date;
+    }},
+    { id: 'end_date', label: 'To', render: (r) => {
+      const hasAdj = r.adjusted_end_date;
+      return hasAdj ? (
+        <Stack>
+          <Typography variant="caption" sx={{ textDecoration: 'line-through', color: 'text.secondary' }}>{r.end_date}</Typography>
+          <Typography variant="body2" color="primary">{r.adjusted_end_date}</Typography>
+        </Stack>
+      ) : r.end_date;
+    }},
     { id: 'days', label: 'Days', render: (r) => {
-      const start = new Date(r.start_date);
-      const end = new Date(r.end_date);
+      const start = new Date(r.adjusted_start_date ?? r.start_date);
+      const end = new Date(r.adjusted_end_date ?? r.end_date);
       return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
     }},
+    ...(leaveSystem === 'pto' ? [{ id: 'pto_hours', label: 'PTO Hrs', render: (r: any) => r.pto_hours_used ? `${r.pto_hours_used}h` : '—' } as Column] : []),
     { id: 'reason', label: 'Reason', render: (r) => r.reason || '—' },
-    { id: 'status', label: 'Status', render: (r) => <Chip size="small" label={r.status} color={statusColor[r.status] ?? 'default'} /> },
-    { id: 'actions', label: '', render: (r) => r.status === 'pending' ? (
-      <Stack direction="row" spacing={0.5}>
-        <Tooltip title="Approve"><IconButton size="small" color="success" onClick={() => handleReview(r.id, 'approved')}><CheckCircleIcon fontSize="small" /></IconButton></Tooltip>
-        <Tooltip title="Reject"><IconButton size="small" color="error" onClick={() => handleReview(r.id, 'rejected')}><CancelIcon fontSize="small" /></IconButton></Tooltip>
+    { id: 'status', label: 'Status', render: (r) => (
+      <Stack spacing={0.25}>
+        <Chip size="small" label={r.status} color={statusColor[r.status] ?? 'default'} />
+        {r.review_notes && <Typography variant="caption" color="text.secondary">{r.review_notes}</Typography>}
       </Stack>
-    ) : r.reviewer?.name ? <Typography variant="caption" color="text.secondary">by {r.reviewer.name}</Typography> : null },
+    )},
+    { id: 'reviewer', label: 'Reviewed By', render: (r) => r.reviewer?.name ? (
+      <Typography variant="caption" color="text.secondary">{r.reviewer.name}</Typography>
+    ) : null },
+    { id: 'actions', label: '', render: (r) => (
+      <Stack direction="row" spacing={0.5}>
+        {r.status === 'pending' && (
+          <>
+            <Tooltip title="Approve"><IconButton size="small" color="success" onClick={() => handleReview(r.id, 'approved')}><CheckCircleIcon fontSize="small" /></IconButton></Tooltip>
+            <Tooltip title="Reject"><IconButton size="small" color="error" onClick={() => handleReview(r.id, 'rejected')}><CancelIcon fontSize="small" /></IconButton></Tooltip>
+          </>
+        )}
+        {r.status !== 'rejected' && (
+          <Tooltip title="Adjust Dates"><IconButton size="small" onClick={() => setAdjustRequest(r)}><EditIcon fontSize="small" /></IconButton></Tooltip>
+        )}
+      </Stack>
+    )},
   ];
 
   return (
@@ -2415,18 +2803,23 @@ function LeaveRequestsSubTab() {
         rowKey={(r) => r.id}
         toolbar={<Button startIcon={<AddIcon />} variant="contained" size="small" onClick={() => setCreateOpen(true)}>Request Leave</Button>}
       />
-      <LeaveRequestDialog open={createOpen} onClose={() => setCreateOpen(false)} onSaved={refetch} />
+      <LeaveRequestDialog open={createOpen} onClose={() => setCreateOpen(false)} onSaved={refetch} leaveSystem={leaveSystem} />
+      <LeaveAdjustDialog request={adjustRequest} onClose={() => setAdjustRequest(null)} onSaved={refetch} />
     </>
   );
 }
 
-function LeaveRequestDialog({ open, onClose, onSaved }: any) {
-  const { data: staffList } = useApi<{ items: any[]; total: number }>('staff', 'list', { page: '1', page_size: '200' });
-  const { data: leaveTypes } = useApi<{ items: any[]; total: number }>('hr', 'list-leave-types');
+function LeaveRequestDialog({ open, onClose, onSaved, leaveSystem }: any) {
+  const { data: staffList } = useApi<{ items: any[] }>('hr', 'list-staff', { page: '1', page_size: '200' });
+  const { data: leaveTypes } = useApi<{ items: any[] }>('hr', 'list-leave-types');
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
 
   React.useEffect(() => { setForm({}); }, [open]);
+
+  const requestedDays = form.start_date && form.end_date
+    ? Math.ceil((new Date(form.end_date).getTime() - new Date(form.start_date).getTime()) / (1000 * 60 * 60 * 24)) + 1
+    : 0;
 
   const handleSave = async () => {
     if (!form.staff_id || !form.leave_type_id || !form.start_date || !form.end_date) { toast.error('Fill all required fields'); return; }
@@ -2440,7 +2833,7 @@ function LeaveRequestDialog({ open, onClose, onSaved }: any) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Request Leave</DialogTitle>
+      <DialogTitle>Create Leave Request</DialogTitle>
       <DialogContent>
         <Grid container spacing={2} sx={{ mt: 0.5 }}>
           <Grid size={{ xs: 12 }}>
@@ -2453,12 +2846,21 @@ function LeaveRequestDialog({ open, onClose, onSaved }: any) {
           <Grid size={{ xs: 12 }}>
             <FormControl fullWidth size="small"><InputLabel>Leave Type</InputLabel>
               <Select value={form.leave_type_id ?? ''} label="Leave Type" onChange={(e) => setForm({ ...form, leave_type_id: e.target.value })}>
-                {(leaveTypes?.items ?? []).filter((t: any) => t.is_active).map((t: any) => <MenuItem key={t.id} value={t.id}>{t.name} ({t.is_paid ? 'Paid' : 'Unpaid'}, max {t.max_days}d)</MenuItem>)}
+                {(leaveTypes?.items ?? []).filter((t: any) => t.is_active).map((t: any) => (
+                  <MenuItem key={t.id} value={t.id}>{t.name} ({t.is_paid ? 'Paid' : 'Unpaid'})</MenuItem>
+                ))}
               </Select>
             </FormControl>
           </Grid>
           <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Start Date" type="date" InputLabelProps={{ shrink: true }} value={form.start_date ?? ''} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></Grid>
           <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="End Date" type="date" InputLabelProps={{ shrink: true }} value={form.end_date ?? ''} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></Grid>
+          {requestedDays > 0 && (
+            <Grid size={{ xs: 12 }}>
+              <Typography variant="caption" color="text.secondary">
+                {requestedDays} day{requestedDays !== 1 ? 's' : ''}{leaveSystem === 'pto' ? ` = ${requestedDays * 8} PTO hrs` : ''}
+              </Typography>
+            </Grid>
+          )}
           <Grid size={{ xs: 12 }}><TextField fullWidth size="small" label="Reason" multiline rows={2} value={form.reason ?? ''} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Grid>
         </Grid>
       </DialogContent>
@@ -2470,14 +2872,87 @@ function LeaveRequestDialog({ open, onClose, onSaved }: any) {
   );
 }
 
-function LeaveTypesSubTab() {
+function LeaveAdjustDialog({ request, onClose, onSaved }: { request: any; onClose: () => void; onSaved: () => void }) {
+  const [adjustStart, setAdjustStart] = useState('');
+  const [adjustEnd, setAdjustEnd] = useState('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  React.useEffect(() => {
+    if (!request) return;
+    setAdjustStart(request.adjusted_start_date ?? request.start_date ?? '');
+    setAdjustEnd(request.adjusted_end_date ?? request.end_date ?? '');
+    setNotes(request.review_notes ?? '');
+  }, [request]);
+
+  if (!request) return null;
+
+  const handleSave = async () => {
+    if (!adjustStart || !adjustEnd) { toast.error('Set both adjusted dates'); return; }
+    setSaving(true);
+    try {
+      await api('hr', 'adjust-leave', { body: { id: request.id, adjusted_start_date: adjustStart, adjusted_end_date: adjustEnd, review_notes: notes } });
+      toast.success('Leave dates adjusted'); onSaved(); onClose();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSaving(false); }
+  };
+
+  const days = adjustStart && adjustEnd
+    ? Math.ceil((new Date(adjustEnd).getTime() - new Date(adjustStart).getTime()) / (1000 * 60 * 60 * 24)) + 1
+    : 0;
+
+  return (
+    <Dialog open={!!request} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>Adjust Leave Dates</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Original: {request.start_date} → {request.end_date}
+        </Typography>
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 6 }}>
+            <TextField fullWidth size="small" label="New Start Date" type="date" InputLabelProps={{ shrink: true }}
+              value={adjustStart} onChange={(e) => setAdjustStart(e.target.value)} />
+          </Grid>
+          <Grid size={{ xs: 6 }}>
+            <TextField fullWidth size="small" label="New End Date" type="date" InputLabelProps={{ shrink: true }}
+              value={adjustEnd} onChange={(e) => setAdjustEnd(e.target.value)} />
+          </Grid>
+          {days > 0 && (
+            <Grid size={{ xs: 12 }}>
+              <Typography variant="caption" color="text.secondary">{days} day{days !== 1 ? 's' : ''}</Typography>
+            </Grid>
+          )}
+          <Grid size={{ xs: 12 }}>
+            <TextField fullWidth size="small" label="Notes (optional)" multiline rows={2}
+              value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </Grid>
+        </Grid>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ── Full Access: Leave Types Sub-tab ─────────────────────────────────────────
+function LeaveTypesSubTab({ leaveSystem }: { leaveSystem: 'fixed' | 'pto' }) {
   const { data: leaveTypes, refetch } = useApi<{ items: any[] }>('hr', 'list-leave-types');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editData, setEditData] = useState<any>(null);
 
   const columns: Column[] = [
     { id: 'name', label: 'Name' },
-    { id: 'max_days', label: 'Max Days' },
+    ...(leaveSystem === 'fixed' ? [{ id: 'role_limits', label: 'Per-Role Max Days', render: (r: any) => {
+      const limits: any[] = r.role_limits ?? [];
+      if (limits.length === 0) return <Typography variant="caption" color="text.secondary">No limits set</Typography>;
+      return (
+        <Stack direction="row" spacing={0.5} flexWrap="wrap">
+          {limits.map((l: any) => <Chip key={l.role} size="small" label={`${l.role}: ${l.max_days}d`} />)}
+        </Stack>
+      );
+    }} as Column] : [{ id: 'pto_note', label: '', render: () => <Typography variant="caption" color="text.secondary">Uses PTO balance</Typography> } as Column]),
     { id: 'is_paid', label: 'Paid', render: (r) => r.is_paid ? <Chip size="small" label="Paid" color="success" /> : <Chip size="small" label="Unpaid" /> },
     { id: 'is_active', label: 'Active', render: (r) => r.is_active ? <Chip size="small" label="Active" color="success" /> : <Chip size="small" label="Inactive" /> },
     { id: 'actions', label: '', render: (r) => (
@@ -2493,43 +2968,92 @@ function LeaveTypesSubTab() {
         rowKey={(r) => r.id}
         toolbar={<Button startIcon={<AddIcon />} variant="contained" size="small" onClick={() => { setEditData(null); setDialogOpen(true); }}>Add Leave Type</Button>}
       />
-      <LeaveTypeDialog open={dialogOpen} onClose={() => setDialogOpen(false)} data={editData} onSaved={refetch} />
+      <LeaveTypeDialog open={dialogOpen} onClose={() => setDialogOpen(false)} data={editData} onSaved={refetch} leaveSystem={leaveSystem} />
     </>
   );
 }
 
-function LeaveTypeDialog({ open, onClose, data, onSaved }: any) {
+function LeaveTypeDialog({ open, onClose, data, onSaved, leaveSystem }: any) {
   const [form, setForm] = useState<any>({});
+  const [roleLimits, setRoleLimits] = useState<{ role: string; max_days: number }[]>([]);
   const [saving, setSaving] = useState(false);
 
   React.useEffect(() => {
-    if (data) setForm({ ...data });
-    else setForm({ name: '', max_days: 0, is_paid: true, is_active: true });
-  }, [data, open]);
+    if (!open) return;
+    if (data) {
+      setForm({ ...data });
+      setRoleLimits(data.role_limits?.map((l: any) => ({ role: l.role, max_days: l.max_days })) ?? []);
+    } else {
+      setForm({ name: '', is_paid: true, is_active: true });
+      setRoleLimits(leaveSystem === 'fixed' ? STANDARD_ROLES.map((r) => ({ role: r, max_days: 0 })) : []);
+    }
+  }, [data, open, leaveSystem]);
 
   const handleSave = async () => {
     if (!form.name) { toast.error('Name is required'); return; }
     setSaving(true);
     try {
-      await api('hr', 'upsert-leave-type', { body: form });
+      const body: any = { ...form, role_limits: leaveSystem === 'fixed' ? roleLimits : [] };
+      await api('hr', 'upsert-leave-type', { body });
       toast.success('Saved'); onSaved(); onClose();
     } catch (err: any) { toast.error(err.message); }
     finally { setSaving(false); }
   };
 
+  const updateLimit = (index: number, max_days: number) =>
+    setRoleLimits((prev) => prev.map((l, i) => (i === index ? { ...l, max_days } : l)));
+  const addLimit = () => setRoleLimits((prev) => [...prev, { role: '', max_days: 0 }]);
+  const removeLimit = (index: number) => setRoleLimits((prev) => prev.filter((_, i) => i !== index));
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>{data ? 'Edit Leave Type' : 'Add Leave Type'}</DialogTitle>
       <DialogContent>
         <Grid container spacing={2} sx={{ mt: 0.5 }}>
-          <Grid size={{ xs: 12 }}><TextField fullWidth size="small" label="Name" value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Grid>
-          <Grid size={{ xs: 12 }}><TextField fullWidth size="small" label="Max Days" type="number" value={form.max_days ?? 0} onChange={(e) => setForm({ ...form, max_days: Number(e.target.value) })} /></Grid>
+          <Grid size={{ xs: 12 }}>
+            <TextField fullWidth size="small" label="Name" value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </Grid>
           <Grid size={{ xs: 6 }}>
             <FormControlLabel control={<Switch checked={form.is_paid ?? true} onChange={(e) => setForm({ ...form, is_paid: e.target.checked })} />} label="Paid Leave" />
           </Grid>
           <Grid size={{ xs: 6 }}>
             <FormControlLabel control={<Switch checked={form.is_active ?? true} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />} label="Active" />
           </Grid>
+
+          {leaveSystem === 'fixed' && (
+            <Grid size={{ xs: 12 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Max Days Per Role (per year)</Typography>
+                <Button size="small" startIcon={<AddIcon />} onClick={addLimit}>Add Role</Button>
+              </Stack>
+              <Stack spacing={1}>
+                {roleLimits.map((lim, i) => (
+                  <Stack key={i} direction="row" spacing={1} alignItems="center">
+                    <FormControl size="small" sx={{ minWidth: 160 }}>
+                      <InputLabel>Role</InputLabel>
+                      <Select
+                        value={lim.role}
+                        label="Role"
+                        onChange={(e) => setRoleLimits((prev) => prev.map((l, idx) => idx === i ? { ...l, role: e.target.value } : l))}
+                      >
+                        {STANDARD_ROLES.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
+                      </Select>
+                    </FormControl>
+                    <TextField
+                      size="small" label="Max Days" type="number" sx={{ width: 110 }}
+                      value={lim.max_days}
+                      onChange={(e) => updateLimit(i, Number(e.target.value))}
+                      inputProps={{ min: 0 }}
+                    />
+                    <IconButton size="small" color="error" onClick={() => removeLimit(i)}><DeleteIcon fontSize="small" /></IconButton>
+                  </Stack>
+                ))}
+                {roleLimits.length === 0 && (
+                  <Typography variant="caption" color="text.secondary">No role limits set (unlimited for all roles)</Typography>
+                )}
+              </Stack>
+            </Grid>
+          )}
         </Grid>
       </DialogContent>
       <DialogActions>
@@ -2539,6 +3063,8 @@ function LeaveTypeDialog({ open, onClose, data, onSaved }: any) {
     </Dialog>
   );
 }
+
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tab 6: Performance & Disciplinary Records

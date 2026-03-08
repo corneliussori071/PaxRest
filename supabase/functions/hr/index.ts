@@ -47,6 +47,8 @@ serve(async (req) => {
       case 'my-payroll':         return await myPayroll(req, auth);
       case 'my-leave-requests':  return await myLeaveRequests(req, auth);
       case 'my-request-leave':   return await myRequestLeave(req, auth);
+      case 'my-leave-info':      return await myLeaveInfo(req, auth);
+      case 'get-my-pto-balance': return await getMyPtoBalance(req, auth);
 
       // Staff HR Profiles (full access)
       case 'list-staff': {
@@ -180,6 +182,16 @@ serve(async (req) => {
         return await upsertLeaveType(req, auth);
       }
 
+      // Leave Settings
+      case 'get-leave-settings': {
+        if (!hasAny('manage_hr', 'hr_leave', 'hr_leave_view')) return errorResponse('Forbidden', 403);
+        return await getLeaveSettings(req, auth);
+      }
+      case 'save-leave-settings': {
+        if (!hasAny('manage_hr', 'hr_leave')) return errorResponse('Forbidden', 403);
+        return await saveLeaveSettings(req, auth);
+      }
+
       // Leave Requests
       case 'list-leave-requests': {
         if (!hasAny('manage_hr', 'hr_leave', 'hr_leave_view')) return errorResponse('Forbidden', 403);
@@ -192,6 +204,10 @@ serve(async (req) => {
       case 'review-leave': {
         if (!hasAny('manage_hr', 'hr_leave')) return errorResponse('Forbidden', 403);
         return await reviewLeaveRequest(req, auth);
+      }
+      case 'adjust-leave': {
+        if (!hasAny('manage_hr', 'hr_leave')) return errorResponse('Forbidden', 403);
+        return await adjustLeaveRequest(req, auth);
       }
 
       // Performance Records
@@ -445,6 +461,7 @@ async function upsertAttendance(req: Request, auth: AuthContext) {
   if (req.method !== 'POST' && req.method !== 'PUT') return errorResponse('Method not allowed', 405);
   const body = await req.json();
   if (!body.staff_id || !body.date) return errorResponse('Missing staff_id or date');
+  if (body.staff_id === auth.userId) return errorResponse('You cannot record your own attendance directly. Use the clock-in / clock-out buttons.');
 
   const branchId = resolveBranchId(auth, req);
   const service = createServiceClient();
@@ -657,6 +674,8 @@ async function createAssignment(req: Request, auth: AuthContext) {
       staff_id: body.staff_id,
       shift_id: body.shift_id,
       assignment_date: body.assignment_date,
+      ...(body.schedule_id ? { schedule_id: body.schedule_id } : {}),
+      ...(body.station_id ? { station_id: body.station_id } : {}),
       station: body.station ? sanitizeString(body.station, 100) : null,
       notes: body.notes ? sanitizeString(body.notes, 500) : null,
     })
@@ -1657,14 +1676,18 @@ async function savePayrollSettings(req: Request, auth: AuthContext) {
 
 async function listLeaveTypes(req: Request, auth: AuthContext) {
   const service = createServiceClient();
-  const { data, error } = await service
-    .from('leave_types')
-    .select('*')
-    .eq('company_id', auth.companyId)
-    .order('name');
-
-  if (error) return errorResponse(error.message);
-  return jsonResponse({ items: data, total: data?.length ?? 0 });
+  const [typesResult, limitsResult] = await Promise.all([
+    service.from('leave_types').select('*').eq('company_id', auth.companyId).order('name'),
+    service.from('leave_type_role_limits').select('*').eq('company_id', auth.companyId),
+  ]);
+  if (typesResult.error) return errorResponse(typesResult.error.message);
+  const types = typesResult.data ?? [];
+  const limits = limitsResult.data ?? [];
+  const typesWithLimits = types.map((t: Record<string, unknown>) => ({
+    ...t,
+    role_limits: limits.filter((l: any) => l.leave_type_id === t.id),
+  }));
+  return jsonResponse({ items: typesWithLimits, total: typesWithLimits.length });
 }
 
 async function upsertLeaveType(req: Request, auth: AuthContext) {
@@ -1689,6 +1712,24 @@ async function upsertLeaveType(req: Request, auth: AuthContext) {
     .single();
 
   if (error) return errorResponse(error.message);
+
+  // Upsert role limits if provided
+  if (Array.isArray(body.role_limits)) {
+    await service.from('leave_type_role_limits').delete()
+      .eq('company_id', auth.companyId).eq('leave_type_id', data.id);
+    const toInsert = body.role_limits
+      .filter((l: any) => l.role && Number(l.max_days) >= 0)
+      .map((l: any) => ({
+        company_id: auth.companyId,
+        leave_type_id: data.id,
+        role: sanitizeString(l.role, 50),
+        max_days: Number(l.max_days) || 0,
+      }));
+    if (toInsert.length > 0) {
+      await service.from('leave_type_role_limits').insert(toInsert);
+    }
+  }
+
   return jsonResponse({ leave_type: data });
 }
 
@@ -1738,6 +1779,11 @@ async function createLeaveRequest(req: Request, auth: AuthContext) {
   }
 
   const service = createServiceClient();
+  const validationError = await validateLeaveRequest(service, auth.companyId, body.staff_id, body.leave_type_id, body.start_date, body.end_date);
+  if (validationError) return errorResponse(validationError);
+
+  const ptoHoursUsed = await computePtoHoursUsed(service, auth.companyId, body.staff_id, body.start_date, body.end_date);
+
   const { data, error } = await service
     .from('leave_requests')
     .insert({
@@ -1747,6 +1793,7 @@ async function createLeaveRequest(req: Request, auth: AuthContext) {
       start_date: body.start_date,
       end_date: body.end_date,
       reason: body.reason ? sanitizeString(body.reason, 500) : null,
+      pto_hours_used: ptoHoursUsed,
     })
     .select('*, staff:profiles!staff_id(id, name, email), leave_type:leave_types!leave_type_id(id, name)')
     .single();
@@ -1762,15 +1809,22 @@ async function reviewLeaveRequest(req: Request, auth: AuthContext) {
   if (!['approved', 'rejected'].includes(body.status)) return errorResponse('Invalid status');
 
   const service = createServiceClient();
+  const updateData: Record<string, unknown> = {
+    status: body.status,
+    reviewed_by: auth.userId,
+    reviewed_at: new Date().toISOString(),
+    review_notes: body.review_notes ? sanitizeString(body.review_notes, 500) : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (body.status === 'approved' && body.adjusted_start_date && body.adjusted_end_date) {
+    updateData.adjusted_start_date = body.adjusted_start_date;
+    updateData.adjusted_end_date = body.adjusted_end_date;
+  }
+
   const { data, error } = await service
     .from('leave_requests')
-    .update({
-      status: body.status,
-      reviewed_by: auth.userId,
-      reviewed_at: new Date().toISOString(),
-      review_notes: body.review_notes ? sanitizeString(body.review_notes, 500) : null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updateData)
     .eq('id', body.id)
     .eq('company_id', auth.companyId)
     .eq('status', 'pending')
@@ -1778,8 +1832,284 @@ async function reviewLeaveRequest(req: Request, auth: AuthContext) {
     .single();
 
   if (error) return errorResponse(error.message);
+
+  // When approved, auto-populate attendance records for the leave period
+  if (body.status === 'approved') {
+    const effectiveStart: string = data.adjusted_start_date ?? data.start_date;
+    const effectiveEnd: string = data.adjusted_end_date ?? data.end_date;
+
+    const { data: leaveType } = await service
+      .from('leave_types')
+      .select('is_paid')
+      .eq('id', data.leave_type_id)
+      .single();
+    const isPaid = leaveType?.is_paid ?? false;
+
+    // Build the list of calendar dates in the leave period
+    const leaveDates: string[] = [];
+    const lCur = new Date(effectiveStart + 'T12:00:00Z');
+    const lEnd = new Date(effectiveEnd + 'T12:00:00Z');
+    while (lCur <= lEnd) {
+      leaveDates.push(lCur.toISOString().slice(0, 10));
+      lCur.setDate(lCur.getDate() + 1);
+    }
+
+    if (leaveDates.length > 0) {
+      // Fetch shift assignments for those dates so we can record shift times
+      const { data: assignments } = await service
+        .from('shift_assignments')
+        .select('assignment_date, shift_id, hr_shifts(id, start_time, end_time, break_duration)')
+        .eq('staff_id', data.staff_id)
+        .eq('company_id', auth.companyId)
+        .in('assignment_date', leaveDates);
+
+      const shiftByDate = new Map<string, any>();
+      for (const a of (assignments ?? []) as any[]) {
+        shiftByDate.set(a.assignment_date, a.hr_shifts);
+      }
+
+      // Fetch existing records to avoid overwriting actual attendance (present/late/half_day)
+      const { data: existing } = await service
+        .from('attendance_records')
+        .select('date, status')
+        .eq('staff_id', data.staff_id)
+        .eq('company_id', auth.companyId)
+        .in('date', leaveDates);
+
+      const existingStatus = new Map<string, string>();
+      for (const e of (existing ?? []) as any[]) {
+        existingStatus.set(e.date, e.status);
+      }
+
+      const toUpsert: any[] = [];
+      for (const date of leaveDates) {
+        const curStatus = existingStatus.get(date);
+        // Do not overwrite days when the staff member actually worked
+        if (curStatus && ['present', 'late', 'half_day'].includes(curStatus)) continue;
+
+        const shift = shiftByDate.get(date);
+        const record: any = {
+          company_id: auth.companyId,
+          staff_id: data.staff_id,
+          date,
+          status: 'on_leave',
+          notes: 'Auto-populated from approved leave',
+        };
+
+        if (shift) {
+          const [sh, sm] = (shift.start_time as string).split(':').map(Number);
+          const [eh, em] = (shift.end_time as string).split(':').map(Number);
+          let durMin = (eh * 60 + em) - (sh * 60 + sm);
+          if (durMin <= 0) durMin += 24 * 60; // overnight shift
+
+          record.shift_id = shift.id;
+          record.clock_in = `${date}T${shift.start_time}:00`;
+          record.clock_out = `${date}T${shift.end_time}:00`;
+          record.break_minutes = shift.break_duration ?? 0;
+          record.total_hours = isPaid
+            ? Math.round(Math.max(0, durMin - (shift.break_duration ?? 0)) / 60 * 100) / 100
+            : 0;
+          record.overtime_hours = 0;
+        } else {
+          record.total_hours = 0;
+          record.overtime_hours = 0;
+        }
+
+        toUpsert.push(record);
+      }
+
+      if (toUpsert.length > 0) {
+        await service
+          .from('attendance_records')
+          .upsert(toUpsert, { onConflict: 'staff_id,date' });
+      }
+    }
+  }
+
   return jsonResponse({ request: data });
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Leave Settings
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function getLeaveSettings(_req: Request, auth: AuthContext) {
+  const service = createServiceClient();
+  const [settingsResult, ratesResult] = await Promise.all([
+    service.from('leave_settings').select('*').eq('company_id', auth.companyId).maybeSingle(),
+    service.from('pto_rates').select('*').eq('company_id', auth.companyId).order('role'),
+  ]);
+  return jsonResponse({
+    settings: settingsResult.data ?? { leave_system: 'fixed' },
+    pto_rates: ratesResult.data ?? [],
+  });
+}
+
+async function saveLeaveSettings(req: Request, auth: AuthContext) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  const leaveSystem = body.leave_system === 'pto' ? 'pto' : 'fixed';
+
+  const service = createServiceClient();
+  const { error: settingsError } = await service
+    .from('leave_settings')
+    .upsert(
+      { company_id: auth.companyId, leave_system: leaveSystem, updated_at: new Date().toISOString(), updated_by: auth.userId },
+      { onConflict: 'company_id' }
+    );
+  if (settingsError) return errorResponse(settingsError.message);
+
+  if (Array.isArray(body.pto_rates)) {
+    await service.from('pto_rates').delete().eq('company_id', auth.companyId);
+    const toInsert = body.pto_rates
+      .filter((r: any) => r.role && Number(r.worked_hours) > 0 && Number(r.pto_hours) > 0)
+      .map((r: any) => ({
+        company_id: auth.companyId,
+        role: sanitizeString(r.role, 50),
+        worked_hours: Number(r.worked_hours),
+        pto_hours: Number(r.pto_hours),
+      }));
+    if (toInsert.length > 0) {
+      const { error: rateError } = await service.from('pto_rates').insert(toInsert);
+      if (rateError) return errorResponse(rateError.message);
+    }
+  }
+
+  return jsonResponse({ ok: true });
+}
+
+async function adjustLeaveRequest(req: Request, auth: AuthContext) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  const body = await req.json();
+  if (!body.id) return errorResponse('Missing id');
+  if (!body.adjusted_start_date || !body.adjusted_end_date) return errorResponse('Missing adjusted dates');
+
+  const service = createServiceClient();
+  const { data, error } = await service
+    .from('leave_requests')
+    .update({
+      adjusted_start_date: body.adjusted_start_date,
+      adjusted_end_date: body.adjusted_end_date,
+      review_notes: body.review_notes ? sanitizeString(body.review_notes, 500) : null,
+      reviewed_by: auth.userId,
+      reviewed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', body.id)
+    .eq('company_id', auth.companyId)
+    .neq('status', 'rejected')
+    .select()
+    .single();
+
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ request: data });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Leave Validation Helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function validateLeaveRequest(
+  service: ReturnType<typeof createServiceClient>,
+  companyId: string | null,
+  userId: string | null,
+  leaveTypeId: string,
+  startDate: string,
+  endDate: string,
+  excludeRequestId?: string,
+): Promise<string | null> {
+  if (!companyId || !userId) return null;
+  const { data: settings } = await service
+    .from('leave_settings').select('leave_system').eq('company_id', companyId).maybeSingle();
+  const leaveSystem = (settings as any)?.leave_system ?? 'fixed';
+
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const requestedDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  if (requestedDays <= 0) return 'End date must be on or after start date';
+
+  const { data: profile } = await service.from('profiles').select('role').eq('id', userId).single();
+  const userRole = (profile as any)?.role ?? 'cashier';
+
+  if (leaveSystem === 'fixed') {
+    const { data: limit } = await service
+      .from('leave_type_role_limits')
+      .select('max_days')
+      .eq('company_id', companyId)
+      .eq('leave_type_id', leaveTypeId)
+      .eq('role', userRole)
+      .maybeSingle();
+
+    if (!limit || (limit as any).max_days <= 0) return null;
+
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10);
+    const yearEnd = new Date(new Date().getFullYear(), 11, 31).toISOString().slice(0, 10);
+    let usedQuery = service
+      .from('leave_requests')
+      .select('start_date, end_date, adjusted_start_date, adjusted_end_date')
+      .eq('company_id', companyId)
+      .eq('staff_id', userId)
+      .eq('leave_type_id', leaveTypeId)
+      .eq('status', 'approved')
+      .gte('start_date', yearStart)
+      .lte('end_date', yearEnd);
+    if (excludeRequestId) usedQuery = usedQuery.neq('id', excludeRequestId);
+
+    const { data: usedLeaves } = await usedQuery;
+    const usedDays = (usedLeaves ?? []).reduce((sum: number, r: any) => {
+      const s = new Date(r.adjusted_start_date ?? r.start_date);
+      const e = new Date(r.adjusted_end_date ?? r.end_date);
+      return sum + Math.ceil((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    }, 0);
+
+    const maxDays = (limit as any).max_days;
+    if (usedDays + requestedDays > maxDays) {
+      return `Exceeds maximum ${maxDays} days for your role (${usedDays} day${usedDays !== 1 ? 's' : ''} already used this year)`;
+    }
+  } else {
+    const { data: rate } = await service
+      .from('pto_rates').select('*').eq('company_id', companyId).eq('role', userRole).maybeSingle();
+    if (!rate) return null;
+
+    const { data: attendance } = await service
+      .from('attendance_records').select('total_hours')
+      .eq('company_id', companyId).eq('staff_id', userId).not('total_hours', 'is', null);
+    const totalWorkedHours = (attendance ?? []).reduce((sum: number, r: any) => sum + (Number(r.total_hours) || 0), 0);
+    const ptoEarned = (totalWorkedHours / (rate as any).worked_hours) * (rate as any).pto_hours;
+
+    let usedQuery2 = service
+      .from('leave_requests').select('pto_hours_used')
+      .eq('company_id', companyId).eq('staff_id', userId).eq('status', 'approved')
+      .not('pto_hours_used', 'is', null);
+    if (excludeRequestId) usedQuery2 = usedQuery2.neq('id', excludeRequestId);
+    const { data: usedLeaves2 } = await usedQuery2;
+    const hoursUsed = (usedLeaves2 ?? []).reduce((sum: number, r: any) => sum + (Number(r.pto_hours_used) || 0), 0);
+
+    const ptoBalance = Math.max(0, ptoEarned - hoursUsed);
+    const requestedHours = requestedDays * 8;
+    if (requestedHours > ptoBalance) {
+      return `Insufficient PTO balance (${ptoBalance.toFixed(1)} hrs available, ${requestedHours} hrs needed for ${requestedDays} day${requestedDays !== 1 ? 's' : ''})`;
+    }
+  }
+  return null;
+}
+
+async function computePtoHoursUsed(
+  service: ReturnType<typeof createServiceClient>,
+  companyId: string | null,
+  _userId: string | null,
+  startDate: string,
+  endDate: string,
+): Promise<number | null> {
+  if (!companyId) return null;
+  const { data: settings } = await service
+    .from('leave_settings').select('leave_system').eq('company_id', companyId).maybeSingle();
+  if ((settings as any)?.leave_system !== 'pto') return null;
+  const days = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  return days * 8;
+}
+
+
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Performance Records
@@ -2177,6 +2507,32 @@ async function generateSchedule(req: Request, auth: AuthContext) {
   shiftInfos.sort((a, b) => typeOrder[a.type] - typeOrder[b.type] || a.start_time.localeCompare(b.start_time));
 
   // ──────────────────────────────────────────────────────────────────────
+  // Fetch approved leaves so those staff can be excluded per day
+  // ──────────────────────────────────────────────────────────────────────
+  const { data: approvedLeaves } = await service
+    .from('leave_requests')
+    .select('staff_id, start_date, end_date, adjusted_start_date, adjusted_end_date')
+    .eq('company_id', auth.companyId)
+    .eq('status', 'approved')
+    .in('staff_id', staff_ids)
+    .lte('start_date', date_to)
+    .gte('end_date', date_from);
+
+  // leaveMap: staffId → Set of dateStrings when they are on approved leave
+  const leaveMap = new Map<string, Set<string>>();
+  for (const leave of (approvedLeaves ?? []) as any[]) {
+    const lStart = new Date((leave.adjusted_start_date ?? leave.start_date) + 'T12:00:00Z');
+    const lEnd = new Date((leave.adjusted_end_date ?? leave.end_date) + 'T12:00:00Z');
+    if (!leaveMap.has(leave.staff_id)) leaveMap.set(leave.staff_id, new Set());
+    const dateSet = leaveMap.get(leave.staff_id)!;
+    const lCur = new Date(lStart);
+    while (lCur <= lEnd) {
+      dateSet.add(lCur.toISOString().slice(0, 10));
+      lCur.setDate(lCur.getDate() + 1);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   // Per-staff tracking state
   // ──────────────────────────────────────────────────────────────────────
   interface StaffState {
@@ -2262,6 +2618,7 @@ async function generateSchedule(req: Request, auth: AuthContext) {
 
       for (const st of staffStates.values()) {
         if (assignedToday.has(st.id)) continue;
+        if (leaveMap.get(st.id)?.has(dateStr)) continue; // On approved leave — skip entirely
         // Hard: rolling 7-day hours limit
         if (rollingWeekHours(st, dateStr) + shift.duration_hours > maxHoursPerWeek) continue;
         // Hard: night-shift recovery
@@ -2386,13 +2743,18 @@ async function deleteSchedule(req: Request, auth: AuthContext) {
 // Self-Service (Restricted User) Endpoints
 // ===========================================================================
 
-async function myClockStatus(_req: Request, auth: AuthContext) {
+async function myClockStatus(req: Request, auth: AuthContext) {
+  const url = new URL(req.url);
   const service = createServiceClient();
-  const today = new Date().toISOString().slice(0, 10);
   const now = new Date();
-  const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const today = url.searchParams.get('client_date') ?? now.toISOString().slice(0, 10);
+  const clientTime = url.searchParams.get('client_time');
+  const currentMinutes = clientTime
+    ? Number(clientTime.split(':')[0]) * 60 + Number(clientTime.split(':')[1])
+    : now.getUTCHours() * 60 + now.getUTCMinutes();
+  const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 
-  // Check today's attendance record
+  // Today's attendance record
   const { data: att } = await service
     .from('attendance_records')
     .select('*')
@@ -2401,41 +2763,7 @@ async function myClockStatus(_req: Request, auth: AuthContext) {
     .eq('date', today)
     .maybeSingle();
 
-  // Auto clock-out: if clocked in but shift has ended
-  if (att && att.clock_in && !att.clock_out && att.shift_id) {
-    const { data: shift } = await service
-      .from('hr_shifts')
-      .select('end_time, start_time')
-      .eq('id', att.shift_id)
-      .maybeSingle();
-    if (shift) {
-      const [sh, sm] = shift.start_time.split(':').map(Number);
-      const [eh, em] = shift.end_time.split(':').map(Number);
-      const startMin = sh * 60 + sm;
-      let endMin = eh * 60 + em;
-      if (endMin <= startMin) endMin += 24 * 60;
-      const adjustedCurrent = currentMinutes < startMin ? currentMinutes + 24 * 60 : currentMinutes;
-      if (adjustedCurrent > endMin) {
-        const [ciH, ciM] = att.clock_in.split(':').map(Number);
-        const ciMin = ciH * 60 + ciM;
-        let totalMin = endMin - (ciMin < startMin ? ciMin + 24 * 60 : ciMin);
-        if (totalMin < 0) totalMin += 24 * 60;
-        const totalHours = Math.round((totalMin / 60) * 100) / 100;
-        await service
-          .from('attendance_records')
-          .update({ clock_out: shift.end_time, total_hours: totalHours, status: 'present', updated_at: new Date().toISOString() })
-          .eq('id', att.id);
-        return jsonResponse({
-          clocked_in: false,
-          auto_clocked_out: true,
-          attendance: { ...att, clock_out: shift.end_time, total_hours: totalHours, status: 'present' },
-          active_shift: null,
-        });
-      }
-    }
-  }
-
-  // Find active shift for today (started or starting within 10 minutes)
+  // Today's shift assignments
   const { data: assignments } = await service
     .from('shift_assignments')
     .select('*, shift:hr_shifts!inner(id, shift_name, start_time, end_time, break_duration)')
@@ -2443,19 +2771,93 @@ async function myClockStatus(_req: Request, auth: AuthContext) {
     .eq('company_id', auth.companyId)
     .eq('assignment_date', today);
 
+  // Resolve the shift the user is currently clocked into
+  let currentShift: any = null;
+  if (att?.clock_in && !att?.clock_out && att.shift_id) {
+    currentShift = (assignments ?? []).find((a: any) => a.shift?.id === att.shift_id)?.shift ?? null;
+    if (!currentShift) {
+      const { data: sh } = await service
+        .from('hr_shifts').select('id, shift_name, start_time, end_time, break_duration')
+        .eq('id', att.shift_id).maybeSingle();
+      currentShift = sh;
+    }
+  }
+
+  // Auto clock-out: clocked in but shift has now fully ended
+  if (att?.clock_in && !att?.clock_out && currentShift) {
+    const startMin = toMin(currentShift.start_time);
+    let endMin = toMin(currentShift.end_time);
+    if (endMin <= startMin) endMin += 24 * 60;
+    const adjustedCurrent = currentMinutes < startMin ? currentMinutes + 24 * 60 : currentMinutes;
+    if (adjustedCurrent > endMin) {
+      const ciMin = Number(att.clock_in.slice(11, 13)) * 60 + Number(att.clock_in.slice(14, 16));
+      let totalMin = endMin - (ciMin < startMin ? ciMin + 24 * 60 : ciMin);
+      if (totalMin < 0) totalMin += 24 * 60;
+      const breakMin = att.break_minutes ?? currentShift.break_duration ?? 0;
+      const totalHours = Math.max(0, Math.round(((totalMin - breakMin) / 60) * 100) / 100);
+      const shiftDurMin = endMin - startMin;
+      const scheduledHours = Math.max(0, (shiftDurMin - breakMin) / 60);
+      const overtimeHours = Math.max(0, Math.round((totalHours - scheduledHours) * 100) / 100);
+      const autoClockOutISO = `${today}T${currentShift.end_time}:00.000Z`;
+      await service.from('attendance_records').update({
+        clock_out: autoClockOutISO,
+        total_hours: totalHours,
+        overtime_hours: overtimeHours,
+        status: att.status === 'absent' ? 'present' : att.status,
+        updated_at: new Date().toISOString(),
+      }).eq('id', att.id);
+      return jsonResponse({
+        clocked_in: false,
+        auto_clocked_out: true,
+        attendance: { ...att, clock_out: autoClockOutISO, total_hours: totalHours },
+        active_shift: null,
+        current_shift: null,
+        can_clock_in: false,
+        clock_in_time: att.clock_in,
+      });
+    }
+  }
+
+  // Auto-absent: shift ended with no clock-in record at all
+  if (!att) {
+    for (const a of (assignments ?? [])) {
+      const shift = (a as any).shift;
+      if (!shift) continue;
+      const startMin = toMin(shift.start_time);
+      let endMin = toMin(shift.end_time);
+      if (endMin <= startMin) endMin += 24 * 60;
+      const adjustedCurrent = currentMinutes < startMin ? currentMinutes + 24 * 60 : currentMinutes;
+      if (adjustedCurrent > endMin) {
+        const branchId = auth.branchIds?.[0] ?? auth.activeBranchId;
+        await service.from('attendance_records').upsert({
+          company_id: auth.companyId,
+          branch_id: branchId,
+          staff_id: auth.userId,
+          date: today,
+          shift_id: shift.id,
+          total_hours: 0,
+          overtime_hours: 0,
+          status: 'absent',
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'staff_id,date', ignoreDuplicates: true });
+        break;
+      }
+    }
+  }
+
+  // Find active shift available to clock into
   let activeShift: any = null;
-  for (const a of assignments ?? []) {
-    const shift = (a as any).shift;
-    if (!shift) continue;
-    const [sh2, sm2] = shift.start_time.split(':').map(Number);
-    const [eh2, em2] = shift.end_time.split(':').map(Number);
-    const sMin = sh2 * 60 + sm2;
-    let eMin = eh2 * 60 + em2;
-    if (eMin <= sMin) eMin += 24 * 60;
-    const canClockIn = currentMinutes >= sMin - 10 && currentMinutes <= eMin;
-    if (canClockIn) {
-      activeShift = { ...shift, station: a.station, assignment_date: a.assignment_date };
-      break;
+  if (!att?.clock_in) {
+    for (const a of assignments ?? []) {
+      const shift = (a as any).shift;
+      if (!shift) continue;
+      const sMin = toMin(shift.start_time);
+      let eMin = toMin(shift.end_time);
+      if (eMin <= sMin) eMin += 24 * 60;
+      if (currentMinutes >= sMin - 10 && currentMinutes <= eMin) {
+        activeShift = { ...shift, station: a.station, assignment_date: a.assignment_date };
+        break;
+      }
     }
   }
 
@@ -2463,16 +2865,23 @@ async function myClockStatus(_req: Request, auth: AuthContext) {
     clocked_in: !!(att?.clock_in && !att?.clock_out),
     attendance: att,
     active_shift: activeShift,
+    current_shift: currentShift,
+    can_clock_in: !!activeShift && !att?.clock_in,
+    clock_in_time: att?.clock_in ?? null,
   });
 }
 
 async function clockIn(req: Request, auth: AuthContext) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const service = createServiceClient();
-  const today = new Date().toISOString().slice(0, 10);
+  const body = await req.json().catch(() => ({}));
   const now = new Date();
-  const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const clockTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+  const today = (body as any).client_date ?? now.toISOString().slice(0, 10);
+  const clientTime = (body as any).client_time as string | undefined;
+  const clockTime = clientTime ?? `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+  const currentMinutes = Number(clockTime.split(':')[0]) * 60 + Number(clockTime.split(':')[1]);
+  // Store as timestamptz using local-time-as-UTC convention (consistent with shift HH:MM comparisons)
+  const clockISO = `${today}T${clockTime}:00.000Z`;
 
   // Check not already clocked in
   const { data: existing } = await service
@@ -2487,7 +2896,7 @@ async function clockIn(req: Request, auth: AuthContext) {
     return errorResponse('Already clocked in');
   }
 
-  // Validate active shift
+  // Find active shift
   const { data: assignments } = await service
     .from('shift_assignments')
     .select('*, shift:hr_shifts!inner(id, shift_name, start_time, end_time, break_duration)')
@@ -2499,37 +2908,40 @@ async function clockIn(req: Request, auth: AuthContext) {
   for (const a of assignments ?? []) {
     const shift = (a as any).shift;
     if (!shift) continue;
-    const [sh3, sm3] = shift.start_time.split(':').map(Number);
-    const [eh3, em3] = shift.end_time.split(':').map(Number);
-    const sMin3 = sh3 * 60 + sm3;
-    let eMin3 = eh3 * 60 + em3;
-    if (eMin3 <= sMin3) eMin3 += 24 * 60;
-    if (currentMinutes >= sMin3 - 10 && currentMinutes <= eMin3) {
+    const [sh, sm] = shift.start_time.split(':').map(Number);
+    const [eh, em] = shift.end_time.split(':').map(Number);
+    const sMin = sh * 60 + sm;
+    let eMin = eh * 60 + em;
+    if (eMin <= sMin) eMin += 24 * 60;
+    if (currentMinutes >= sMin - 10 && currentMinutes <= eMin) {
       activeShift = shift;
       break;
     }
   }
 
   if (!activeShift) {
-    return errorResponse('No active shift found. You can only clock in if your shift has started or starts within 10 minutes.');
+    return errorResponse('No active shift found. You can only clock in within 10 minutes of your shift start.');
   }
 
-  const branchId = auth.branchIds?.[0] ?? auth.activeBranchId;
+  // Lateness detection
+  const [sSh, sSm] = activeShift.start_time.split(':').map(Number);
+  const shiftStartMin = sSh * 60 + sSm;
+  const isLate = currentMinutes > shiftStartMin;
+  const lateMinutes = isLate ? currentMinutes - shiftStartMin : 0;
+  const status = isLate ? 'late' : 'present';
 
+  const branchId = auth.branchIds?.[0] ?? auth.activeBranchId;
   const record: Record<string, unknown> = {
     company_id: auth.companyId,
     branch_id: branchId,
     staff_id: auth.userId,
     date: today,
     shift_id: activeShift.id,
-    clock_in: clockTime,
-    status: 'present',
+    clock_in: clockISO,
+    status,
     updated_at: new Date().toISOString(),
   };
-
-  if (existing?.id) {
-    record.id = existing.id;
-  }
+  if (existing?.id) record.id = existing.id;
 
   const { data, error } = await service
     .from('attendance_records')
@@ -2538,15 +2950,28 @@ async function clockIn(req: Request, auth: AuthContext) {
     .single();
 
   if (error) return errorResponse(error.message);
-  return jsonResponse({ record: data, shift: activeShift });
+  return jsonResponse({
+    record: data,
+    shift: activeShift,
+    late: isLate,
+    late_minutes: lateMinutes,
+    message: isLate
+      ? `You are ${lateMinutes} minute${lateMinutes !== 1 ? 's' : ''} late.`
+      : 'Clocked in on time.',
+  });
 }
 
 async function clockOut(req: Request, auth: AuthContext) {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
   const service = createServiceClient();
-  const today = new Date().toISOString().slice(0, 10);
+  const body = await req.json().catch(() => ({}));
   const now = new Date();
-  const clockTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+  const today = (body as any).client_date ?? now.toISOString().slice(0, 10);
+  const clientTime = (body as any).client_time as string | undefined;
+  const clockTime = clientTime ?? `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+  const currentMinutes = Number(clockTime.split(':')[0]) * 60 + Number(clockTime.split(':')[1]);
+  const clockISO = `${today}T${clockTime}:00.000Z`;
+  const force = !!(body as any).force;
 
   const { data: att } = await service
     .from('attendance_records')
@@ -2560,42 +2985,61 @@ async function clockOut(req: Request, auth: AuthContext) {
     return errorResponse('Not clocked in');
   }
 
-  // Calculate total hours
-  const [ciH, ciM] = att.clock_in.split(':').map(Number);
-  const ciMin = ciH * 60 + ciM;
-  const coMin = now.getUTCHours() * 60 + now.getUTCMinutes();
-  let totalMin = coMin - ciMin;
-  if (totalMin < 0) totalMin += 24 * 60;
-  const breakMin = att.break_minutes ?? 0;
-  const totalHours = Math.round(((totalMin - breakMin) / 60) * 100) / 100;
-
-  // Check for overtime (if shift exists)
-  let overtimeHours = 0;
+  // Load shift for early-out check and overtime
+  let shiftStartMin: number | null = null;
+  let shiftEndMin: number | null = null;
+  let shiftBreak = att.break_minutes ?? 0;
   if (att.shift_id) {
     const { data: shift } = await service
-      .from('hr_shifts')
-      .select('start_time, end_time')
-      .eq('id', att.shift_id)
-      .maybeSingle();
+      .from('hr_shifts').select('start_time, end_time, break_duration')
+      .eq('id', att.shift_id).maybeSingle();
     if (shift) {
-      const [shO, smO] = shift.start_time.split(':').map(Number);
-      const [ehO, emO] = shift.end_time.split(':').map(Number);
-      let shiftMin = (ehO * 60 + emO) - (shO * 60 + smO);
-      if (shiftMin <= 0) shiftMin += 24 * 60;
-      const scheduledHours = (shiftMin - breakMin) / 60;
-      if (totalHours > scheduledHours) {
-        overtimeHours = Math.round((totalHours - scheduledHours) * 100) / 100;
-      }
+      const [sh, sm] = shift.start_time.split(':').map(Number);
+      const [eh, em] = shift.end_time.split(':').map(Number);
+      shiftStartMin = sh * 60 + sm;
+      shiftEndMin = eh * 60 + em;
+      if (shiftEndMin <= shiftStartMin) shiftEndMin += 24 * 60;
+      shiftBreak = att.break_minutes ?? shift.break_duration ?? 0;
     }
+  }
+
+  // Early clock-out warning: still more than 10 min before shift end
+  if (!force && shiftEndMin !== null && shiftStartMin !== null) {
+    const adjustedCurrent = currentMinutes < shiftStartMin ? currentMinutes + 24 * 60 : currentMinutes;
+    const minsRemaining = shiftEndMin - adjustedCurrent;
+    if (minsRemaining > 10) {
+      const endH = Math.floor((shiftEndMin % (24 * 60)) / 60);
+      const endM = shiftEndMin % 60;
+      const endStr = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+      return jsonResponse({
+        early_clockout: true,
+        message: `Your shift is still in progress and ends at ${endStr}. Are you sure you want to clock out early?`,
+        minutes_remaining: minsRemaining,
+      });
+    }
+  }
+
+  // Compute total hours: extract HH:MM from stored ISO clock_in (local-as-UTC convention)
+  const ciMin = Number(att.clock_in.slice(11, 13)) * 60 + Number(att.clock_in.slice(14, 16));
+  let totalMin = currentMinutes - ciMin;
+  if (totalMin < 0) totalMin += 24 * 60;
+  const totalHours = Math.max(0, Math.round(((totalMin - shiftBreak) / 60) * 100) / 100);
+
+  // Overtime
+  let overtimeHours = 0;
+  if (shiftStartMin !== null && shiftEndMin !== null) {
+    const scheduledMin = shiftEndMin - shiftStartMin;
+    const scheduledHours = Math.max(0, (scheduledMin - shiftBreak) / 60);
+    overtimeHours = Math.max(0, Math.round((totalHours - scheduledHours) * 100) / 100);
   }
 
   const { data, error } = await service
     .from('attendance_records')
     .update({
-      clock_out: clockTime,
-      total_hours: Math.max(totalHours, 0),
+      clock_out: clockISO,
+      total_hours: totalHours,
       overtime_hours: overtimeHours,
-      status: 'present',
+      status: att.status === 'present' || att.status === 'late' ? att.status : 'present',
       updated_at: new Date().toISOString(),
     })
     .eq('id', att.id)
@@ -2634,7 +3078,7 @@ async function mySchedule(req: Request, auth: AuthContext) {
 
   const { data, error } = await service
     .from('shift_assignments')
-    .select('*, shift:hr_shifts!inner(id, shift_name, start_time, end_time)')
+    .select('*, shift:hr_shifts(id, shift_name, start_time, end_time), schedule:hr_schedules(id, date_from, date_to, station:hr_stations(id, station_name))')
     .eq('staff_id', auth.userId)
     .eq('company_id', auth.companyId)
     .gte('assignment_date', dateFrom)
@@ -2642,7 +3086,41 @@ async function mySchedule(req: Request, auth: AuthContext) {
     .order('assignment_date', { ascending: true });
 
   if (error) return errorResponse(error.message);
-  return jsonResponse({ items: data });
+
+  // Build assignment lookup by date
+  const assignmentByDate = new Map<string, any>();
+  for (const a of (data ?? [])) assignmentByDate.set(a.assignment_date, a);
+
+  // Collect unique schedule date ranges the user is part of
+  const seenScheduleIds = new Set<string>();
+  const scheduleRanges: Array<{ date_from: string; date_to: string }> = [];
+  for (const a of (data ?? [])) {
+    if (a.schedule_id && !seenScheduleIds.has(a.schedule_id)) {
+      seenScheduleIds.add(a.schedule_id);
+      const s = (a as any).schedule;
+      if (s?.date_from && s?.date_to) scheduleRanges.push({ date_from: s.date_from, date_to: s.date_to });
+    }
+  }
+
+  // If no schedule ranges, just return raw assignments
+  if (scheduleRanges.length === 0) return jsonResponse({ items: data ?? [] });
+
+  // Generate all dates within schedule ranges (clamped to query window)
+  const allDatesSet = new Set<string>();
+  for (const range of scheduleRanges) {
+    const start = new Date(range.date_from);
+    const end = new Date(range.date_to);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const ds = d.toISOString().slice(0, 10);
+      if (ds >= dateFrom && ds <= dateTo) allDatesSet.add(ds);
+    }
+  }
+
+  const items = Array.from(allDatesSet)
+    .sort()
+    .map((ds) => assignmentByDate.get(ds) ?? { assignment_date: ds, shift: null, off: true });
+
+  return jsonResponse({ items });
 }
 
 async function myPayroll(req: Request, auth: AuthContext) {
@@ -2741,21 +3219,125 @@ async function myRequestLeave(req: Request, auth: AuthContext) {
   const service = createServiceClient();
   const branchId = auth.branchIds?.[0] ?? auth.activeBranchId;
 
+  const validationError = await validateLeaveRequest(service, auth.companyId, auth.userId, String(body.leave_type_id), String(body.start_date), String(body.end_date));
+  if (validationError) return errorResponse(validationError);
+
+  const ptoHoursUsed = await computePtoHoursUsed(service, auth.companyId, auth.userId, String(body.start_date), String(body.end_date));
+
   const { data, error } = await service
     .from('leave_requests')
     .insert({
       company_id: auth.companyId,
-      branch_id: branchId,
       staff_id: auth.userId,
       leave_type_id: body.leave_type_id,
       start_date: body.start_date,
       end_date: body.end_date,
       reason: body.reason ? sanitizeString(body.reason, 500) : null,
       status: 'pending',
+      pto_hours_used: ptoHoursUsed,
     })
     .select('*, leave_type:leave_types!leave_type_id(id, name)')
     .single();
 
   if (error) return errorResponse(error.message);
   return jsonResponse({ request: data });
+}
+
+async function myLeaveInfo(_req: Request, auth: AuthContext) {
+  const service = createServiceClient();
+
+  const { data: profile } = await service.from('profiles').select('role').eq('id', auth.userId).single();
+  const userRole = (profile as any)?.role ?? 'cashier';
+
+  const { data: settings } = await service
+    .from('leave_settings').select('leave_system').eq('company_id', auth.companyId).maybeSingle();
+  const leaveSystem = (settings as any)?.leave_system ?? 'fixed';
+
+  const result: Record<string, unknown> = { leave_system: leaveSystem };
+
+  if (leaveSystem === 'pto') {
+    const { data: rate } = await service
+      .from('pto_rates').select('*').eq('company_id', auth.companyId).eq('role', userRole).maybeSingle();
+
+    if (rate) {
+      const { data: attendance } = await service
+        .from('attendance_records').select('total_hours')
+        .eq('company_id', auth.companyId).eq('staff_id', auth.userId).not('total_hours', 'is', null);
+      const totalWorked = (attendance ?? []).reduce((s: number, r: any) => s + (Number(r.total_hours) || 0), 0);
+      const ptoEarned = (totalWorked / (rate as any).worked_hours) * (rate as any).pto_hours;
+
+      const { data: usedLeaves } = await service
+        .from('leave_requests').select('pto_hours_used')
+        .eq('company_id', auth.companyId).eq('staff_id', auth.userId).eq('status', 'approved')
+        .not('pto_hours_used', 'is', null);
+      const hoursUsed = (usedLeaves ?? []).reduce((s: number, r: any) => s + (Number(r.pto_hours_used) || 0), 0);
+
+      result.pto_balance = {
+        pto_hours: Math.max(0, ptoEarned - hoursUsed),
+        worked_hours: totalWorked,
+        rate: { worked_hours: (rate as any).worked_hours, pto_hours: (rate as any).pto_hours },
+        hours_used: hoursUsed,
+      };
+    } else {
+      result.pto_balance = null;
+    }
+  } else {
+    const { data: limits } = await service
+      .from('leave_type_role_limits').select('*')
+      .eq('company_id', auth.companyId).eq('role', userRole);
+
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10);
+    const yearEnd = new Date(new Date().getFullYear(), 11, 31).toISOString().slice(0, 10);
+    const { data: usedLeaves } = await service
+      .from('leave_requests')
+      .select('leave_type_id, start_date, end_date, adjusted_start_date, adjusted_end_date')
+      .eq('company_id', auth.companyId).eq('staff_id', auth.userId).eq('status', 'approved')
+      .gte('start_date', yearStart).lte('end_date', yearEnd);
+
+    const usedDaysMap: Record<string, number> = {};
+    for (const r of usedLeaves ?? []) {
+      const s = new Date((r as any).adjusted_start_date ?? (r as any).start_date);
+      const e = new Date((r as any).adjusted_end_date ?? (r as any).end_date);
+      const days = Math.ceil((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      usedDaysMap[(r as any).leave_type_id] = (usedDaysMap[(r as any).leave_type_id] ?? 0) + days;
+    }
+
+    result.role_limits = (limits ?? []).map((l: any) => ({
+      leave_type_id: l.leave_type_id,
+      max_days: l.max_days,
+      used_days: usedDaysMap[l.leave_type_id] ?? 0,
+      remaining_days: Math.max(0, l.max_days - (usedDaysMap[l.leave_type_id] ?? 0)),
+    }));
+  }
+
+  return jsonResponse(result);
+}
+
+async function getMyPtoBalance(_req: Request, auth: AuthContext) {
+  const service = createServiceClient();
+  const { data: profile } = await service.from('profiles').select('role').eq('id', auth.userId).single();
+  const userRole = (profile as any)?.role ?? 'cashier';
+
+  const { data: rate } = await service
+    .from('pto_rates').select('*').eq('company_id', auth.companyId).eq('role', userRole).maybeSingle();
+  if (!rate) return jsonResponse({ pto_hours: 0, worked_hours: 0, rate: null, hours_used: 0 });
+
+  const { data: attendance } = await service
+    .from('attendance_records').select('total_hours')
+    .eq('company_id', auth.companyId).eq('staff_id', auth.userId).not('total_hours', 'is', null);
+  const totalWorked = (attendance ?? []).reduce((s: number, r: any) => s + (Number(r.total_hours) || 0), 0);
+  const ptoEarned = (totalWorked / (rate as any).worked_hours) * (rate as any).pto_hours;
+
+  const { data: usedLeaves } = await service
+    .from('leave_requests').select('pto_hours_used')
+    .eq('company_id', auth.companyId).eq('staff_id', auth.userId).eq('status', 'approved')
+    .not('pto_hours_used', 'is', null);
+  const hoursUsed = (usedLeaves ?? []).reduce((s: number, r: any) => s + (Number(r.pto_hours_used) || 0), 0);
+
+  return jsonResponse({
+    pto_hours: Math.max(0, ptoEarned - hoursUsed),
+    worked_hours: totalWorked,
+    rate: { worked_hours: (rate as any).worked_hours, pto_hours: (rate as any).pto_hours },
+    hours_used: hoursUsed,
+  });
 }
