@@ -468,7 +468,7 @@ function AttendanceDialog({ open, onClose, data, onSaved }: any) {
             <FormControl fullWidth size="small">
               <InputLabel>Staff Member</InputLabel>
               <Select value={form.staff_id ?? ''} label="Staff Member" onChange={(e) => setForm({ ...form, staff_id: e.target.value })}>
-                {(staffList?.items ?? []).filter((s: any) => s.id !== profile?.id).map((s: any) => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
+                {(staffList?.items ?? []).filter((s: any) => s.profile_id !== profile?.id).map((s: any) => <MenuItem key={s.id} value={s.profile_id}>{s.profile?.name}</MenuItem>)}
               </Select>
             </FormControl>
           </Grid>
