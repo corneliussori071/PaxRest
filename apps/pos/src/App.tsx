@@ -29,6 +29,7 @@ import OtherServicesPage from '@/pages/other-services/OtherServicesPage';
 import HrPayrollPage from '@/pages/hr/HrPayrollPage';
 import WastagePage from '@/pages/wastage/WastagePage';
 import AnalyticsPage from '@/pages/analytics/AnalyticsPage';
+import AuditLogPage from '@/pages/audit/AuditLogPage';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { session, loading, initialized } = useAuth();
@@ -78,6 +79,7 @@ export default function App() {
               <Route path="/wastage" element={<WastagePage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/reports" element={<ReportsPage />} />
+              <Route path="/audit" element={<AuditLogPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
 

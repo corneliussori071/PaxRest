@@ -20,6 +20,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import HistoryIcon from '@mui/icons-material/History';
 import {
   Dialog, DialogTitle, DialogContent, List, ListItem,
   ListItemButton, ListItemText, ListItemIcon, Typography,
@@ -53,6 +54,7 @@ const NAV_ITEMS: NavItemWithPermission[] = [
   { id: 'customers',  label: 'Customers',          icon: <LoyaltyIcon />,          path: '/customers',  permission: 'manage_loyalty',   dividerAfter: true },
   { id: 'analytics',  label: 'Analytics',          icon: <ShowChartIcon />,        path: '/analytics',  permission: 'view_analytics' },
   { id: 'reports',    label: 'Reports',            icon: <BarChartIcon />,         path: '/reports',    permission: 'view_reports' },
+  { id: 'audit',      label: 'Audit Log',          icon: <HistoryIcon />,          path: '/audit',      permission: 'view_audit' },
   { id: 'settings',   label: 'Settings',           icon: <SettingsIcon />,         path: '/settings',   permission: 'manage_settings' },
 ];
 
