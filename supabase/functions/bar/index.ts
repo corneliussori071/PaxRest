@@ -142,11 +142,6 @@ async function createBarOrder(req: Request, supabase: any, auth: AuthContext, br
   const body = await req.json();
   if (!body.items || body.items.length === 0) return errorResponse('No items in order');
   const orderType = body.order_type ?? 'dine_in';
-  const hasRooms = (body.items as any[]).some((i: any) => i.source === 'room');
-  // Table required for dine-in orders only (unless rooms are in the order)
-  if (orderType === 'dine_in' && !body.table_id && !hasRooms) {
-    return errorResponse('Table selection is required for dine-in orders (or add a room booking)');
-  }
   const numPeople = body.num_people ?? 1;
 
   const service = createServiceClient();
