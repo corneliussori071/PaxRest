@@ -12,10 +12,36 @@ import BranchSelector from './BranchSelector';
  * Usage: wrap any branch-scoped page content with <BranchGuard>...</BranchGuard>
  */
 export default function BranchGuard({ children }: { children: React.ReactNode }) {
-  const { isGlobalStaff, hasBranchSelected, branches } = useAuth();
+  const { isGlobalStaff, hasBranchSelected, branches, profile, switchBranch } = useAuth();
 
-  // Branch staff always have a branch → pass through
-  if (!isGlobalStaff) return <>{children}</>;
+  // Branch staff: ensure their branch is actually selected
+  if (!isGlobalStaff) {
+    if (!hasBranchSelected) {
+      // Auto-select the staff's assigned branch if available
+      const assignedBranchId = profile?.branch_ids?.[0];
+      if (assignedBranchId) {
+        switchBranch(assignedBranchId);
+        return null; // Will re-render once branch is set
+      }
+      // No assigned branch — show error
+      return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400 }}>
+          <Paper sx={{ p: 4, maxWidth: 480, textAlign: 'center' }}>
+            <StorefrontIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+            <Typography variant="h5" gutterBottom>No Branch Assigned</Typography>
+            <Alert severity="warning" sx={{ textAlign: 'left', mt: 2 }}>
+              <AlertTitle>Contact Your Manager</AlertTitle>
+              <Typography variant="body2">
+                You have not been assigned to any branch. Please contact your
+                manager or administrator to assign you to a branch.
+              </Typography>
+            </Alert>
+          </Paper>
+        </Box>
+      );
+    }
+    return <>{children}</>;
+  }
 
   // Global staff with no branches at all → prompt to create
   if (branches.length === 0) {

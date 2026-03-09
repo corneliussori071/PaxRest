@@ -18,6 +18,7 @@ import BarChartIcon from '@mui/icons-material/BarChart';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import StorefrontIcon from '@mui/icons-material/Storefront';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import {
   Dialog, DialogTitle, DialogContent, List, ListItem,
   ListItemButton, ListItemText, ListItemIcon, Typography,
@@ -41,6 +42,7 @@ const NAV_ITEMS: NavItemWithPermission[] = [
   { id: 'accommodation', label: 'Accommodation',   icon: <HotelIcon />,            path: '/accommodation', permission: 'view_accommodation' },
   { id: 'inventory',  label: 'Inventory',          icon: <InventoryIcon />,        path: '/inventory',  permission: 'manage_inventory' },
   { id: 'other-services', label: 'Other Services',  icon: <SpaIcon />,              path: '/other-services', permission: 'manage_other_services' },
+  { id: 'wastage',    label: 'Wastage',            icon: <DeleteOutlineIcon />,    path: '/wastage',    permission: 'manage_wastage' },
   { id: 'suppliers',  label: 'Suppliers',          icon: <ShoppingCartIcon />,     path: '/suppliers',  permission: 'manage_suppliers', dividerAfter: true },
   { id: 'delivery',   label: 'Delivery',           icon: <LocalShippingIcon />,    path: '/delivery',   permission: 'manage_delivery' },
   { id: 'hr',         label: 'HR & Payroll',       icon: <BadgeIcon />,            path: '/hr',         permission: 'manage_hr' },
@@ -103,9 +105,7 @@ export default function MainLayout() {
             ? () => setBranchDialogOpen(true)
             : undefined
         }
-        headerActions={
-          isGlobalStaff ? <BranchSelector compact showAll={false} /> : undefined
-        }
+        headerActions={<BranchSelector compact showAll={false} />}
       >
         <Outlet />
       </AppLayout>

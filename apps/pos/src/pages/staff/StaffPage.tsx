@@ -53,6 +53,7 @@ const PERMISSION_LABELS: { key: Permission; label: string; group: string }[] = [
   { key: 'manage_suppliers', label: 'Suppliers', group: 'Management' },
   { key: 'manage_branches', label: 'Manage Branches', group: 'Management' },
   { key: 'manage_delivery', label: 'Deliveries', group: 'Management' },
+  { key: 'manage_wastage', label: 'Wastage', group: 'Management' },
   { key: 'manage_shifts', label: 'Shifts & Cash', group: 'Management' },
   // Admin
   { key: 'manage_staff', label: 'Staff Management', group: 'Admin' },

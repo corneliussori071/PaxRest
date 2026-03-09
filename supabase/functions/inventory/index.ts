@@ -41,6 +41,12 @@ serve(async (req) => {
         return req.method === 'GET'
           ? await listWastage(req, supabase, auth, branchId)
           : await recordWastage(req, supabase, auth, branchId);
+      case 'wastage-search-items':
+        return await searchWastageItems(req, supabase, auth, branchId);
+      case 'wastage-dept':
+        return await recordDeptWastage(req, supabase, auth, branchId);
+      case 'wastage-custom':
+        return await recordCustomWastage(req, supabase, auth, branchId);
       case 'transfer':
         return await createTransfer(req, supabase, auth, branchId);
       case 'transfers':
@@ -1083,6 +1089,13 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
       // bar_store_items (00028) and accom_store_items (00034) have selling_price & barcode
       if (department === 'bar' || department === 'accommodation') {
         updateData.selling_price = invItem?.selling_price ?? 0;
+        updateData.cost_per_unit = invItem?.cost_per_unit ?? 0;
+        updateData.barcode = invItem?.barcode ?? null;
+      }
+      // kitchen_store_items (00031) also have selling_price, cost_per_unit, barcode
+      if (department === 'kitchen') {
+        updateData.selling_price = invItem?.selling_price ?? 0;
+        updateData.cost_per_unit = invItem?.cost_per_unit ?? 0;
         updateData.barcode = invItem?.barcode ?? null;
       }
 
@@ -1111,6 +1124,13 @@ async function receiveIngredientRequest(req: Request, supabase: any, auth: AuthC
       // bar_store_items (00028) and accom_store_items (00034) have selling_price & barcode
       if (department === 'bar' || department === 'accommodation') {
         insertData.selling_price = invItem?.selling_price ?? 0;
+        insertData.cost_per_unit = invItem?.cost_per_unit ?? 0;
+        insertData.barcode = invItem?.barcode ?? null;
+      }
+      // kitchen_store_items (00031) also have selling_price, cost_per_unit, barcode
+      if (department === 'kitchen') {
+        insertData.selling_price = invItem?.selling_price ?? 0;
+        insertData.cost_per_unit = invItem?.cost_per_unit ?? 0;
         insertData.barcode = invItem?.barcode ?? null;
       }
 
@@ -1361,4 +1381,114 @@ async function rejectReturnIngredientRequest(req: Request, supabase: any, auth: 
     .eq('id', body.request_id);
 
   return jsonResponse({ rejected: true });
+}
+
+// ─── Search Items for Wastage (by source) ───────────────────────────────────
+
+async function searchWastageItems(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  const url = new URL(req.url);
+  const source = url.searchParams.get('source') ?? 'inventory';
+  const search = url.searchParams.get('search')?.trim() ?? '';
+  const barcode = url.searchParams.get('barcode')?.trim() ?? '';
+
+  if (!search && !barcode) return jsonResponse({ items: [] });
+
+  const service = createServiceClient();
+  let tableName: string;
+
+  switch (source) {
+    case 'kitchen': tableName = 'kitchen_store_items'; break;
+    case 'bar':     tableName = 'bar_store_items'; break;
+    case 'accommodation': tableName = 'accom_store_items'; break;
+    default:        tableName = 'inventory_items'; break;
+  }
+
+  let query = service
+    .from(tableName)
+    .select('*')
+    .eq('branch_id', branchId)
+    .gt('quantity', 0);
+
+  if (source === 'inventory') {
+    query = query.eq('is_active', true);
+  }
+
+  if (barcode) {
+    query = query.eq('barcode', barcode);
+  } else if (search) {
+    const col = source === 'inventory' ? 'name' : 'item_name';
+    query = query.or(`${col}.ilike.%${search}%,barcode.ilike.%${search}%`);
+  }
+
+  query = query.limit(20);
+  const { data, error } = await query;
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ items: data ?? [] });
+}
+
+// ─── Record Department Store Wastage ────────────────────────────────────────
+
+async function recordDeptWastage(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_wastage')) return errorResponse('Forbidden', 403);
+  const body = await req.json();
+
+  if (!body.source || !body.store_item_id || !body.quantity || !body.reason || !body.wastage_type) {
+    return errorResponse('Missing source, store_item_id, quantity, reason, or wastage_type');
+  }
+
+  let rpcName: string;
+  switch (body.source) {
+    case 'kitchen': rpcName = 'record_kitchen_store_wastage'; break;
+    case 'bar':     rpcName = 'record_bar_store_wastage'; break;
+    case 'accommodation': rpcName = 'record_accom_store_wastage'; break;
+    default: return errorResponse('Invalid source for dept wastage');
+  }
+
+  const { data, error } = await supabase.rpc(rpcName, {
+    p_company_id: auth.companyId,
+    p_branch_id: branchId,
+    p_store_item_id: body.store_item_id,
+    p_quantity: body.quantity,
+    p_reason: sanitizeString(body.reason),
+    p_wastage_type: body.wastage_type,
+    p_recorded_by: auth.userId,
+    p_recorded_by_name: auth.name ?? auth.email,
+    p_notes: body.notes ? sanitizeString(body.notes) : null,
+    p_image_url: body.image_url ?? null,
+  });
+
+  if (error) return errorResponse(error.message, 400);
+  return jsonResponse(data, 201);
+}
+
+// ─── Record Custom (non-inventory) Wastage ──────────────────────────────────
+
+async function recordCustomWastage(req: Request, supabase: any, auth: AuthContext, branchId: string) {
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405);
+  if (!hasPermission(auth, 'manage_wastage')) return errorResponse('Forbidden', 403);
+  const body = await req.json();
+
+  if (!body.item_name || !body.estimated_value || !body.reason || !body.wastage_type) {
+    return errorResponse('Missing item_name, estimated_value, reason, or wastage_type');
+  }
+
+  const { data, error } = await supabase.rpc('record_custom_wastage', {
+    p_company_id: auth.companyId,
+    p_branch_id: branchId,
+    p_item_name: sanitizeString(body.item_name),
+    p_quantity: body.quantity ?? 1,
+    p_estimated_value: body.estimated_value,
+    p_reason: sanitizeString(body.reason),
+    p_wastage_type: body.wastage_type,
+    p_station: body.station ? sanitizeString(body.station) : null,
+    p_description: body.description ? sanitizeString(body.description) : null,
+    p_recorded_by: auth.userId,
+    p_recorded_by_name: auth.name ?? auth.email,
+    p_notes: body.notes ? sanitizeString(body.notes) : null,
+    p_image_url: body.image_url ?? null,
+  });
+
+  if (error) return errorResponse(error.message, 400);
+  return jsonResponse(data, 201);
 }

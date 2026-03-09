@@ -138,6 +138,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const activeBranch = state.branches.find((b) => b.id === state.activeBranchId);
   const hasBranchSelected = !!state.activeBranchId;
 
+  // Auto-select branch for branch staff if not already set
+  useEffect(() => {
+    if (state.loading || !state.profile) return;
+    if (!GLOBAL_ROLES.includes(state.profile.role) && !state.activeBranchId) {
+      const branchId = state.profile.active_branch_id ?? state.profile.branch_ids?.[0];
+      if (branchId) switchBranch(branchId);
+    }
+  }, [state.loading, state.profile, state.activeBranchId]);
+
   return (
     <AuthContext.Provider value={{ ...state, isGlobalStaff, hasBranchSelected, activeBranch, signIn, signUp, signOut, switchBranch, refreshProfile }}>
       {children}

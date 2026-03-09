@@ -468,7 +468,7 @@ function AttendanceDialog({ open, onClose, data, onSaved }: any) {
             <FormControl fullWidth size="small">
               <InputLabel>Staff Member</InputLabel>
               <Select value={form.staff_id ?? ''} label="Staff Member" onChange={(e) => setForm({ ...form, staff_id: e.target.value })}>
-                {(staffList?.items ?? []).map((s: any) => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
+                {(staffList?.items ?? []).filter((s: any) => s.id !== profile?.id).map((s: any) => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
               </Select>
             </FormControl>
           </Grid>
@@ -485,9 +485,48 @@ function AttendanceDialog({ open, onClose, data, onSaved }: any) {
               </Select>
             </FormControl>
           </Grid>
-          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock In" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_in?.slice(0, 16) ?? ''} onChange={(e) => setForm({ ...form, clock_in: e.target.value ? `${e.target.value}:00.000Z` : null })} /></Grid>
-          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock Out" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_out?.slice(0, 16) ?? ''} onChange={(e) => setForm({ ...form, clock_out: e.target.value ? `${e.target.value}:00.000Z` : null })} /></Grid>
-          <Grid size={{ xs: 4 }}><TextField fullWidth size="small" label="Break (min)" type="number" value={form.break_minutes ?? 0} onChange={(e) => setForm({ ...form, break_minutes: Number(e.target.value) })} /></Grid>
+          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock In" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_in?.slice(0, 16) ?? ''} onChange={(e) => {
+            const newClockIn = e.target.value ? `${e.target.value}:00.000Z` : null;
+            setForm((prev: any) => {
+              const updated = { ...prev, clock_in: newClockIn };
+              if (newClockIn && updated.clock_out) {
+                const ciMin = Number(newClockIn.slice(11, 13)) * 60 + Number(newClockIn.slice(14, 16));
+                const coMin = Number(updated.clock_out.slice(11, 13)) * 60 + Number(updated.clock_out.slice(14, 16));
+                let totalMin = coMin - ciMin;
+                if (totalMin < 0) totalMin += 24 * 60;
+                updated.total_hours = Math.max(0, Math.round(((totalMin - (updated.break_minutes ?? 0)) / 60) * 100) / 100);
+              }
+              return updated;
+            });
+          }} /></Grid>
+          <Grid size={{ xs: 6 }}><TextField fullWidth size="small" label="Clock Out" type="datetime-local" InputLabelProps={{ shrink: true }} value={form.clock_out?.slice(0, 16) ?? ''} onChange={(e) => {
+            const newClockOut = e.target.value ? `${e.target.value}:00.000Z` : null;
+            setForm((prev: any) => {
+              const updated = { ...prev, clock_out: newClockOut };
+              if (updated.clock_in && newClockOut) {
+                const ciMin = Number(updated.clock_in.slice(11, 13)) * 60 + Number(updated.clock_in.slice(14, 16));
+                const coMin = Number(newClockOut.slice(11, 13)) * 60 + Number(newClockOut.slice(14, 16));
+                let totalMin = coMin - ciMin;
+                if (totalMin < 0) totalMin += 24 * 60;
+                updated.total_hours = Math.max(0, Math.round(((totalMin - (updated.break_minutes ?? 0)) / 60) * 100) / 100);
+              }
+              return updated;
+            });
+          }} /></Grid>
+          <Grid size={{ xs: 4 }}><TextField fullWidth size="small" label="Break (min)" type="number" value={form.break_minutes ?? 0} onChange={(e) => {
+            const newBreak = Number(e.target.value);
+            setForm((prev: any) => {
+              const updated = { ...prev, break_minutes: newBreak };
+              if (updated.clock_in && updated.clock_out) {
+                const ciMin = Number(updated.clock_in.slice(11, 13)) * 60 + Number(updated.clock_in.slice(14, 16));
+                const coMin = Number(updated.clock_out.slice(11, 13)) * 60 + Number(updated.clock_out.slice(14, 16));
+                let totalMin = coMin - ciMin;
+                if (totalMin < 0) totalMin += 24 * 60;
+                updated.total_hours = Math.max(0, Math.round(((totalMin - newBreak) / 60) * 100) / 100);
+              }
+              return updated;
+            });
+          }} /></Grid>
           <Grid size={{ xs: 4 }}><TextField fullWidth size="small" label="Total Hours" type="number" value={form.total_hours ?? ''} onChange={(e) => setForm({ ...form, total_hours: Number(e.target.value) })} /></Grid>
           <Grid size={{ xs: 4 }}><TextField fullWidth size="small" label="OT Hours" type="number" value={form.overtime_hours ?? 0} onChange={(e) => setForm({ ...form, overtime_hours: Number(e.target.value) })} /></Grid>
           <Grid size={{ xs: 12 }}><TextField fullWidth size="small" label="Notes" multiline rows={2} value={form.notes ?? ''} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Grid>
@@ -529,6 +568,37 @@ function AttendanceClockView({ compact = false }: { compact?: boolean }) {
   }, []);
 
   useEffect(() => { fetchStatus(); if (!compact) fetchHistory(); }, [fetchStatus, fetchHistory, compact]);
+
+  // Auto clock-out timer: triggers clock-out when the shift end time is reached
+  useEffect(() => {
+    if (!clockStatus?.clocked_in || !clockStatus?.current_shift) return;
+    const shift = clockStatus.current_shift;
+    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+    const endMin = toMin(shift.end_time);
+
+    const checkAutoClockOut = () => {
+      const now = new Date();
+      const currentMin = now.getHours() * 60 + now.getMinutes();
+      if (currentMin >= endMin) {
+        // Shift has ended, trigger auto clock-out
+        const clientDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const clientTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        api<any>('hr', 'clock-out', { body: { client_date: clientDate, client_time: clientTime, force: true } })
+          .then(() => {
+            toast.success('Shift ended — automatically clocked out');
+            fetchStatus();
+            if (!compact) fetchHistory();
+          })
+          .catch(() => {});
+      }
+    };
+
+    // Check immediately in case shift already ended
+    checkAutoClockOut();
+    // Then check every 30 seconds
+    const interval = setInterval(checkAutoClockOut, 30_000);
+    return () => clearInterval(interval);
+  }, [clockStatus?.clocked_in, clockStatus?.current_shift, fetchStatus, fetchHistory, compact]);
 
   const handleClockIn = async () => {
     setActing(true);
