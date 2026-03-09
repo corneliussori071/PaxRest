@@ -208,17 +208,22 @@ async function shiftCashReport(req: Request, auth: AuthContext) {
   if (shiftErr) return errorResponse(shiftErr.message);
   if (!shift) return errorResponse('Shift not found', 404);
 
+  // Normalize time — PostgreSQL time type returns HH:MM:SS; avoid double-suffixing
+  const normTime = (t: string) => (t.split(':').length >= 3 ? t : `${t}:00`);
+  const st = normTime(shift.start_time);
+  const et = normTime(shift.end_time);
+
   // Build datetime range from date + shift times
-  const dateFrom = `${date}T${shift.start_time}:00.000Z`;
+  const dateFrom = `${date}T${st}.000Z`;
   let dateTo: string;
   // Handle overnight shifts: if end_time <= start_time, end is next day
   if (shift.end_time <= shift.start_time) {
     const nextDay = new Date(date + 'T00:00:00Z');
     nextDay.setUTCDate(nextDay.getUTCDate() + 1);
     const nd = nextDay.toISOString().slice(0, 10);
-    dateTo = `${nd}T${shift.end_time}:00.000Z`;
+    dateTo = `${nd}T${et}.000Z`;
   } else {
-    dateTo = `${date}T${shift.end_time}:00.000Z`;
+    dateTo = `${date}T${et}.000Z`;
   }
 
   // 2) Find staff assigned to this shift on this date
