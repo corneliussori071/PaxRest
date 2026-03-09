@@ -399,12 +399,6 @@ function POSTerminalContent() {
   const handleSubmit = async () => {
     if (cart.length === 0) return toast.error('Cart is empty');
 
-    const hasRooms = cart.some((c) => c.source === 'room');
-    const hasServices = cart.some((c) => c.source === 'other_service');
-    if (orderType === 'dine_in' && !tableId && !hasRooms && !hasServices) {
-      return toast.error('Select a table or add a room booking');
-    }
-
     // Validate room bookings
     for (const c of cart.filter((x) => x.source === 'room')) {
       if (!c.booking_details?.check_in || !c.booking_details?.duration_count) {

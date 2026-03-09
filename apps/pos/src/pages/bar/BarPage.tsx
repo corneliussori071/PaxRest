@@ -354,9 +354,6 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
   const handleSubmit = async () => {
     if (cart.length === 0) return toast.error('Cart is empty');
-    const hasRooms = cart.some((c) => c.source === 'room');
-    const hasServices = cart.some((c) => c.source === 'other_service');
-    if (!selectedTable && !hasRooms && !hasServices) return toast.error('Select a table or add a room/service booking');
     if (!numPeople || numPeople < 1) return toast.error('Enter number of people');
     // Validate room bookings
     for (const c of cart.filter((x) => x.source === 'room')) {
@@ -856,7 +853,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
 
         <Button
           variant="contained" fullWidth size="large"
-          disabled={submitting || cart.length === 0 || (!selectedTable && !cart.some((c) => c.source === 'room' || c.source === 'other_service'))}
+          disabled={submitting || cart.length === 0}
           onClick={handleSubmit}
         >
           {submitting ? 'Processing…' : `Place Order — ${fmt(subtotal)}`}

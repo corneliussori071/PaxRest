@@ -2827,7 +2827,7 @@ async function myClockStatus(req: Request, auth: AuthContext) {
       let endMin = toMin(shift.end_time);
       if (endMin <= startMin) endMin += 24 * 60;
       const adjustedCurrent = currentMinutes < startMin ? currentMinutes + 24 * 60 : currentMinutes;
-      if (adjustedCurrent > endMin) {
+      if (adjustedCurrent >= endMin) {
         const branchId = auth.branchIds?.[0] ?? auth.activeBranchId;
         await service.from('attendance_records').upsert({
           company_id: auth.companyId,
@@ -2988,6 +2988,7 @@ async function clockOut(req: Request, auth: AuthContext) {
   // Load shift for early-out check and overtime
   let shiftStartMin: number | null = null;
   let shiftEndMin: number | null = null;
+  let shiftEndTimeStr: string | null = null;
   let shiftBreak = att.break_minutes ?? 0;
   if (att.shift_id) {
     const { data: shift } = await service
@@ -3000,6 +3001,7 @@ async function clockOut(req: Request, auth: AuthContext) {
       shiftEndMin = eh * 60 + em;
       if (shiftEndMin <= shiftStartMin) shiftEndMin += 24 * 60;
       shiftBreak = att.break_minutes ?? shift.break_duration ?? 0;
+      shiftEndTimeStr = shift.end_time;
     }
   }
 
@@ -3019,9 +3021,22 @@ async function clockOut(req: Request, auth: AuthContext) {
     }
   }
 
+  // When force-clocking out at/past shift end, snap the recorded clock_out to the exact
+  // scheduled shift end time so computed hours are always correct.
+  let effectiveClockMinutes = currentMinutes;
+  let effectiveClockISO = clockISO;
+  if (force && shiftEndMin !== null && shiftStartMin !== null && shiftEndTimeStr !== null) {
+    const adjustedCurrent = currentMinutes < shiftStartMin ? currentMinutes + 24 * 60 : currentMinutes;
+    if (adjustedCurrent >= shiftEndMin) {
+      effectiveClockISO = `${today}T${shiftEndTimeStr}:00.000Z`;
+      const [feh, fem] = shiftEndTimeStr.split(':').map(Number);
+      effectiveClockMinutes = feh * 60 + fem;
+    }
+  }
+
   // Compute total hours: extract HH:MM from stored ISO clock_in (local-as-UTC convention)
   const ciMin = Number(att.clock_in.slice(11, 13)) * 60 + Number(att.clock_in.slice(14, 16));
-  let totalMin = currentMinutes - ciMin;
+  let totalMin = effectiveClockMinutes - ciMin;
   if (totalMin < 0) totalMin += 24 * 60;
   const totalHours = Math.max(0, Math.round(((totalMin - shiftBreak) / 60) * 100) / 100);
 
@@ -3036,7 +3051,7 @@ async function clockOut(req: Request, auth: AuthContext) {
   const { data, error } = await service
     .from('attendance_records')
     .update({
-      clock_out: clockISO,
+      clock_out: effectiveClockISO,
       total_hours: totalHours,
       overtime_hours: overtimeHours,
       status: att.status === 'present' || att.status === 'late' ? att.status : 'present',
