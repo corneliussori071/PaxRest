@@ -59,6 +59,7 @@ const PERMISSION_LABELS: { key: Permission; label: string; group: string }[] = [
   { key: 'manage_staff', label: 'Staff Management', group: 'Admin' },
   { key: 'manage_hr', label: 'Access HR & Payroll', group: 'Admin' },
   { key: 'view_reports', label: 'Access Reports', group: 'Admin' },
+  { key: 'view_analytics', label: 'Analytics Dashboard', group: 'Admin' },
   { key: 'manage_settings', label: 'Store Settings', group: 'Admin' },
   { key: 'manage_loyalty', label: 'Loyalty Program', group: 'Admin' },
   { key: 'view_audit', label: 'Audit Log', group: 'Admin' },

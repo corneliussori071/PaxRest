@@ -17,22 +17,39 @@ serve(async (req) => {
     if (authResult instanceof Response) return authResult;
     const auth = authResult as AuthContext;
 
-    if (!hasPermission(auth, 'view_reports')) return errorResponse('Forbidden', 403);
+    if (!hasPermission(auth, 'view_reports') && !hasPermission(auth, 'view_analytics')) return errorResponse('Forbidden', 403);
 
     const dateFrom = url.searchParams.get('date_from');
     const dateTo = url.searchParams.get('date_to');
 
+    // Analytics endpoints — require view_analytics permission
+    if (action === 'analytics-trend' || action === 'analytics-compare' || action === 'analytics-loss-breakdown') {
+      if (!hasPermission(auth, 'view_analytics')) return errorResponse('Forbidden', 403);
+      const branchId = resolveBranchIdOrAll(auth, req);
+      switch (action) {
+        case 'analytics-trend':
+          return await getAnalyticsTrend(auth, branchId, url.searchParams);
+        case 'analytics-compare':
+          return await getAnalyticsCompare(auth, branchId, url.searchParams);
+        case 'analytics-loss-breakdown':
+          return await getAnalyticsLossBreakdown(auth, branchId, url.searchParams);
+      }
+    }
+
     // These two new endpoints support "all branches" for global staff
     if (action === 'financial-dashboard') {
+      if (!hasPermission(auth, 'view_reports')) return errorResponse('Forbidden', 403);
       const branchId = resolveBranchIdOrAll(auth, req);
       return await getFinancialDashboard(auth, branchId, url.searchParams);
     }
     if (action === 'transaction-list') {
+      if (!hasPermission(auth, 'view_reports')) return errorResponse('Forbidden', 403);
       const branchId = resolveBranchIdOrAll(auth, req);
       return await getTransactionList(auth, branchId, url.searchParams);
     }
 
-    // Existing endpoints require a specific branch
+    // Existing endpoints require view_reports + a specific branch
+    if (!hasPermission(auth, 'view_reports')) return errorResponse('Forbidden', 403);
     const branchId = resolveBranchId(auth, req);
     if (!branchId) return errorResponse('No branch context');
 
@@ -693,3 +710,257 @@ async function getTransactionList(auth: AuthContext, branchId: string, params: U
 
   return jsonResponse({ items, total: count ?? 0, page, page_size: pageSize });
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Analytics: Trend (time-series for a single metric)
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function getAnalyticsTrend(auth: AuthContext, branchId: string, params: URLSearchParams) {
+  const service = createServiceClient();
+  const companyId = auth.companyId!;
+
+  const dateFrom = params.get('date_from');
+  const dateTo = params.get('date_to');
+  const metric = params.get('metric') ?? 'revenue';
+  const period = params.get('period') ?? 'daily'; // daily | weekly | monthly
+
+  const dateFromTs = dateFrom ? dateFrom + 'T00:00:00.000Z' : null;
+  const dateToTs = dateTo ? dateTo + 'T23:59:59.999Z' : null;
+
+  // SQL date_trunc period
+  const truncPeriod = period === 'monthly' ? 'month' : period === 'weekly' ? 'week' : 'day';
+
+  const bf = (q: any) => branchId === '__all__' ? q.eq('company_id', companyId) : q.eq('branch_id', branchId).eq('company_id', companyId);
+
+  let points: { label: string; value: number }[] = [];
+
+  if (metric === 'revenue') {
+    // Sum order totals for completed orders, grouped by date_trunc
+    const { data, error } = await service.rpc('analytics_revenue_trend', {
+      p_company_id: companyId,
+      p_branch_id: branchId === '__all__' ? null : branchId,
+      p_date_from: dateFromTs,
+      p_date_to: dateToTs,
+      p_period: truncPeriod,
+    });
+    if (error) return errorResponse(error.message);
+    points = (data ?? []).map((r: any) => ({ label: r.period_label, value: Number(r.value) }));
+
+  } else if (metric === 'wastage') {
+    const { data, error } = await service.rpc('analytics_wastage_trend', {
+      p_company_id: companyId,
+      p_branch_id: branchId === '__all__' ? null : branchId,
+      p_date_from: dateFromTs,
+      p_date_to: dateToTs,
+      p_period: truncPeriod,
+    });
+    if (error) return errorResponse(error.message);
+    points = (data ?? []).map((r: any) => ({ label: r.period_label, value: Number(r.value) }));
+
+  } else if (metric === 'staffing') {
+    // Payroll paid grouped by period_start truncated
+    let q = service
+      .from('payroll_records')
+      .select('net_pay, period_start')
+      .eq('company_id', companyId)
+      .eq('status', 'paid');
+    if (branchId !== '__all__') q = q.eq('branch_id', branchId);
+    if (dateFrom) q = q.gte('period_start', dateFrom);
+    if (dateTo) q = q.lte('period_end', dateTo);
+    const { data } = await q;
+    // Client-side bucket (payroll doesn't need SQL trunc)
+    const buckets = new Map<string, number>();
+    for (const r of data ?? []) {
+      const d = new Date(r.period_start);
+      const key = getBucketLabel(d, period);
+      buckets.set(key, (buckets.get(key) ?? 0) + Number(r.net_pay));
+    }
+    points = Array.from(buckets.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, value]) => ({ label, value: Math.round(value * 100) / 100 }));
+
+  } else if (metric === 'cogs') {
+    const { data, error } = await service.rpc('analytics_cogs_trend', {
+      p_company_id: companyId,
+      p_branch_id: branchId === '__all__' ? null : branchId,
+      p_date_from: dateFromTs,
+      p_date_to: dateToTs,
+      p_period: truncPeriod,
+    });
+    if (error) return errorResponse(error.message);
+    points = (data ?? []).map((r: any) => ({ label: r.period_label, value: Number(r.value) }));
+
+  } else if (metric === 'net_position') {
+    // revenue - cogs - wastage (non-central) - staffing
+    const [revData, cogsData, wastageData] = await Promise.all([
+      service.rpc('analytics_revenue_trend', { p_company_id: companyId, p_branch_id: branchId === '__all__' ? null : branchId, p_date_from: dateFromTs, p_date_to: dateToTs, p_period: truncPeriod }),
+      service.rpc('analytics_cogs_trend', { p_company_id: companyId, p_branch_id: branchId === '__all__' ? null : branchId, p_date_from: dateFromTs, p_date_to: dateToTs, p_period: truncPeriod }),
+      service.rpc('analytics_wastage_trend', { p_company_id: companyId, p_branch_id: branchId === '__all__' ? null : branchId, p_date_from: dateFromTs, p_date_to: dateToTs, p_period: truncPeriod }),
+    ]);
+    const revMap = new Map((revData.data ?? []).map((r: any) => [r.period_label, Number(r.value)]));
+    const cogsMap = new Map((cogsData.data ?? []).map((r: any) => [r.period_label, Number(r.value)]));
+    const wastageMap = new Map((wastageData.data ?? []).map((r: any) => [r.period_label, Number(r.value)]));
+    const allKeys = new Set([...revMap.keys(), ...cogsMap.keys(), ...wastageMap.keys()]);
+    points = Array.from(allKeys).sort().map(label => ({
+      label,
+      value: Math.round(((revMap.get(label) ?? 0) - (cogsMap.get(label) ?? 0) - (wastageMap.get(label) ?? 0)) * 100) / 100,
+    }));
+
+  } else if (metric === 'sales_volume') {
+    const { data, error } = await service.rpc('analytics_sales_volume_trend', {
+      p_company_id: companyId,
+      p_branch_id: branchId === '__all__' ? null : branchId,
+      p_date_from: dateFromTs,
+      p_date_to: dateToTs,
+      p_period: truncPeriod,
+    });
+    if (error) return errorResponse(error.message);
+    points = (data ?? []).map((r: any) => ({ label: r.period_label, value: Number(r.value) }));
+
+  } else if (metric === 'avg_transaction') {
+    const { data, error } = await service.rpc('analytics_avg_transaction_trend', {
+      p_company_id: companyId,
+      p_branch_id: branchId === '__all__' ? null : branchId,
+      p_date_from: dateFromTs,
+      p_date_to: dateToTs,
+      p_period: truncPeriod,
+    });
+    if (error) return errorResponse(error.message);
+    points = (data ?? []).map((r: any) => ({ label: r.period_label, value: Number(r.value) }));
+  }
+
+  return jsonResponse({ metric, period, points });
+}
+
+// ── Helper: bucket label for client-side grouping ──
+function getBucketLabel(d: Date, period: string): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  if (period === 'monthly') return `${y}-${m}`;
+  if (period === 'weekly') {
+    const jan4 = new Date(y, 0, 4);
+    const dayOfYear = Math.floor((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000) + 1;
+    const weekNum = Math.ceil((dayOfYear + jan4.getDay() - 1) / 7);
+    return `${y}-W${String(weekNum).padStart(2, '0')}`;
+  }
+  return `${y}-${m}-${day}`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Analytics: Compare (per entity — branch or station)
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function getAnalyticsCompare(auth: AuthContext, branchId: string, params: URLSearchParams) {
+  const service = createServiceClient();
+  const companyId = auth.companyId!;
+
+  const dateFrom = params.get('date_from');
+  const dateTo = params.get('date_to');
+  const metric = params.get('metric') ?? 'revenue';
+  const compareBy = params.get('compare_by') ?? 'branch'; // branch | station
+
+  const dateFromTs = dateFrom ? dateFrom + 'T00:00:00.000Z' : null;
+  const dateToTs = dateTo ? dateTo + 'T23:59:59.999Z' : null;
+
+  const { data, error } = await service.rpc('analytics_compare', {
+    p_company_id: companyId,
+    p_branch_id: branchId === '__all__' ? null : branchId,
+    p_date_from: dateFromTs,
+    p_date_to: dateToTs,
+    p_metric: metric,
+    p_compare_by: compareBy,
+  });
+
+  if (error) return errorResponse(error.message);
+  return jsonResponse({ metric, compare_by: compareBy, entities: data ?? [] });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Analytics: Loss Breakdown (by source/type)
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function getAnalyticsLossBreakdown(auth: AuthContext, branchId: string, params: URLSearchParams) {
+  const service = createServiceClient();
+  const companyId = auth.companyId!;
+
+  const dateFrom = params.get('date_from');
+  const dateTo = params.get('date_to');
+  const dateFromTs = dateFrom ? dateFrom + 'T00:00:00.000Z' : null;
+  const dateToTs = dateTo ? dateTo + 'T23:59:59.999Z' : null;
+
+  // Wastage by source
+  let wq = service
+    .from('wastage_records')
+    .select('source, total_value')
+    .eq('company_id', companyId);
+  if (branchId !== '__all__') wq = wq.eq('branch_id', branchId);
+  if (dateFromTs) wq = wq.gte('created_at', dateFromTs);
+  if (dateToTs) wq = wq.lte('created_at', dateToTs);
+  const { data: wasteData } = await wq;
+
+  const sourceMap = new Map<string, number>();
+  for (const r of wasteData ?? []) {
+    const src = r.source ?? 'inventory';
+    sourceMap.set(src, (sourceMap.get(src) ?? 0) + Number(r.total_value ?? 0));
+  }
+
+  // Wastage by type
+  let wtq = service
+    .from('wastage_records')
+    .select('wastage_type, total_value')
+    .eq('company_id', companyId);
+  if (branchId !== '__all__') wtq = wtq.eq('branch_id', branchId);
+  if (dateFromTs) wtq = wtq.gte('created_at', dateFromTs);
+  if (dateToTs) wtq = wtq.lte('created_at', dateToTs);
+  const { data: wtData } = await wtq;
+
+  const typeMap = new Map<string, number>();
+  for (const r of wtData ?? []) {
+    const t = r.wastage_type ?? 'other';
+    typeMap.set(t, (typeMap.get(t) ?? 0) + Number(r.total_value ?? 0));
+  }
+
+  // Staffing cost
+  let sq = service
+    .from('payroll_records')
+    .select('net_pay')
+    .eq('company_id', companyId)
+    .eq('status', 'paid');
+  if (branchId !== '__all__') sq = sq.eq('branch_id', branchId);
+  if (dateFrom) sq = sq.gte('period_start', dateFrom);
+  if (dateTo) sq = sq.lte('period_end', dateTo);
+  const { data: staffData } = await sq;
+  const staffingTotal = (staffData ?? []).reduce((s: number, r: any) => s + Number(r.net_pay), 0);
+
+  const totalWastage = [...sourceMap.values()].reduce((a, b) => a + b, 0);
+
+  const bySource = Array.from(sourceMap.entries()).map(([source, value]) => ({
+    label: source.charAt(0).toUpperCase() + source.slice(1),
+    source,
+    value: Math.round(value * 100) / 100,
+  }));
+
+  const byType = Array.from(typeMap.entries()).map(([type, value]) => ({
+    label: type.charAt(0).toUpperCase() + type.slice(1),
+    type,
+    value: Math.round(value * 100) / 100,
+  }));
+
+  const overview = [
+    { label: 'Wastage (Central)', value: Math.round((sourceMap.get('inventory') ?? 0) * 100) / 100 },
+    { label: 'Wastage (Kitchen)', value: Math.round((sourceMap.get('kitchen') ?? 0) * 100) / 100 },
+    { label: 'Wastage (Bar)', value: Math.round((sourceMap.get('bar') ?? 0) * 100) / 100 },
+    { label: 'Wastage (Accommodation)', value: Math.round((sourceMap.get('accommodation') ?? 0) * 100) / 100 },
+    { label: 'Wastage (Custom)', value: Math.round((sourceMap.get('custom') ?? 0) * 100) / 100 },
+    { label: 'Staffing Cost', value: Math.round(staffingTotal * 100) / 100 },
+  ].filter(item => item.value > 0);
+
+  return jsonResponse({
+    total_wastage: Math.round(totalWastage * 100) / 100,
+    staffing_cost: Math.round(staffingTotal * 100) / 100,
+    by_source: bySource,
+    by_type: byType,
+    overview,
+  });
+}
+

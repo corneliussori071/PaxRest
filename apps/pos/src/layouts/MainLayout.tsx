@@ -15,6 +15,7 @@ import PeopleIcon from '@mui/icons-material/People';
 import BadgeIcon from '@mui/icons-material/Badge';
 import LoyaltyIcon from '@mui/icons-material/Loyalty';
 import BarChartIcon from '@mui/icons-material/BarChart';
+import ShowChartIcon from '@mui/icons-material/ShowChart';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import StorefrontIcon from '@mui/icons-material/Storefront';
@@ -50,6 +51,7 @@ const NAV_ITEMS: NavItemWithPermission[] = [
   { id: 'staff',      label: 'Staff Management',   icon: <PeopleIcon />,           path: '/staff',      permission: 'manage_staff' },
   { id: 'branches',   label: 'Branches',           icon: <StorefrontIcon />,       path: '/branches',   permission: 'manage_branches' },
   { id: 'customers',  label: 'Customers',          icon: <LoyaltyIcon />,          path: '/customers',  permission: 'manage_loyalty',   dividerAfter: true },
+  { id: 'analytics',  label: 'Analytics',          icon: <ShowChartIcon />,        path: '/analytics',  permission: 'view_analytics' },
   { id: 'reports',    label: 'Reports',            icon: <BarChartIcon />,         path: '/reports',    permission: 'view_reports' },
   { id: 'settings',   label: 'Settings',           icon: <SettingsIcon />,         path: '/settings',   permission: 'manage_settings' },
 ];

@@ -15,6 +15,7 @@
     "@emotion/styled": "^11.14.0",
     "@mui/icons-material": "^7.0.0",
     "@mui/material": "^7.0.0",
+    "@mui/x-charts": "^8.27.4",
     "@paxrest/shared-types": "workspace:*",
     "@paxrest/shared-utils": "workspace:*",
     "@paxrest/ui": "workspace:*",

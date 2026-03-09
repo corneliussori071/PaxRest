@@ -47,6 +47,7 @@ export type Permission =
   | 'manage_shifts'
   | 'manage_tables'
   | 'view_reports'
+  | 'view_analytics'
   | 'export_reports'
   | 'manage_loyalty'
   | 'manage_branches'
