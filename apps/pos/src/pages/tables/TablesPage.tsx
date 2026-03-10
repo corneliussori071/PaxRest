@@ -430,7 +430,7 @@ function TablesContent() {
                 </Box>
                 {imagePreview && (
                   <IconButton size="small" onClick={() => { setImageFile(null); setImagePreview(null); }}>
-                    ✕
+                    ×
                   </IconButton>
                 )}
               </Box>

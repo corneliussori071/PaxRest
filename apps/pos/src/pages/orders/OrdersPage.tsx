@@ -47,8 +47,8 @@ export default function OrdersPage() {
         onChange={(_, v) => setMainTab(v)}
         sx={{ mb: 2, borderBottom: '1px solid', borderColor: 'divider' }}
       >
-        <Tab label="🏪 Internal" />
-        <Tab label="🌐 Online" />
+        <Tab label="Internal" />
+        <Tab label="Online" />
       </Tabs>
 
       {mainTab === 0 && (
@@ -59,9 +59,9 @@ export default function OrdersPage() {
             variant="scrollable"
             scrollButtons="auto"
             sx={{ mb: 2 }}
-            TabIndicatorProps={{ style: { background: '#1976d2', height: 3 } }}
+            TabIndicatorProps={{ style: { background: '#635BFF', height: 2 } }}
           >
-            <Tab label="💳 Pending Payments" />
+            <Tab label="Pending Payments" />
             <Tab label={<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}><RestaurantIcon sx={{ fontSize: 16 }} /> Meals</Box>} />
             <Tab label={<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}><HotelIcon sx={{ fontSize: 16 }} /> Rooms</Box>} />
             <Tab label={<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}><LocalBarIcon sx={{ fontSize: 16 }} /> Bar</Box>} />

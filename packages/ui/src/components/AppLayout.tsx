@@ -7,9 +7,22 @@ import {
 import MenuIcon from '@mui/icons-material/Menu';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import LogoutIcon from '@mui/icons-material/Logout';
+import { SHELL_BG, SHELL_BG_LIGHT } from '../theme';
 
-const DRAWER_WIDTH = 260;
+const DRAWER_WIDTH = 248;
 const DRAWER_COLLAPSED = 64;
+
+/* Dark sidebar token palette */
+const SIDEBAR = {
+  bg: SHELL_BG,
+  bgHover: SHELL_BG_LIGHT,
+  bgActive: 'rgba(99,91,255,0.16)',
+  text: '#C1C9D2',
+  textActive: '#FFFFFF',
+  accent: '#635BFF',
+  divider: 'rgba(255,255,255,0.08)',
+  caption: 'rgba(255,255,255,0.45)',
+};
 
 export interface NavItem {
   id: string;
@@ -63,75 +76,87 @@ export function AppLayout({
             transition: 'width 0.2s',
             overflowX: 'hidden',
             boxSizing: 'border-box',
+            bgcolor: SIDEBAR.bg,
+            borderRight: 'none',
           },
         }}
       >
         {/* Logo area */}
-        <Toolbar sx={{ justifyContent: collapsed ? 'center' : 'space-between', px: collapsed ? 1 : 2 }}>
-          {!collapsed && (logo || <Typography variant="h6" fontWeight={700} color="primary">PaxRest</Typography>)}
+        <Toolbar sx={{ justifyContent: collapsed ? 'center' : 'space-between', px: collapsed ? 1 : 2.5, minHeight: '56px !important' }}>
+          {!collapsed && (logo || <Typography variant="h6" fontWeight={700} sx={{ color: '#fff', letterSpacing: '-0.02em' }}>PaxRest</Typography>)}
           {!isMobile && (
-            <IconButton onClick={() => setDrawerOpen(!drawerOpen)} size="small">
+            <IconButton onClick={() => setDrawerOpen(!drawerOpen)} size="small" sx={{ color: SIDEBAR.text }}>
               {collapsed ? <MenuIcon /> : <ChevronLeftIcon />}
             </IconButton>
           )}
         </Toolbar>
-        <Divider />
 
         {/* Branch name */}
         {branchName && !collapsed && (
           <Box
-            sx={{ px: 2, py: 1, cursor: onBranchSwitch ? 'pointer' : 'default' }}
+            sx={{ px: 2.5, py: 1.25, cursor: onBranchSwitch ? 'pointer' : 'default', '&:hover': onBranchSwitch ? { bgcolor: SIDEBAR.bgHover } : {} }}
             onClick={onBranchSwitch}
           >
-            <Typography variant="caption" color="text.secondary">Branch</Typography>
-            <Typography variant="body2" fontWeight={600} noWrap>{branchName}</Typography>
+            <Typography variant="overline" sx={{ color: SIDEBAR.caption, fontSize: '0.625rem' }}>Branch</Typography>
+            <Typography variant="body2" fontWeight={600} noWrap sx={{ color: '#fff' }}>{branchName}</Typography>
           </Box>
         )}
 
+        <Box sx={{ borderBottom: `1px solid ${SIDEBAR.divider}`, mx: 2, mt: 0.5, mb: 1 }} />
+
         {/* Nav Items */}
-        <List sx={{ flex: 1, pt: 1 }}>
+        <List sx={{ flex: 1, pt: 0, px: 1 }}>
           {navItems.map((item) => (
             <React.Fragment key={item.id}>
-              <ListItem disablePadding>
+              <ListItem disablePadding sx={{ mb: 0.25 }}>
                 <Tooltip title={collapsed ? item.label : ''} placement="right">
                   <ListItemButton
                     selected={activeItemId === item.id}
                     onClick={() => { onNavigate(item.path); if (isMobile) setDrawerOpen(false); }}
                     sx={{
-                      minHeight: 44,
-                      px: collapsed ? 2 : 2.5,
-                      borderRadius: 1,
-                      mx: 1,
-                      '&.Mui-selected': { bgcolor: 'primary.main', color: '#fff', '&:hover': { bgcolor: 'primary.dark' }, '& .MuiListItemIcon-root': { color: '#fff' } },
+                      minHeight: 38,
+                      px: collapsed ? 2 : 1.5,
+                      py: 0.5,
+                      borderRadius: '6px',
+                      color: SIDEBAR.text,
+                      '&:hover': { bgcolor: SIDEBAR.bgHover, color: SIDEBAR.textActive },
+                      '& .MuiListItemIcon-root': { color: SIDEBAR.text, minWidth: collapsed ? 0 : 32 },
+                      '&.Mui-selected': {
+                        bgcolor: SIDEBAR.bgActive,
+                        color: SIDEBAR.textActive,
+                        '&:hover': { bgcolor: SIDEBAR.bgActive },
+                        '& .MuiListItemIcon-root': { color: SIDEBAR.accent },
+                      },
                     }}
                   >
-                    <ListItemIcon sx={{ minWidth: collapsed ? 0 : 36, justifyContent: 'center' }}>
+                    <ListItemIcon sx={{ justifyContent: 'center', '& .MuiSvgIcon-root': { fontSize: '1.2rem' } }}>
                       {item.icon}
                     </ListItemIcon>
-                    {!collapsed && <ListItemText primary={item.label} primaryTypographyProps={{ fontSize: '0.875rem' }} />}
+                    {!collapsed && <ListItemText primary={item.label} primaryTypographyProps={{ fontSize: '0.8125rem', fontWeight: activeItemId === item.id ? 600 : 400 }} />}
                   </ListItemButton>
                 </Tooltip>
               </ListItem>
-              {item.dividerAfter && <Divider sx={{ my: 1 }} />}
+              {item.dividerAfter && <Box sx={{ borderBottom: `1px solid ${SIDEBAR.divider}`, mx: 1, my: 1 }} />}
             </React.Fragment>
           ))}
         </List>
 
         {/* User section */}
-        <Divider />
-        <Box
-          sx={{ p: collapsed ? 1 : 2, display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
-          onClick={(e) => setAnchorEl(e.currentTarget)}
-        >
-          <Avatar sx={{ width: 32, height: 32, bgcolor: 'primary.main', fontSize: '0.875rem' }}>
-            {userDisplayName.charAt(0).toUpperCase()}
-          </Avatar>
-          {!collapsed && (
-            <Box sx={{ overflow: 'hidden' }}>
-              <Typography variant="body2" fontWeight={600} noWrap>{userDisplayName}</Typography>
-              {userRole && <Typography variant="caption" color="text.secondary" noWrap>{userRole}</Typography>}
-            </Box>
-          )}
+        <Box sx={{ borderTop: `1px solid ${SIDEBAR.divider}` }}>
+          <Box
+            sx={{ p: collapsed ? 1 : 2, display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer', '&:hover': { bgcolor: SIDEBAR.bgHover } }}
+            onClick={(e) => setAnchorEl(e.currentTarget)}
+          >
+            <Avatar sx={{ width: 30, height: 30, bgcolor: SIDEBAR.accent, fontSize: '0.8rem', fontWeight: 600 }}>
+              {userDisplayName.charAt(0).toUpperCase()}
+            </Avatar>
+            {!collapsed && (
+              <Box sx={{ overflow: 'hidden' }}>
+                <Typography variant="body2" fontWeight={600} noWrap sx={{ color: '#fff', fontSize: '0.8125rem' }}>{userDisplayName}</Typography>
+                {userRole && <Typography variant="caption" noWrap sx={{ color: SIDEBAR.caption, fontSize: '0.6875rem' }}>{userRole}</Typography>}
+              </Box>
+            )}
+          </Box>
         </Box>
         <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={() => setAnchorEl(null)}>
           <MenuItem onClick={() => { setAnchorEl(null); onLogout(); }}>
@@ -143,14 +168,14 @@ export function AppLayout({
 
       {/* Main Content */}
       <Box component="main" sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <AppBar position="sticky" color="inherit" sx={{ bgcolor: 'background.paper' }}>
-          <Toolbar>
+        <AppBar position="sticky" sx={{ bgcolor: SHELL_BG, color: '#fff' }}>
+          <Toolbar sx={{ minHeight: '56px !important' }}>
             {isMobile && (
-              <IconButton edge="start" onClick={() => setDrawerOpen(true)} sx={{ mr: 1 }}>
+              <IconButton edge="start" onClick={() => setDrawerOpen(true)} sx={{ mr: 1, color: '#fff' }}>
                 <MenuIcon />
               </IconButton>
             )}
-            <Typography variant="h6" fontWeight={600} sx={{ flex: 1 }}>{title}</Typography>
+            <Typography variant="h6" fontWeight={600} sx={{ flex: 1, fontSize: '0.9375rem' }}>{title}</Typography>
             {headerActions}
           </Toolbar>
         </AppBar>

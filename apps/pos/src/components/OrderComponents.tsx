@@ -145,7 +145,7 @@ export function OrderDetailDialog({
           <>
             <Typography variant="body2" color="text.secondary" gutterBottom>
               {(d?.order_type && ORDER_TYPE_LABELS[d.order_type]) || d?.order_type}
-              {d?.source === 'online' ? ' · 🌐 Online' : d?.source === 'other_services' ? ' · 🛎️ Services' : ' · 🏪 POS'}
+              {d?.source === 'online' ? ' · Online' : d?.source === 'other_services' ? ' · Services' : ' · POS'}
               {d?.customer_name ? ` · ${d.customer_name}` : ''}
               {d?.customer_phone ? ` · ${d.customer_phone}` : ''}
               {d?.table_name ? ` · Table: ${d.table_name}` : ''}
@@ -230,7 +230,7 @@ export function OrderDetailDialog({
             )}
             {d?.is_special_request && (
               <Alert severity="warning" sx={{ mt: 1, py: 0.5 }}>
-                <Typography variant="body2" fontWeight={700}>⭐ Special Request</Typography>
+                <Typography variant="body2" fontWeight={700}>Special Request</Typography>
                 {d?.special_request_notes && <Typography variant="body2">{d.special_request_notes}</Typography>}
               </Alert>
             )}
@@ -448,7 +448,7 @@ function SpecialRequestPricingDialog({ open, orderNumber, specialRequestNotes, o
       <DialogContent sx={{ pt: 2 }}>
         {specialRequestNotes && (
           <Alert severity="warning" sx={{ mb: 2 }}>
-            <Typography variant="body2" fontWeight={700}>⭐ Customer Request</Typography>
+            <Typography variant="body2" fontWeight={700}>Customer Request</Typography>
             <Typography variant="body2">{specialRequestNotes}</Typography>
           </Alert>
         )}
@@ -529,7 +529,7 @@ export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickSta
         {showSource && (
           <Chip
             size="small"
-            label={order.source === 'online' ? '🌐 Online' : order.source === 'other_services' ? '🛎️ Services' : '🏪 Internal'}
+            label={order.source === 'online' ? 'Online' : order.source === 'other_services' ? 'Services' : 'Internal'}
             variant="outlined"
             color={order.source === 'online' ? 'info' : order.source === 'other_services' ? 'secondary' : 'default'}
             sx={{ fontSize: 10, height: 18, mt: 0.5 }}
@@ -564,7 +564,7 @@ export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickSta
           </Button>
         )}
         {order.status === 'awaiting_approval' && order.is_special_request && (
-          <Chip size="small" label="⭐ Needs Pricing" color="warning" sx={{ fontSize: 10, height: 22 }} />
+          <Chip size="small" label="Needs Pricing" color="warning" sx={{ fontSize: 10, height: 22 }} />
         )}
         {showServed && order.order_type !== 'delivery' && onQuickStatus && (
           <Button size="small" variant="contained" color="success" onClick={() => onQuickStatus(order, servedTarget)}>

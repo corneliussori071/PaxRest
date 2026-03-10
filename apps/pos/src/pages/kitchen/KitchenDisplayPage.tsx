@@ -416,7 +416,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                     </Typography>
                   )}
 
-                  {a.notes && <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>📝 {a.notes}</Typography>}
+                  {a.notes && <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>{a.notes}</Typography>}
                   {a.rejection_reason && (
                     <Typography variant="caption" display="block" color="error" sx={{ mt: 0.5 }}>
                       Rejection reason: {a.rejection_reason}
@@ -666,7 +666,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                     {detailData.menu_item.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' (default)' : ''}`}
                         variant="outlined"
                         size="small"
                       />
@@ -1458,7 +1458,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
                     {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' (default)' : ''}`}
                         variant="outlined"
                         size="small"
                       />
@@ -1767,7 +1767,7 @@ function SoldOutTab({ branchId, currency }: { branchId: string; currency: string
                     {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' (default)' : ''}`}
                         variant="outlined"
                         size="small"
                       />

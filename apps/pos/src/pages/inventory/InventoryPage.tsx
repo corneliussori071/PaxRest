@@ -1105,7 +1105,7 @@ function LowStockTab({ branchId, currency }: { branchId: string; currency: strin
       page={page} pageSize={pageSize} loading={loading}
       onPageChange={setPage} onPageSizeChange={setPageSize}
       rowKey={(r) => r.id}
-      emptyMessage="All items are above threshold 🎉"
+      emptyMessage="All items are above threshold"
     />
   );
 }

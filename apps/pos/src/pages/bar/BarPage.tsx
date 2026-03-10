@@ -1013,7 +1013,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                     {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' (default)' : ''}`}
                         variant="outlined"
                         size="small"
                       />
@@ -1850,7 +1850,7 @@ function OrderDetailDialog({
                         <Typography variant="caption" fontWeight={700} color="error.main">Removed Ingredients:</Typography>
                         {removed.map((r: any, i: number) => (
                           <Typography key={i} variant="caption" display="block" color="error.main" sx={{ pl: 1 }}>
-                            ✕ {typeof r === 'string' ? r : r.name ?? r.ingredient_name ?? JSON.stringify(r)}
+                            – {typeof r === 'string' ? r : r.name ?? r.ingredient_name ?? JSON.stringify(r)}
                           </Typography>
                         ))}
                       </Box>
@@ -1881,7 +1881,7 @@ function OrderDetailDialog({
                     {/* Special instructions */}
                     {item.special_instructions && (
                       <Typography variant="caption" display="block" sx={{ mt: 0.5, fontStyle: 'italic' }}>
-                        📝 {item.special_instructions}
+                        {item.special_instructions}
                       </Typography>
                     )}
                   </Box>

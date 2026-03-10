@@ -1310,7 +1310,7 @@ function ScheduleDialog({ open, onClose, onSaved }: any) {
       });
       toast.success(`Schedule created: ${res.count} assignments`);
       if (res.warnings && res.warnings.length > 0) {
-        toast(`${res.warnings.length} shift(s) are understaffed`, { icon: '⚠️' });
+        toast(`${res.warnings.length} shift(s) are understaffed`, { icon: '⚠' });
       }
       onSaved(); onClose();
     } catch (err: any) { toast.error(err.message); }

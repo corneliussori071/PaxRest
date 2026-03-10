@@ -919,11 +919,11 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                         {item.booking_details.duration_count} {item.booking_details.duration_unit}{item.booking_details.duration_count !== 1 ? 's' : ''}
                       </Typography>
                       <Typography variant="caption" color="text.secondary" display="block">
-                        📅 Check-in: {new Date(item.booking_details.check_in as string).toLocaleString()}
+                        Check-in: {new Date(item.booking_details.check_in as string).toLocaleString()}
                       </Typography>
                       {item.booking_details.check_out && (
                         <Typography variant="caption" color="text.secondary" display="block">
-                          🚪 Departure: {new Date(item.booking_details.check_out).toLocaleString()}
+                          Departure: {new Date(item.booking_details.check_out).toLocaleString()}
                         </Typography>
                       )}
                     </Box>
@@ -1887,7 +1887,7 @@ function OrderDetailDialog({
                     {bookingMeta && (
                       <Paper variant="outlined" sx={{ p: 1, mt: 1, bgcolor: 'action.hover' }}>
                         <Typography variant="caption" fontWeight={700} color="info.main" display="block" sx={{ mb: 0.5 }}>
-                          🏨 Booking Details
+                          Booking Details
                         </Typography>
                         <Stack direction="row" spacing={2} flexWrap="wrap">
                           <Typography variant="caption" color="text.secondary">
@@ -1899,12 +1899,12 @@ function OrderDetailDialog({
                         </Stack>
                         {bookingMeta.check_in && (
                           <Typography variant="caption" color="text.secondary" display="block">
-                            📅 <strong>Check-in:</strong> {new Date(bookingMeta.check_in).toLocaleString()}
+                            <strong>Check-in:</strong> {new Date(bookingMeta.check_in).toLocaleString()}
                           </Typography>
                         )}
                         {bookingMeta.check_out && (
                           <Typography variant="caption" color="text.secondary" display="block">
-                            🚪 <strong>Departure:</strong> {new Date(bookingMeta.check_out).toLocaleString()}
+                            <strong>Departure:</strong> {new Date(bookingMeta.check_out).toLocaleString()}
                           </Typography>
                         )}
                       </Paper>
@@ -1931,7 +1931,7 @@ function OrderDetailDialog({
                         <Typography variant="caption" fontWeight={700} color="error.main">Removed Ingredients:</Typography>
                         {removed.map((r: any, i: number) => (
                           <Typography key={i} variant="caption" display="block" color="error.main" sx={{ pl: 1 }}>
-                            ✕ {typeof r === 'string' ? r : r.name ?? r.ingredient_name ?? JSON.stringify(r)}
+                            – {typeof r === 'string' ? r : r.name ?? r.ingredient_name ?? JSON.stringify(r)}
                           </Typography>
                         ))}
                       </Box>
@@ -1960,7 +1960,7 @@ function OrderDetailDialog({
 
                     {item.special_instructions && (
                       <Typography variant="caption" display="block" sx={{ mt: 0.5, fontStyle: 'italic' }}>
-                        📝 {item.special_instructions}
+                        {item.special_instructions}
                       </Typography>
                     )}
                   </Box>

@@ -168,8 +168,8 @@ ${opts.change > 0 ? `<div class="change-box"><div class="row"><span>Change Due</
 </div>
 
 <div class="no-print">
-  <button onclick="window.print()" style="padding:8px 24px;font-size:14px;cursor:pointer;margin-right:8px;border:1px solid #333;border-radius:4px;background:#fff">🖨️ Print</button>
-  <button onclick="window.print()" style="padding:8px 24px;font-size:14px;cursor:pointer;border:1px solid #1976d2;border-radius:4px;background:#1976d2;color:#fff">📄 Save as PDF</button>
+  <button onclick="window.print()" style="padding:8px 24px;font-size:14px;cursor:pointer;margin-right:8px;border:1px solid #333;border-radius:4px;background:#fff">Print</button>
+  <button onclick="window.print()" style="padding:8px 24px;font-size:14px;cursor:pointer;border:1px solid #635BFF;border-radius:4px;background:#635BFF;color:#fff">Save as PDF</button>
 </div>
 
 </body></html>`;

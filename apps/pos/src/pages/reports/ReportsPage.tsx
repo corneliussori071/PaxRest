@@ -346,10 +346,10 @@ function StockValueCard({
             {loading ? (
               <CircularProgress size={24} />
             ) : (
-              <Typography variant="h5" fontWeight={700} color="#0277BD">{fmt(displayValue)}</Typography>
+              <Typography variant="h5" fontWeight={700} color="#635BFF">{fmt(displayValue)}</Typography>
             )}
           </Box>
-          <Box sx={{ p: 1, borderRadius: 2, bgcolor: '#0277BD15', color: '#0277BD' }}>
+          <Box sx={{ p: 1, borderRadius: 2, bgcolor: '#635BFF15', color: '#635BFF' }}>
             <WarehouseIcon />
           </Box>
         </Stack>

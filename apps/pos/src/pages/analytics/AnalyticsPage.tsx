@@ -65,7 +65,7 @@ const DATE_PRESETS: { value: DatePreset; label: string }[] = [
   { value: 'custom',  label: 'Custom' },
 ];
 
-const CHART_COLORS = ['#1976d2', '#2e7d32', '#ed6c02', '#9c27b0', '#c62828', '#00838f', '#f57f17'];
+const CHART_COLORS = ['#635BFF', '#30B130', '#F5A623', '#8B5CF6', '#DF1B41', '#0EA5E9', '#D97706'];
 
 function getDateRange(preset: DatePreset): { from: string; to: string } {
   const today = new Date();
@@ -384,9 +384,9 @@ const fmt = useCallback((val: number, isCurrency: boolean) => {
                   label: trendMetricInfo.label,
                   valueFormatter: trendValueFmt,
                   showMark: trendData.length <= 31,
-                  color: trendMetric === 'net_position' ? '#2e7d32'
-                    : trendMetric === 'wastage' ? '#c62828'
-                    : '#1976d2',
+                  color: trendMetric === 'net_position' ? '#30B130'
+                    : trendMetric === 'wastage' ? '#DF1B41'
+                    : '#635BFF',
                 }]}
                 xAxis={[{ data: trendLabels, scaleType: 'band' }]}
                 yAxis={[{ valueFormatter: (v: number | null) => trendValueFmt(v) }]}
@@ -400,9 +400,9 @@ const fmt = useCallback((val: number, isCurrency: boolean) => {
                   data: trendValues,
                   label: trendMetricInfo.label,
                   valueFormatter: trendValueFmt,
-                  color: trendMetric === 'net_position' ? '#2e7d32'
-                    : trendMetric === 'wastage' ? '#c62828'
-                    : '#1976d2',
+                  color: trendMetric === 'net_position' ? '#30B130'
+                    : trendMetric === 'wastage' ? '#DF1B41'
+                    : '#635BFF',
                 }]}
                 xAxis={[{ data: trendLabels, scaleType: 'band' }]}
                 yAxis={[{ valueFormatter: (v: number | null) => trendValueFmt(v) }]}
@@ -587,9 +587,9 @@ const fmt = useCallback((val: number, isCurrency: boolean) => {
                       data: compareData.map(e => e.value),
                       label: compareMetricInfo.label,
                       valueFormatter: compareValueFmt,
-                      color: compareMetric === 'wastage' ? '#c62828'
-                        : compareMetric === 'net_position' ? '#2e7d32'
-                        : '#1976d2',
+                      color: compareMetric === 'wastage' ? '#DF1B41'
+                        : compareMetric === 'net_position' ? '#30B130'
+                        : '#635BFF',
                     }]}
                     xAxis={[{
                       data: compareData.map(e => e.entity_label),

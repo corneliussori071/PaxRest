@@ -1111,8 +1111,8 @@ function POSTerminalContent() {
             onChange={(_, v) => setManageTab(v)}
             sx={{ mb: 2, borderBottom: '1px solid', borderColor: 'divider' }}
           >
-            <Tab label="🏪 Internal" />
-            <Tab label="🌐 Online" />
+            <Tab label="Internal" />
+            <Tab label="Online" />
           </Tabs>
 
           {/* ── Internal tab ── */}
@@ -1124,7 +1124,7 @@ function POSTerminalContent() {
                 variant="scrollable"
                 scrollButtons="auto"
                 sx={{ mb: 2 }}
-                TabIndicatorProps={{ style: { background: '#1976d2', height: 3 } }}
+                TabIndicatorProps={{ style: { background: '#635BFF', height: 2 } }}
               >
                 <Tab label={
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

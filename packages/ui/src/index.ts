@@ -9,4 +9,5 @@ export { KDSOrderCard } from './components/KDSOrderCard';
 export {
   theme, darkTheme,
   ORDER_STATUS_COLORS, TABLE_STATUS_COLORS, DELIVERY_STATUS_COLORS,
+  SHELL_BG, SHELL_BG_LIGHT,
 } from './theme/index';
