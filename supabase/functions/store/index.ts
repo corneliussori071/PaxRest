@@ -210,7 +210,7 @@ async function updateBranch(req: Request, auth: AuthContext) {
   if (!body.id) return errorResponse('Missing branch id');
 
   const updates: Record<string, unknown> = {};
-  const allowed = ['name', 'location', 'address', 'phone', 'email', 'timezone', 'is_active', 'settings', 'operating_hours'];
+  const allowed = ['name', 'location', 'address', 'phone', 'email', 'timezone', 'currency', 'is_active', 'settings', 'operating_hours'];
   for (const key of allowed) {
     if (body[key] !== undefined) {
       updates[key] = typeof body[key] === 'string' ? sanitizeString(body[key]) : body[key];
