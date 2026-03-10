@@ -16,6 +16,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { DataTable, StatusBadge, type Column } from '@paxrest/ui';
 import { usePaginated, useApi, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import { formatCurrency } from '@paxrest/shared-utils';
 import BranchGuard from '@/components/BranchGuard';
@@ -71,7 +72,7 @@ function DeliveryContent() {
 
 function DeliveriesTab() {
   const { activeBranchId, activeBranch, company } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? '';
+  const { currencyCode: currency } = useCurrency();
   const [statusFilter, setStatusFilter] = useState('');
   const { items, total, loading, page, pageSize, setPage, setPageSize, refetch } =
     usePaginated<any>('delivery', 'deliveries', statusFilter ? { status: statusFilter } : undefined);
@@ -535,7 +536,7 @@ function RiderAssignmentsDialog({ rider, onClose }: { rider: any; onClose: () =>
 
 function ZonesTab() {
   const { activeBranchId, activeBranch, company } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? '';
+  const { currencyCode: currency } = useCurrency();
   const { items, loading, refetch } = usePaginated<any>('delivery', 'zones');
   const [dialog, setDialog] = useState(false);
   const emptyForm = { name: '', delivery_fee: 0, min_order_amount: 0, estimated_minutes: 30 };
@@ -646,8 +647,7 @@ function DeliveryDetailDialog({ delivery, currency, onClose }: { delivery: any; 
     ? typeof addr === 'object' ? [addr.street, addr.city].filter(Boolean).join(', ') : String(addr)
     : '—';
   const isActive = ['assigned', 'picked_up', 'in_transit'].includes(d.status);
-  const fmt = (v: number) => formatCurrency(v, currency);
-
+const { fmt } = useCurrency();
   return (
     <Dialog open fullWidth maxWidth="sm" onClose={onClose}>
       <DialogTitle>
@@ -766,7 +766,7 @@ function DeliveryDetailDialog({ delivery, currency, onClose }: { delivery: any; 
 
 function RiderDeliveriesView() {
   const { activeBranchId, profile, activeBranch, company } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? '';
+  const { currencyCode: currency } = useCurrency();
   const [deliveries, setDeliveries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailDlg, setDetailDlg] = useState<any>(null);
@@ -840,7 +840,7 @@ function RiderDeliveriesView() {
     in_transit: { status: 'delivered', label: 'Mark Delivered' },
   };
 
-  const fmt = (v: number) => formatCurrency(v, currency);
+const { fmt } = useCurrency();
 
   // Separate active from completed/cancelled
   const active = deliveries.filter((d) => !['delivered', 'cancelled', 'returned', 'failed'].includes(d.status));

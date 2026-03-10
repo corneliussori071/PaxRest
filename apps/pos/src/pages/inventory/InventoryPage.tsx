@@ -30,6 +30,7 @@ import {
 import type { InventoryUnit, PackagingType, IngredientRequestStatus } from '@paxrest/shared-types';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
@@ -65,7 +66,7 @@ export default function InventoryPage() {
 
 function InventoryPageContent() {
   const { activeBranchId, company, activeBranch } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { fmt, currencyCode: currency } = useCurrency();
   const [tab, setTab] = useState(0);
 
   return (
@@ -86,6 +87,7 @@ function InventoryPageContent() {
    Stock Tab — Full inventory with Add/Edit/Barcode/CSV
    ═══════════════════════════════════════════════════════ */
 function StockTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { fmt } = useCurrency();
   const {
     items, total, loading, page, pageSize, sortBy, sortDir,
     setPage, setPageSize, onSortChange, setSearch, refetch,
@@ -214,8 +216,8 @@ function StockTab({ branchId, currency }: { branchId: string; currency: string }
       </Typography>
     )},
     { id: 'packaging_type', label: 'Type', width: 80, render: (r) => r.packaging_type === 'pack' ? `Pack (${r.items_per_pack})` : 'Single' },
-    { id: 'cost_per_unit', label: 'Cost', width: 100, render: (r) => formatCurrency(r.cost_per_unit, currency) },
-    { id: 'selling_price', label: 'Selling Price', width: 120, render: (r) => r.selling_price ? formatCurrency(r.selling_price, currency) : '—' },
+    { id: 'cost_per_unit', label: 'Cost', width: 100, render: (r) => fmt(r.cost_per_unit) },
+    { id: 'selling_price', label: 'Selling Price', width: 120, render: (r) => r.selling_price ? fmt(r.selling_price) : '—' },
     { id: 'actions', label: '', width: 180, sortable: false, render: (r) => (
       <Stack direction="row" spacing={0.5}>
         <Tooltip title="Edit"><IconButton size="small" onClick={(e) => { e.stopPropagation(); openEditItem(r); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
@@ -1074,6 +1076,7 @@ function RequestsSubTab({ branchId, statusFilter, title }: { branchId: string; s
    Low Stock Tab (paginated, SQL-filtered)
    ═══════════════════════════════════════════════════════ */
 function LowStockTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { fmt } = useCurrency();
   const { items, total, loading, page, pageSize, setPage, setPageSize } = usePaginated<any>('inventory', 'low-stock');
 
   const columns: Column[] = [
@@ -1093,7 +1096,7 @@ function LowStockTab({ branchId, currency }: { branchId: string; currency: strin
         {Math.max(0, r.min_stock_level - r.quantity)} {r.unit}
       </Typography>
     )},
-    { id: 'cost_per_unit', label: 'Cost', width: 100, render: (r) => formatCurrency(r.cost_per_unit, currency) },
+    { id: 'cost_per_unit', label: 'Cost', width: 100, render: (r) => fmt(r.cost_per_unit) },
   ];
 
   return (

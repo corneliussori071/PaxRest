@@ -17,6 +17,7 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import { formatCurrency } from '@paxrest/shared-utils';
 import { api } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import toast from 'react-hot-toast';
 
 const PAYMENT_METHODS = [
@@ -186,6 +187,7 @@ export default function PaymentDialog({
   onPaid,
 }: PaymentDialogProps) {
   const { profile, company, activeBranch } = useAuth();
+  const { fmt } = useCurrency();
 
   const [method, setMethod] = useState<string>('cash');
   const [amountStr, setAmountStr] = useState<string>('');
@@ -267,7 +269,7 @@ export default function PaymentDialog({
         orderDetail: orderDetail ?? order,
       });
 
-      toast.success(`Payment of ${formatCurrency(amountVal, currency)} recorded for order #${order.order_number}`);
+      toast.success(`Payment of ${fmt(amountVal)} recorded for order #${order.order_number}`);
       onPaid?.();
     } catch (err: any) {
       toast.error(err?.message ?? 'Failed to record payment. Please try again.');
@@ -394,17 +396,17 @@ export default function PaymentDialog({
                 </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Amount Paid</Typography>
-                  <Typography variant="body2" fontWeight={600}>{formatCurrency(paidResult.amount, currency)}</Typography>
+                  <Typography variant="body2" fontWeight={600}>{fmt(paidResult.amount)}</Typography>
                 </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Order Total</Typography>
-                  <Typography variant="body2" fontWeight={600}>{formatCurrency(paidResult.total, currency)}</Typography>
+                  <Typography variant="body2" fontWeight={600}>{fmt(paidResult.total)}</Typography>
                 </Box>
                 {paidResult.change > 0 && (
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
                     <Typography variant="body1" fontWeight={700} color="warning.main">Change</Typography>
                     <Typography variant="body1" fontWeight={700} color="warning.main">
-                      {formatCurrency(paidResult.change, currency)}
+                      {fmt(paidResult.change)}
                     </Typography>
                   </Box>
                 )}
@@ -442,19 +444,19 @@ export default function PaymentDialog({
             <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'grey.50' }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography variant="body2" color="text.secondary">Order Total</Typography>
-                <Typography variant="body2" fontWeight={600}>{formatCurrency(orderTotal, currency)}</Typography>
+                <Typography variant="body2" fontWeight={600}>{fmt(orderTotal)}</Typography>
               </Box>
               {totalPaid > 0 && (
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                   <Typography variant="body2" color="text.secondary">Already Paid</Typography>
-                  <Typography variant="body2" fontWeight={600} color="success.main">−{formatCurrency(totalPaid, currency)}</Typography>
+                  <Typography variant="body2" fontWeight={600} color="success.main">−{fmt(totalPaid)}</Typography>
                 </Box>
               )}
               <Divider sx={{ my: 0.75 }} />
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="body1" fontWeight={700}>Remaining</Typography>
                 <Typography variant="body1" fontWeight={700} color={remaining > 0 ? 'error.main' : 'success.main'}>
-                  {formatCurrency(remaining, currency)}
+                  {fmt(remaining)}
                 </Typography>
               </Box>
             </Paper>
@@ -495,7 +497,7 @@ export default function PaymentDialog({
             {method === 'cash' && change > 0 && (
               <Alert severity="info" sx={{ py: 0.5 }}>
                 <Typography variant="body2">
-                  Change to return: <strong>{formatCurrency(change, currency)}</strong>
+                  Change to return: <strong>{fmt(change)}</strong>
                 </Typography>
               </Alert>
             )}
@@ -536,7 +538,7 @@ export default function PaymentDialog({
               disabled={!canSubmit}
               startIcon={submitting ? <CircularProgress size={14} color="inherit" /> : <PaymentIcon />}
             >
-              {submitting ? 'Processing...' : `Record Payment · ${amountVal > 0 ? formatCurrency(amountVal, currency) : '—'}`}
+              {submitting ? 'Processing...' : `Record Payment · ${amountVal > 0 ? fmt(amountVal) : '—'}`}
             </Button>
           </>
         )}

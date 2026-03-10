@@ -15,6 +15,7 @@ import { DataTable, type Column } from '@paxrest/ui';
 import { formatCurrency } from '@paxrest/shared-utils';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
@@ -202,7 +203,7 @@ function SuppliersTab() {
 
 function PurchaseOrdersTab() {
   const { activeBranchId, company, activeBranch } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { fmt, currencyCode: currency } = useCurrency();
 
   const { items, total, loading, page, pageSize, setPage, setPageSize, refetch } =
     usePaginated<any>('suppliers', 'purchase-orders');
@@ -287,7 +288,7 @@ function PurchaseOrdersTab() {
       return <Chip label={cfg.label} color={cfg.color} size="small" />;
     }},
     { id: 'items_count', label: 'Items', render: (r) => r.purchase_order_items?.length ?? 0 },
-    { id: 'total_amount', label: 'Total', render: (r) => formatCurrency(r.total_amount ?? 0, currency) },
+    { id: 'total_amount', label: 'Total', render: (r) => fmt(r.total_amount ?? 0) },
     { id: 'expected_date', label: 'Expected', render: (r) => r.expected_date ? new Date(r.expected_date).toLocaleDateString() : '' },
     { id: 'inventory_updated', label: 'Inventory', render: (r) => r.inventory_updated_at ? <Chip label="Updated" color="success" size="small" variant="outlined" /> : null },
     { id: 'actions', label: '', render: (r) => <POActionsMenu row={r} onAction={handleAction} /> },
@@ -393,6 +394,7 @@ interface POItem {
 function CreateEditPODialog({
   po, currency, onClose, onSaved,
 }: { po: any | null; currency: string; onClose: () => void; onSaved: () => void }) {
+  const { fmt } = useCurrency();
   const { activeBranchId, company } = useAuth();
 
   const [supplierId, setSupplierId] = useState<string>(po?.supplier_id ?? '');
@@ -622,7 +624,7 @@ function CreateEditPODialog({
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
           <Typography variant="subtitle1" fontWeight={600}>
-            Total: {formatCurrency(total, currency)}
+            Total: {fmt(total)}
           </Typography>
         </Box>
       </DialogContent>

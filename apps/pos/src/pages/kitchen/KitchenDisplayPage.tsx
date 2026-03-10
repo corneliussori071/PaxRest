@@ -49,6 +49,7 @@ import {
 import type { MealAvailability, MealAssignmentStatus, AvailableMealStatus, IngredientRequestStatus } from '@paxrest/shared-types';
 import { usePaginated, useApi, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
@@ -60,7 +61,7 @@ export default function KitchenDisplayPage() {
 
 function KitchenDisplayContent() {
   const { activeBranchId, company, activeBranch, profile } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { fmt, currencyCode: currency } = useCurrency();
   const [tab, setTab] = useState(0);
 
   const perms = profile?.permissions ?? [];
@@ -147,6 +148,7 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
    Tab 1 — Assignments (list with edit / delete / accept / reject / complete)
    ═══════════════════════════════════════════════════════ */
 function AssignmentsTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { fmt } = useCurrency();
   const { profile } = useAuth();
   const perms = profile?.permissions ?? [];
   const myUserId = profile?.id ?? '';
@@ -564,7 +566,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                   )}
                   <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
                     {detailData.menu_item?.base_price != null && (
-                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(detailData.menu_item.base_price, currency)}</Typography>
+                      <Typography variant="body2"><strong>Price:</strong> {fmt(detailData.menu_item.base_price)}</Typography>
                     )}
                     {detailData.menu_item?.calories != null && (
                       <Typography variant="body2"><strong>Calories:</strong> {detailData.menu_item.calories} kcal</Typography>
@@ -625,7 +627,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                           <td>{ing.name ?? ing.inventory_items?.name ?? '—'}</td>
                           <td>{ing.quantity_used}</td>
                           <td>{ing.unit}</td>
-                          <td>{ing.cost_contribution ? formatCurrency(ing.cost_contribution, currency) : '—'}</td>
+                          <td>{ing.cost_contribution ? fmt(ing.cost_contribution) : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -646,7 +648,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                       {detailData.menu_item.menu_item_extras.map((ext: any) => (
                         <tr key={ext.id}>
                           <td>{ext.name}</td>
-                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{fmt(ext.price)}</td>
                           <td>{ext.is_available ? 'Yes' : 'No'}</td>
                         </tr>
                       ))}
@@ -664,7 +666,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
                     {detailData.menu_item.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${formatCurrency(v.price_adjustment, currency)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
                         variant="outlined"
                         size="small"
                       />
@@ -692,6 +694,7 @@ function AssignmentsTab({ branchId, currency }: { branchId: string; currency: st
    Tab 2 — Make a Dish (browse menu, multi-select, assign to chef)
    ═══════════════════════════════════════════════════════ */
 function MakeDishTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { fmt } = useCurrency();
   const { user, profile } = useAuth();
   const { data: menuData, loading } = useApi<any>('menu', 'full', undefined, [branchId]);
 
@@ -952,11 +955,10 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
                       )}
 
                       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                        {formatCurrency(
+                        {fmt(
                           (Number(item.base_price) || 0)
                           + (item.menu_item_ingredients ?? []).reduce((s: number, i: any) => s + Number(i.cost_per_unit ?? i.price ?? 0), 0)
                           + (item.menu_item_extras ?? []).reduce((s: number, e: any) => s + Number(e.price ?? 0), 0),
-                          currency,
                         )}
                         {item.calories ? ` · ${item.calories} cal` : ''}
                       </Typography>
@@ -1027,11 +1029,10 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
                 </Stack>
 
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                  Total price: {formatCurrency(
+                  Total price: {fmt(
                     (Number(item.base_price) || 0)
                     + ingredients.filter((i: any) => !cfg.excludedIngredients.has(i.id ?? i.ingredient_id)).reduce((s: number, i: any) => s + Number(i.cost_per_unit ?? i.price ?? 0), 0)
                     + extras.filter((e: any) => !cfg.excludedExtras.has(e.id ?? e.extra_id)).reduce((s: number, e: any) => s + Number(e.price ?? 0), 0),
-                    currency,
                   )}
                 </Typography>
 
@@ -1052,7 +1053,7 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
                             {ing.name || ing.ingredient_name}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
-                            {formatCurrency(ing.cost_per_unit ?? ing.price ?? 0, currency)}
+                            {fmt(ing.cost_per_unit ?? ing.price ?? 0)}
                           </Typography>
                         </Stack>
                       );
@@ -1077,7 +1078,7 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
                             {ext.name || ext.extra_name}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
-                            {formatCurrency(ext.price ?? 0, currency)}
+                            {fmt(ext.price ?? 0)}
                           </Typography>
                         </Stack>
                       );
@@ -1173,6 +1174,7 @@ function MakeDishTab({ branchId, currency }: { branchId: string; currency: strin
    Tab 3 — Available Meals (ready for POS)
    ═══════════════════════════════════════════════════════ */
 function AvailableMealsTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { fmt } = useCurrency();
   const { profile } = useAuth();
   const perms = profile?.permissions ?? [];
   const canEditStatus = perms.includes('kitchen_make_dish' as any) || perms.includes('kitchen_ingredient_requests' as any) || perms.includes('manage_menu' as any);
@@ -1377,7 +1379,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
                   )}
                   <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
                     {mealDetailData.base_price != null && (
-                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(mealDetailData.base_price, currency)}</Typography>
+                      <Typography variant="body2"><strong>Price:</strong> {fmt(mealDetailData.base_price)}</Typography>
                     )}
                     {mealDetailData.calories != null && (
                       <Typography variant="body2"><strong>Calories:</strong> {mealDetailData.calories} kcal</Typography>
@@ -1417,7 +1419,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
                           <td>{ing.name ?? ing.inventory_items?.name ?? '—'}</td>
                           <td>{ing.quantity_used}</td>
                           <td>{ing.unit}</td>
-                          <td>{ing.cost_contribution ? formatCurrency(ing.cost_contribution, currency) : '—'}</td>
+                          <td>{ing.cost_contribution ? fmt(ing.cost_contribution) : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1438,7 +1440,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
                       {mealDetailData.menu_item_extras.map((ext: any) => (
                         <tr key={ext.id}>
                           <td>{ext.name}</td>
-                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{fmt(ext.price)}</td>
                           <td>{ext.is_available ? 'Yes' : 'No'}</td>
                         </tr>
                       ))}
@@ -1456,7 +1458,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
                     {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${formatCurrency(v.price_adjustment, currency)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
                         variant="outlined"
                         size="small"
                       />
@@ -1484,6 +1486,7 @@ function AvailableMealsTab({ branchId, currency }: { branchId: string; currency:
    Tab 3b — Sold Out (unavailable meals)
    ═══════════════════════════════════════════════════════ */
 function SoldOutTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { fmt } = useCurrency();
   const { profile } = useAuth();
   const perms = profile?.permissions ?? [];
   const canEditStatus = perms.includes('kitchen_make_dish' as any) || perms.includes('kitchen_ingredient_requests' as any) || perms.includes('manage_menu' as any);
@@ -1688,7 +1691,7 @@ function SoldOutTab({ branchId, currency }: { branchId: string; currency: string
                   )}
                   <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
                     {mealDetailData.base_price != null && (
-                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(mealDetailData.base_price, currency)}</Typography>
+                      <Typography variant="body2"><strong>Price:</strong> {fmt(mealDetailData.base_price)}</Typography>
                     )}
                     {mealDetailData.calories != null && (
                       <Typography variant="body2"><strong>Calories:</strong> {mealDetailData.calories} kcal</Typography>
@@ -1727,7 +1730,7 @@ function SoldOutTab({ branchId, currency }: { branchId: string; currency: string
                           <td>{ing.name ?? ing.inventory_items?.name ?? '—'}</td>
                           <td>{ing.quantity_used}</td>
                           <td>{ing.unit}</td>
-                          <td>{ing.cost_contribution ? formatCurrency(ing.cost_contribution, currency) : '—'}</td>
+                          <td>{ing.cost_contribution ? fmt(ing.cost_contribution) : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1747,7 +1750,7 @@ function SoldOutTab({ branchId, currency }: { branchId: string; currency: string
                       {mealDetailData.menu_item_extras.map((ext: any) => (
                         <tr key={ext.id}>
                           <td>{ext.name}</td>
-                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{fmt(ext.price)}</td>
                           <td>{ext.is_available ? 'Yes' : 'No'}</td>
                         </tr>
                       ))}
@@ -1764,7 +1767,7 @@ function SoldOutTab({ branchId, currency }: { branchId: string; currency: string
                     {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${formatCurrency(v.price_adjustment, currency)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
                         variant="outlined"
                         size="small"
                       />

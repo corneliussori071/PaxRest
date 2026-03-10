@@ -19,6 +19,7 @@ import { DataTable, StatCard } from '@paxrest/ui';
 import type { Column } from '@paxrest/ui';
 import { formatCurrency } from '@paxrest/shared-utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -48,7 +49,7 @@ function getDateRange(preset: DatePreset): { from: string; to: string } {
 
 export default function ReportsPage() {
   const { activeBranchId, company, activeBranch, branches, isGlobalStaff } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { fmt, currencyCode: currency } = useCurrency();
 
   // ── Filter State ─────────────────────────────────────────────────────────
   const [datePreset, setDatePreset] = useState<DatePreset>('today');
@@ -189,8 +190,8 @@ export default function ReportsPage() {
     )},
     { id: 'payment_method', label: 'Payment', sortable: false, render: (r: any) => <Chip size="small" label={r.payment_method} color={r.payment_status === 'paid' ? 'success' : 'default'} /> },
     { id: 'order_status', label: 'Status', sortable: true, render: (r: any) => <Chip size="small" label={r.order_status} color={r.order_status === 'completed' ? 'success' : r.order_status === 'pending' ? 'warning' : 'default'} /> },
-    { id: 'total', label: 'Total', sortable: true, align: 'right', render: (r: any) => formatCurrency(r.total, currency) },
-    { id: 'cogs', label: 'COGS', sortable: false, align: 'right', render: (r: any) => r.cogs > 0 ? formatCurrency(r.cogs, currency) : '—' },
+    { id: 'total', label: 'Total', sortable: true, align: 'right', render: (r: any) => fmt(r.total) },
+    { id: 'cogs', label: 'COGS', sortable: false, align: 'right', render: (r: any) => r.cogs > 0 ? fmt(r.cogs) : '—' },
   ], [currency]);
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -264,27 +265,27 @@ export default function ReportsPage() {
       {/* ── Dashboard Stats ───────────────────────────────────────────────── */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid size={{ xs: 6, sm: 4, md: 12 / 7 }}>
-          <StatCard title="Total Revenue" value={formatCurrency(dashboard?.total_revenue ?? 0, currency)} icon={<AttachMoneyIcon />} loading={loadingDash} color="#1B5E20" />
+          <StatCard title="Total Revenue" value={fmt(dashboard?.total_revenue ?? 0)} icon={<AttachMoneyIcon />} loading={loadingDash} color="#1B5E20" />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 12 / 7 }}>
-          <StatCard title="Revenue Pending" value={formatCurrency(dashboard?.revenue_pending ?? 0, currency)} icon={<HourglassEmptyIcon />} loading={loadingDash} color="#EF6C00" />
+          <StatCard title="Revenue Pending" value={fmt(dashboard?.revenue_pending ?? 0)} icon={<HourglassEmptyIcon />} loading={loadingDash} color="#EF6C00" />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 12 / 7 }}>
-          <StatCard title="COGS" value={formatCurrency(dashboard?.cogs ?? 0, currency)} icon={<Inventory2Icon />} loading={loadingDash} color="#C62828" />
+          <StatCard title="COGS" value={fmt(dashboard?.cogs ?? 0)} icon={<Inventory2Icon />} loading={loadingDash} color="#C62828" />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 12 / 7 }}>
           <StockValueCard value={dashboard?.stock_value} currency={currency} loading={loadingDash} stockView={stockView} onStockViewChange={setStockView} />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 12 / 7 }}>
-          <StatCard title="Avg Transaction" value={formatCurrency(dashboard?.avg_transaction ?? 0, currency)} icon={<ReceiptIcon />} loading={loadingDash} color="#6A1B9A" />
+          <StatCard title="Avg Transaction" value={fmt(dashboard?.avg_transaction ?? 0)} icon={<ReceiptIcon />} loading={loadingDash} color="#6A1B9A" />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 12 / 7 }}>
-          <StatCard title="Staffing Cost" value={formatCurrency(dashboard?.staffing_cost ?? 0, currency)} icon={<PeopleIcon />} loading={loadingDash} color="#00838F" />
+          <StatCard title="Staffing Cost" value={fmt(dashboard?.staffing_cost ?? 0)} icon={<PeopleIcon />} loading={loadingDash} color="#00838F" />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 12 / 7 }}>
           <StatCard
             title="Net Position"
-            value={formatCurrency(dashboard?.net_position ?? 0, currency)}
+            value={fmt(dashboard?.net_position ?? 0)}
             icon={(dashboard?.net_position ?? 0) >= 0 ? <TrendingUpIcon /> : <TrendingDownIcon />}
             loading={loadingDash}
             color={netColor}
@@ -329,6 +330,7 @@ export default function ReportsPage() {
 function StockValueCard({
   value, currency, loading, stockView, onStockViewChange,
 }: { value: any; currency: string; loading: boolean; stockView: StockView; onStockViewChange: (v: StockView) => void }) {
+  const { fmt } = useCurrency();
   const displayValue = (() => {
     if (!value) return 0;
     if (stockView === 'all') return value.total ?? 0;
@@ -344,7 +346,7 @@ function StockValueCard({
             {loading ? (
               <CircularProgress size={24} />
             ) : (
-              <Typography variant="h5" fontWeight={700} color="#0277BD">{formatCurrency(displayValue, currency)}</Typography>
+              <Typography variant="h5" fontWeight={700} color="#0277BD">{fmt(displayValue)}</Typography>
             )}
           </Box>
           <Box sx={{ p: 1, borderRadius: 2, bgcolor: '#0277BD15', color: '#0277BD' }}>

@@ -23,6 +23,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import MenuItem from '@mui/material/MenuItem';
 import { formatCurrency } from '@paxrest/shared-utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api, supabase } from '@/lib/supabase';
 import { useRealtime } from '@/hooks';
 import BranchGuard from '@/components/BranchGuard';
@@ -51,7 +52,7 @@ export default function OtherServicesPage() {
 function OtherServicesContent() {
   const { activeBranchId, company, activeBranch } = useAuth();
   const branchId = activeBranchId ?? '';
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { currencyCode: currency } = useCurrency();
   const [topTab, setTopTab] = useState(0); // 0 = Create, 1 = Users
 
   return (
@@ -93,7 +94,7 @@ function CreateTab({ branchId, currency }: { branchId: string; currency: string 
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   /* ─── Fetch ─── */
   const fetchServices = useCallback(async () => {
@@ -454,7 +455,7 @@ function CreateTab({ branchId, currency }: { branchId: string; currency: string 
    Users Tab — sub-tabs: Starting / In-Used
    ═══════════════════════════════════════════════════════ */
 function UsersTab({ branchId, currency }: { branchId: string; currency: string }) {
-  const fmt = (v: number) => formatCurrency(v, currency);
+  const { fmt } = useCurrency();
   const [subTab, setSubTab] = useState<'starting' | 'inuse'>('starting');
 
   return (

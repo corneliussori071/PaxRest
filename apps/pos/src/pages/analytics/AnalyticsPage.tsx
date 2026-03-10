@@ -15,6 +15,7 @@ import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import PieChartIcon from '@mui/icons-material/PieChart';
 import { formatCurrency } from '@paxrest/shared-utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -121,7 +122,7 @@ function EmptyChart({ message }: { message?: string }) {
 
 export default function AnalyticsPage() {
   const { activeBranchId, company, activeBranch, branches, isGlobalStaff } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { currencyCode: currency } = useCurrency();
   const today = new Date().toISOString().slice(0, 10);
 
   // ── Trend state ──────────────────────────────────────────────────────────
@@ -160,10 +161,11 @@ export default function AnalyticsPage() {
     return getDateRange(preset);
   }, []);
 
-  const fmt = useCallback((val: number, isCurrency: boolean) => {
-    if (!isCurrency) return val.toLocaleString();
-    return formatCurrency(val, currency);
-  }, [currency]);
+const { fmt: fmtCurrency } = useCurrency();
+const fmt = useCallback((val: number, isCurrency: boolean) => {
+  if (!isCurrency) return val.toLocaleString();
+  return fmtCurrency(val);
+}, [fmtCurrency]);
 
   // ── Trend fetch ──────────────────────────────────────────────────────────
   const fetchTrend = useCallback(async () => {

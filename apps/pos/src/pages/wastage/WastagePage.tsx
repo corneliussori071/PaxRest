@@ -14,6 +14,7 @@ import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
 import type { WastageType } from '@paxrest/shared-types';
 import { usePaginated } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
@@ -49,6 +50,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 function WastagePageContent() {
   const { activeBranchId, profile } = useAuth();
+  const { currencyCode: currency } = useCurrency();
   const [tab, setTab] = useState(0);
   const [recordOpen, setRecordOpen] = useState(false);
 
@@ -70,7 +72,7 @@ function WastagePageContent() {
     { id: 'quantity', label: 'Qty', sortable: true, align: 'right' },
     {
       id: 'total_value', label: 'Value', sortable: true, align: 'right',
-      render: (r) => formatCurrency(Number(r.total_value ?? r.estimated_value ?? 0)),
+      render: (r) => formatCurrency(Number(r.total_value ?? r.estimated_value ?? 0), currency),
     },
     {
       id: 'wastage_type', label: 'Type',

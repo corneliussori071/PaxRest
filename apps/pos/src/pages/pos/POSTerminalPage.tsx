@@ -31,6 +31,7 @@ import toast from 'react-hot-toast';
 import { formatCurrency, MEAL_AVAILABILITY_LABELS, AVAILABLE_MEAL_STATUS_LABELS, AVAILABLE_MEAL_STATUS_COLORS } from '@paxrest/shared-utils';
 import type { MealAvailability, AvailableMealStatus } from '@paxrest/shared-types';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import { useRealtime, useApi } from '@/hooks';
 import {
@@ -163,8 +164,7 @@ function POSTerminalContent() {
   const [refreshKey, setRefreshKey] = useState(0);
   const doRefresh = () => setRefreshKey((k) => k + 1);
 
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt, currencyCode: currency } = useCurrency();
 
   useEffect(() => {
     if (activeBranchId) {
@@ -1252,6 +1252,7 @@ function CustomizeItemDialog({
   onClose: () => void;
   onAdd: (removed: CartItemRemovedIngredient[], extras: CartItemExtra[]) => void;
 }) {
+  const { fmt } = useCurrency();
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
   const [extraIds, setExtraIds] = useState<Set<string>>(new Set());
 
@@ -1299,7 +1300,7 @@ function CustomizeItemDialog({
                     {ing.name || ing.inventory_item_name}
                     {(ing.cost_contribution ?? 0) > 0 && (
                       <Typography component="span" variant="caption" color="text.secondary">
-                        {' '}(−{formatCurrency(ing.cost_contribution, currency)} if removed)
+                        {' '}(−{fmt(ing.cost_contribution)} if removed)
                       </Typography>
                     )}
                   </Typography>
@@ -1309,7 +1310,7 @@ function CustomizeItemDialog({
             ))}
             {totalDiscount > 0 && (
               <Typography variant="body2" color="error" sx={{ mt: 0.5 }}>
-                Savings: −{formatCurrency(totalDiscount, currency)}
+                Savings: −{fmt(totalDiscount)}
               </Typography>
             )}
           </>
@@ -1326,7 +1327,7 @@ function CustomizeItemDialog({
                 label={
                   <Typography variant="body2">
                     {ext.name}
-                    <Typography component="span" variant="caption" color="success.main"> +{formatCurrency(ext.price, currency)}</Typography>
+                    <Typography component="span" variant="caption" color="success.main"> +{fmt(ext.price)}</Typography>
                   </Typography>
                 }
                 sx={{ display: 'block' }}
@@ -1334,7 +1335,7 @@ function CustomizeItemDialog({
             ))}
             {totalExtras > 0 && (
               <Typography variant="body2" color="success.main" sx={{ mt: 0.5 }}>
-                Extras total: +{formatCurrency(totalExtras, currency)}
+                Extras total: +{fmt(totalExtras)}
               </Typography>
             )}
           </>
@@ -1435,6 +1436,7 @@ function ServiceBookingDialog({
   onClose: () => void;
   onConfirm: (item: POSCartItem) => void;
 }) {
+  const { fmt } = useCurrency();
   const [scheduledStart, setScheduledStart] = useState('');
   const [scheduledEnd, setScheduledEnd] = useState('');
   const [durationCount, setDurationCount] = useState(1);
@@ -1488,7 +1490,7 @@ function ServiceBookingDialog({
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
             <Typography variant="body2"><strong>Service:</strong> {service?.name}</Typography>
             <Typography variant="body2">
-              <strong>Rate:</strong> {formatCurrency(unitPrice, currency)}{DURATION_LABELS[chargeDuration] ?? ''}
+              <strong>Rate:</strong> {fmt(unitPrice)}{DURATION_LABELS[chargeDuration] ?? ''}
             </Typography>
             {service?.description && (
               <Typography variant="body2" color="text.secondary">{service.description}</Typography>
@@ -1540,10 +1542,10 @@ function ServiceBookingDialog({
           {/* Total preview */}
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'secondary.main', color: 'secondary.contrastText', borderRadius: 1 }}>
             <Typography variant="h6" fontWeight={700}>
-              Total: {formatCurrency(total, currency)}
+              Total: {fmt(total)}
             </Typography>
             <Typography variant="caption">
-              {effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(unitPrice, currency)}
+              {effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''} × {fmt(unitPrice)}
             </Typography>
           </Paper>
         </Stack>
@@ -1567,6 +1569,7 @@ function RoomBookingDialog({
   onClose: () => void;
   onConfirm: (item: POSCartItem) => void;
 }) {
+  const { fmt } = useCurrency();
   const [numPeople, setNumPeople] = useState(1);
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
@@ -1633,7 +1636,7 @@ function RoomBookingDialog({
           {/* Room summary */}
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
             <Typography variant="body2"><strong>Category:</strong> {room?.category}</Typography>
-            <Typography variant="body2"><strong>Rate:</strong> {formatCurrency(room?.cost_amount ?? 0, currency)} / {durationLabel}</Typography>
+            <Typography variant="body2"><strong>Rate:</strong> {fmt(room?.cost_amount ?? 0)} / {durationLabel}</Typography>
             <Typography variant="body2"><strong>Max occupants:</strong> {room?.max_occupants}</Typography>
             {isPartiallyOccupied && (
               <Typography variant="body2" color="warning.main">
@@ -1701,10 +1704,10 @@ function RoomBookingDialog({
           {/* Total preview */}
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 1 }}>
             <Typography variant="h6" fontWeight={700}>
-              Total: {formatCurrency(total, currency)}
+              Total: {fmt(total)}
             </Typography>
             <Typography variant="caption">
-              {effectiveDuration} {durationLabel}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(room?.cost_amount ?? 0, currency)}
+              {effectiveDuration} {durationLabel}{effectiveDuration !== 1 ? 's' : ''} × {fmt(room?.cost_amount ?? 0)}
             </Typography>
           </Paper>
         </Stack>

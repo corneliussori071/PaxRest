@@ -19,6 +19,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import CloseIcon from '@mui/icons-material/Close';
 import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { usePaginated, useApi } from '@/hooks';
 import { api } from '@/lib/supabase';
 import toast from 'react-hot-toast';
@@ -63,6 +64,7 @@ export function OrderDetailDialog({
   onStatusChange,
   onPaymentOpen,
 }: OrderDetailProps) {
+  const { fmt } = useCurrency();
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [actioning, setActioning] = useState(false);
@@ -173,18 +175,18 @@ export function OrderDetailDialog({
                         {it.variant_name ? <Typography variant="caption" display="block" color="text.secondary">{it.variant_name}</Typography> : null}
                         {extras.length > 0 && extras.map((e: any, i: number) => (
                           <Typography key={i} variant="caption" display="block" color="success.main">
-                            + {e.name} (+{formatCurrency(e.price ?? 0, currency)})
+                            + {e.name} (+{fmt(e.price ?? 0)})
                           </Typography>
                         ))}
                         {removed.length > 0 && removed.map((r: any, i: number) => (
                           <Typography key={i} variant="caption" display="block" color="error.main">
-                            − {r.name}{(r.cost_contribution ?? 0) > 0 ? ` (−${formatCurrency(r.cost_contribution, currency)})` : ''}
+                            − {r.name}{(r.cost_contribution ?? 0) > 0 ? ` (−${fmt(r.cost_contribution)})` : ''}
                           </Typography>
                         ))}
                       </TableCell>
                       <TableCell align="right">{it.quantity}</TableCell>
-                      <TableCell align="right">{formatCurrency(it.unit_price ?? it.price ?? 0, currency)}</TableCell>
-                      <TableCell align="right">{formatCurrency(it.line_total ?? it.item_total ?? ((it.quantity ?? 0) * (it.unit_price ?? it.price ?? 0)), currency)}</TableCell>
+                      <TableCell align="right">{fmt(it.unit_price ?? it.price ?? 0)}</TableCell>
+                      <TableCell align="right">{fmt(it.line_total ?? it.item_total ?? ((it.quantity ?? 0) * (it.unit_price ?? it.price ?? 0)))}</TableCell>
                     </TableRow>
                     );
                   })}
@@ -200,23 +202,23 @@ export function OrderDetailDialog({
               {d?.tax_amount > 0 && (
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Tax</Typography>
-                  <Typography variant="body2">{formatCurrency(d.tax_amount, currency)}</Typography>
+                  <Typography variant="body2">{fmt(d.tax_amount)}</Typography>
                 </Box>
               )}
               {d?.discount_amount > 0 && (
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Discount</Typography>
-                  <Typography variant="body2" color="error.main">−{formatCurrency(d.discount_amount, currency)}</Typography>
+                  <Typography variant="body2" color="error.main">−{fmt(d.discount_amount)}</Typography>
                 </Box>
               )}
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography fontWeight={700}>Total</Typography>
-                <Typography fontWeight={700}>{formatCurrency(orderTotal, currency)}</Typography>
+                <Typography fontWeight={700}>{fmt(orderTotal)}</Typography>
               </Box>
               {totalPaid > 0 && (
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Typography variant="body2" color="text.secondary">Paid</Typography>
-                  <Typography variant="body2" color="success.main">{formatCurrency(totalPaid, currency)}</Typography>
+                  <Typography variant="body2" color="success.main">{fmt(totalPaid)}</Typography>
                 </Box>
               )}
             </Stack>
@@ -414,8 +416,7 @@ function SpecialRequestPricingDialog({ open, orderNumber, specialRequestNotes, o
   currency: string;
   onClose: () => void;
   onPriced: () => void;
-}) {
-  const [price, setPrice] = useState('');
+}) {  const { fmt } = useCurrency();  const [price, setPrice] = useState('');
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async () => {
@@ -431,7 +432,7 @@ function SpecialRequestPricingDialog({ open, orderNumber, specialRequestNotes, o
         body: { order_id: orderId, price: numPrice },
         branchId,
       });
-      toast.success(`Order #${orderNumber} priced at ${formatCurrency(numPrice, currency)}`);
+      toast.success(`Order #${orderNumber} priced at ${fmt(numPrice)}`);
       setPrice('');
       onPriced();
     } catch (err: any) {
@@ -490,6 +491,7 @@ export interface OrderCardProps {
 }
 
 export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickStatus, showPayBtn, showServedForPending, servedTargetStatus, showSource }: OrderCardProps) {
+  const { fmt } = useCurrency();
   const items: any[] = order.order_items ?? order.items ?? [];
   const itemCount = items.length;
   // Online orders go straight to completed (pre-paid); POS orders go to awaiting_payment
@@ -549,7 +551,7 @@ export function OrderCard({ order, currency, onViewDetail, onPayment, onQuickSta
             {formatDateTime(order.created_at)}
           </Typography>
           <Typography variant="subtitle2" fontWeight={700} color="primary.main">
-            {formatCurrency(order.total ?? order.total_amount, currency)}
+            {fmt(order.total ?? order.total_amount)}
           </Typography>
         </Box>
       </CardContent>

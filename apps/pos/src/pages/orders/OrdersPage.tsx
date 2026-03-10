@@ -7,12 +7,13 @@ import LocalBarIcon from '@mui/icons-material/LocalBar';
 import RestaurantIcon from '@mui/icons-material/Restaurant';
 import { useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import BranchSelector from '@/components/BranchSelector';
 import { OrderDetailDialog, OrdersGrid } from '@/components/OrderComponents';
 
 export default function OrdersPage() {
   const { activeBranchId, company, activeBranch, isGlobalStaff } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { currencyCode: currency } = useCurrency();
 
   const [branchFilter, setBranchFilter] = useState<string | null>(
     isGlobalStaff ? null : activeBranchId,

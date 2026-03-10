@@ -36,6 +36,7 @@ import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_ST
 import type { IngredientRequestStatus, Permission, AvailableMealStatus } from '@paxrest/shared-types';
 import { useApi, usePaginated, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import { useAvailableMealsStore } from '@/stores';
 import BranchGuard from '@/components/BranchGuard';
@@ -47,7 +48,7 @@ export default function BarPage() {
 
 function BarContent() {
   const { activeBranchId, company, activeBranch, profile } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { currencyCode: currency } = useCurrency();
   const [tab, setTab] = useState(0);
 
   const userPerms: Permission[] = profile?.permissions ?? [];
@@ -159,7 +160,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [mealDetailData, setMealDetailData] = useState<any>(null);
   const [mealDetailLoading, setMealDetailLoading] = useState(false);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   // Fetch bar store items
   const fetchStore = useCallback(async () => {
@@ -549,7 +550,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                     <Typography variant="body2" fontWeight={700} noWrap>{meal.menu_item_name ?? meal.menu_items?.name}</Typography>
                     <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5 }}>
                       <Typography variant="body2" color="primary.main" fontWeight={600}>
-                        {formatCurrency(meal.menu_items?.base_price ?? 0, currency)}
+                        {fmt(meal.menu_items?.base_price ?? 0)}
                       </Typography>
                       <Chip size="small" label={notAvailable ? '0 avail' : (meal.quantity_label || `${meal.quantity_available} avail`)} color={notAvailable ? 'error' : 'success'} />
                     </Stack>
@@ -633,7 +634,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                         )}
                         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5 }}>
                           <Typography variant="body2" color="primary.main" fontWeight={600}>
-                            {formatCurrency(room.cost_amount, currency)}{DURATION_LABELS[room.cost_duration] ?? ''}
+                            {fmt(room.cost_amount)}{DURATION_LABELS[room.cost_duration] ?? ''}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">Max {room.max_occupants}</Typography>
                         </Stack>
@@ -677,7 +678,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                         <Typography variant="caption" color="text.secondary" noWrap>{svc.description}</Typography>
                       )}
                       <Typography variant="body2" color="secondary.main" fontWeight={600} sx={{ mt: 0.5 }}>
-                        {formatCurrency(svc.charge_amount, currency)}{DURATION_LABELS[svc.charge_duration] ?? ''}
+                        {fmt(svc.charge_amount)}{DURATION_LABELS[svc.charge_duration] ?? ''}
                       </Typography>
                     </CardContent>
                   </Card>
@@ -933,7 +934,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   )}
                   <Stack direction="row" spacing={2} sx={{ mt: 1 }} flexWrap="wrap">
                     {mealDetailData.base_price != null && (
-                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(mealDetailData.base_price, currency)}</Typography>
+                      <Typography variant="body2"><strong>Price:</strong> {fmt(mealDetailData.base_price)}</Typography>
                     )}
                     {mealDetailData.calories != null && (
                       <Typography variant="body2"><strong>Calories:</strong> {mealDetailData.calories} kcal</Typography>
@@ -973,7 +974,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                           <td>{ing.name ?? ing.inventory_items?.name ?? '—'}</td>
                           <td>{ing.quantity_used}</td>
                           <td>{ing.unit}</td>
-                          <td>{ing.cost_contribution ? formatCurrency(ing.cost_contribution, currency) : '—'}</td>
+                          <td>{ing.cost_contribution ? fmt(ing.cost_contribution) : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -994,7 +995,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                       {mealDetailData.menu_item_extras.map((ext: any) => (
                         <tr key={ext.id}>
                           <td>{ext.name}</td>
-                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{fmt(ext.price)}</td>
                           <td>{ext.is_available ? 'Yes' : 'No'}</td>
                         </tr>
                       ))}
@@ -1012,7 +1013,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                     {mealDetailData.menu_variants.filter((v: any) => v.is_active).map((v: any) => (
                       <Chip
                         key={v.id}
-                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${formatCurrency(v.price_adjustment, currency)})` : ''}${v.is_default ? ' ★' : ''}`}
+                        label={`${v.name}${v.price_adjustment ? ` (${v.price_adjustment > 0 ? '+' : ''}${fmt(v.price_adjustment)})` : ''}${v.is_default ? ' ★' : ''}`}
                         variant="outlined"
                         size="small"
                       />
@@ -1060,6 +1061,7 @@ function BarRoomBookingDialog({
   onConfirm: (details: BookingDetails) => void;
   currency: string;
 }) {
+  const { fmt } = useCurrency();
   const [numPeople, setNumPeople] = useState(1);
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
@@ -1106,7 +1108,7 @@ function BarRoomBookingDialog({
         <Stack spacing={2} sx={{ mt: 1 }}>
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
             <Typography variant="body2"><strong>Category:</strong> {room?.category}</Typography>
-            <Typography variant="body2"><strong>Rate:</strong> {formatCurrency(room?.cost_amount ?? 0, currency)} / {durationLabel}</Typography>
+            <Typography variant="body2"><strong>Rate:</strong> {fmt(room?.cost_amount ?? 0)} / {durationLabel}</Typography>
             <Typography variant="body2"><strong>Max occupants:</strong> {room?.max_occupants}</Typography>
             {isPartiallyOccupied && (
               <Typography variant="body2" color="warning.main">
@@ -1136,7 +1138,7 @@ function BarRoomBookingDialog({
             helperText={`Max: ${maxGuests}`} />
           <Alert severity="info" sx={{ py: 0.5 }}>
             <Typography variant="body2" fontWeight={700}>
-              Estimated Total: {formatCurrency(total, currency)}
+              Estimated Total: {fmt(total)}
             </Typography>
           </Alert>
         </Stack>
@@ -1186,6 +1188,7 @@ function ServiceBookingDialog({
   onClose: () => void;
   onConfirm: (item: BarCartItem) => void;
 }) {
+  const { fmt } = useCurrency();
   const [scheduledStart, setScheduledStart] = useState('');
   const [scheduledEnd, setScheduledEnd] = useState('');
   const [durationCount, setDurationCount] = useState(1);
@@ -1238,7 +1241,7 @@ function ServiceBookingDialog({
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
             <Typography variant="body2"><strong>Service:</strong> {service?.name}</Typography>
             <Typography variant="body2">
-              <strong>Rate:</strong> {formatCurrency(unitPrice, currency)}{DURATION_LABELS[chargeDuration] ?? ''}
+              <strong>Rate:</strong> {fmt(unitPrice)}{DURATION_LABELS[chargeDuration] ?? ''}
             </Typography>
             {service?.description && (
               <Typography variant="body2" color="text.secondary">{service.description}</Typography>
@@ -1286,10 +1289,10 @@ function ServiceBookingDialog({
 
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'secondary.main', color: 'secondary.contrastText', borderRadius: 1 }}>
             <Typography variant="h6" fontWeight={700}>
-              Total: {formatCurrency(total, currency)}
+              Total: {fmt(total)}
             </Typography>
             <Typography variant="caption">
-              {effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(unitPrice, currency)}
+              {effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''} × {fmt(unitPrice)}
             </Typography>
           </Paper>
         </Stack>
@@ -1333,7 +1336,7 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
   const [detailOrder, setDetailOrder] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -1519,7 +1522,7 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
   const [detailLoading, setDetailLoading] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -1697,7 +1700,7 @@ function OrderDetailDialog({
   loading: boolean;
   currency: string;
 }) {
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   const handlePrint = () => {
     const el = document.getElementById('bar-order-detail-print');
@@ -2507,6 +2510,7 @@ function BarInternalStoreSubTab({ branchId }: { branchId: string }) {
 
 /* ─── Current Stock View ─── */
 function BarStockView({ branchId }: { branchId: string }) {
+  const { fmt } = useCurrency();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
@@ -2580,12 +2584,12 @@ function BarStockView({ branchId }: { branchId: string }) {
                   <TableCell>{item.unit}</TableCell>
                   <TableCell align="right">
                     <Typography color="text.secondary">
-                      {item.cost_per_unit ? formatCurrency(item.cost_per_unit, 'USD') : '—'}
+                      {item.cost_per_unit ? fmt(item.cost_per_unit) : '—'}
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
                     <Typography fontWeight={600} color="primary.main">
-                      {item.selling_price ? formatCurrency(item.selling_price, 'USD') : '—'}
+                      {item.selling_price ? fmt(item.selling_price) : '—'}
                     </Typography>
                   </TableCell>
                   <TableCell>{item.barcode ?? '—'}</TableCell>

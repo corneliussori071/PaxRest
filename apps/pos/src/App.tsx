@@ -4,6 +4,7 @@ import { ThemeProvider, CssBaseline } from '@mui/material';
 import { Toaster } from 'react-hot-toast';
 import { theme } from '@paxrest/ui';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { CurrencyProvider } from '@/contexts/CurrencyContext';
 import { LoadingOverlay } from '@paxrest/ui';
 
 import MainLayout from '@/layouts/MainLayout';
@@ -53,6 +54,7 @@ export default function App() {
       <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
       <BrowserRouter>
         <AuthProvider>
+          <CurrencyProvider>
           <Routes>
             {/* Public */}
             <Route path="/login" element={<GuestOnly><LoginPage /></GuestOnly>} />
@@ -86,6 +88,7 @@ export default function App() {
             {/* Default */}
             <Route path="*" element={<Navigate to="/pos" replace />} />
           </Routes>
+          </CurrencyProvider>
         </AuthProvider>
       </BrowserRouter>
     </ThemeProvider>

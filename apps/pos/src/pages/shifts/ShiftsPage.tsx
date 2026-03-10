@@ -8,12 +8,13 @@ import {
 import { StatCard } from '@paxrest/ui';
 import { formatCurrency, formatDateTime } from '@paxrest/shared-utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import toast from 'react-hot-toast';
 
 export default function ShiftsPage() {
   const { isGlobalStaff, activeBranchId, branches, company, activeBranch } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { fmt, currencyCode: currency } = useCurrency();
 
   // ── Filter state ──
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -183,7 +184,7 @@ export default function ShiftsPage() {
             <Grid size={{ xs: 6, sm: 3 }}>
               <StatCard
                 title={metric === 'revenue' ? 'Total Revenue' : 'Total Losses'}
-                value={formatCurrency(report.summary?.total ?? 0, currency)}
+                value={fmt(report.summary?.total ?? 0)}
               />
             </Grid>
             <Grid size={{ xs: 6, sm: 3 }}>
@@ -208,7 +209,7 @@ export default function ShiftsPage() {
                   <Typography variant="subtitle1" fontWeight={600}>{s.staff_name}</Typography>
                   <Box sx={{ textAlign: 'right' }}>
                     <Typography variant="h6" fontWeight={700} color={metric === 'revenue' ? 'success.main' : 'error.main'}>
-                      {formatCurrency(s.total, currency)}
+                      {fmt(s.total)}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       {metric === 'revenue'
@@ -250,7 +251,7 @@ export default function ShiftsPage() {
                               <TableCell>{formatDateTime(o.created_at)}</TableCell>
                               <TableCell><Chip size="small" label={o.source} /></TableCell>
                               <TableCell>{(o.payment_methods ?? []).join(', ') || '—'}</TableCell>
-                              <TableCell align="right">{formatCurrency(o.total, currency)}</TableCell>
+                              <TableCell align="right">{fmt(o.total)}</TableCell>
                             </TableRow>
                           ))
                         : (s.records ?? []).map((r: any) => (
@@ -259,7 +260,7 @@ export default function ShiftsPage() {
                               <TableCell>{r.wastage_type}</TableCell>
                               <TableCell>{formatDateTime(r.created_at)}</TableCell>
                               <TableCell>{r.notes ?? '—'}</TableCell>
-                              <TableCell align="right">{formatCurrency(r.total_value, currency)}</TableCell>
+                              <TableCell align="right">{fmt(r.total_value)}</TableCell>
                             </TableRow>
                           ))}
                     </TableBody>

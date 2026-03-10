@@ -8,12 +8,13 @@ import { DataTable, type Column } from '@paxrest/ui';
 import { formatCurrency } from '@paxrest/shared-utils';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import toast from 'react-hot-toast';
 
 export default function CustomersPage() {
   const { activeBranchId, company, activeBranch } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { currencyCode: currency } = useCurrency();
   const [tab, setTab] = useState(0);
 
   return (

@@ -40,6 +40,7 @@ import { formatCurrency, INGREDIENT_REQUEST_STATUS_LABELS, INGREDIENT_REQUEST_ST
 import type { IngredientRequestStatus, Permission, AvailableMealStatus } from '@paxrest/shared-types';
 import { useApi, usePaginated, useRealtime } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api, supabase } from '@/lib/supabase';
 import { useAvailableMealsStore } from '@/stores';
 import BranchGuard from '@/components/BranchGuard';
@@ -51,7 +52,7 @@ export default function AccommodationPage() {
 
 function AccommodationContent() {
   const { activeBranchId, company, activeBranch, profile } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { currencyCode: currency } = useCurrency();
   const [tab, setTab] = useState(0);
 
   const userPerms: Permission[] = profile?.permissions ?? [];
@@ -172,7 +173,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
   const [mealDetailData, setMealDetailData] = useState<any>(null);
   const [mealDetailLoading, setMealDetailLoading] = useState(false);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   // Fetch accommodation store items
   const fetchStore = useCallback(async () => {
@@ -605,7 +606,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                     <Typography variant="body2" fontWeight={700} noWrap>{meal.menu_item_name ?? meal.menu_items?.name}</Typography>
                     <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5 }}>
                       <Typography variant="body2" color="primary.main" fontWeight={600}>
-                        {formatCurrency(meal.menu_items?.base_price ?? 0, currency)}
+                        {fmt(meal.menu_items?.base_price ?? 0)}
                       </Typography>
                       <Chip size="small" label={notAvailable ? '0 avail' : (meal.quantity_label || `${meal.quantity_available} avail`)} color={notAvailable ? 'error' : 'success'} />
                     </Stack>
@@ -799,7 +800,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                         <Typography variant="caption" color="text.secondary" noWrap>{svc.description}</Typography>
                       )}
                       <Typography variant="body2" color="secondary.main" fontWeight={600} sx={{ mt: 0.5 }}>
-                        {formatCurrency(svc.charge_amount, currency)}{DURATION_LABELS_SVC[svc.charge_duration] ?? ''}
+                        {fmt(svc.charge_amount)}{DURATION_LABELS_SVC[svc.charge_duration] ?? ''}
                       </Typography>
                     </CardContent>
                   </Card>
@@ -1017,7 +1018,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                   )}
                   <Stack direction="row" spacing={2} sx={{ mt: 1 }}>
                     {mealDetailData.base_price != null && (
-                      <Typography variant="body2"><strong>Price:</strong> {formatCurrency(mealDetailData.base_price, currency)}</Typography>
+                      <Typography variant="body2"><strong>Price:</strong> {fmt(mealDetailData.base_price)}</Typography>
                     )}
                   </Stack>
                 </Box>
@@ -1052,7 +1053,7 @@ function CreateOrderTab({ branchId, currency }: { branchId: string; currency: st
                       {mealDetailData.menu_item_extras.map((ext: any) => (
                         <tr key={ext.id}>
                           <td>{ext.name}</td>
-                          <td>{formatCurrency(ext.price, currency)}</td>
+                          <td>{fmt(ext.price)}</td>
                           <td>{ext.is_available ? 'Yes' : 'No'}</td>
                         </tr>
                       ))}
@@ -1119,6 +1120,7 @@ function RoomBookingDialog({
   onConfirm: (details: BookingDetails) => void;
   currency: string;
 }) {
+  const { fmt } = useCurrency();
   const [numPeople, setNumPeople] = useState(1);
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
@@ -1187,7 +1189,7 @@ function RoomBookingDialog({
           {/* Room summary */}
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
             <Typography variant="body2"><strong>Category:</strong> {room?.category}</Typography>
-            <Typography variant="body2"><strong>Rate:</strong> {formatCurrency(room?.cost_amount ?? 0, currency)} / {durationLabel}</Typography>
+            <Typography variant="body2"><strong>Rate:</strong> {fmt(room?.cost_amount ?? 0)} / {durationLabel}</Typography>
             <Typography variant="body2"><strong>Max occupants:</strong> {room?.max_occupants}</Typography>
             {isPartiallyOccupied && (
               <Typography variant="body2" color="warning.main">
@@ -1259,10 +1261,10 @@ function RoomBookingDialog({
 
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 1 }}>
             <Typography variant="h6" fontWeight={700}>
-              Total: {formatCurrency(total, currency)}
+              Total: {fmt(total)}
             </Typography>
             <Typography variant="caption">
-              {effectiveDuration} {durationLabel}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(room?.cost_amount ?? 0, currency)}
+              {effectiveDuration} {durationLabel}{effectiveDuration !== 1 ? 's' : ''} × {fmt(room?.cost_amount ?? 0)}
               {autoDuration > 0 && ' (auto)'}
             </Typography>
           </Paper>
@@ -1310,6 +1312,7 @@ function ServiceBookingDialog({
   onClose: () => void;
   onConfirm: (item: AccomCartItem) => void;
 }) {
+  const { fmt } = useCurrency();
   const [scheduledStart, setScheduledStart] = useState('');
   const [scheduledEnd, setScheduledEnd] = useState('');
   const [durationCount, setDurationCount] = useState(1);
@@ -1362,7 +1365,7 @@ function ServiceBookingDialog({
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
             <Typography variant="body2"><strong>Service:</strong> {service?.name}</Typography>
             <Typography variant="body2">
-              <strong>Rate:</strong> {formatCurrency(unitPrice, currency)}{DURATION_LABELS[chargeDuration] ?? ''}
+              <strong>Rate:</strong> {fmt(unitPrice)}{DURATION_LABELS[chargeDuration] ?? ''}
             </Typography>
             {service?.description && (
               <Typography variant="body2" color="text.secondary">{service.description}</Typography>
@@ -1410,10 +1413,10 @@ function ServiceBookingDialog({
 
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'secondary.main', color: 'secondary.contrastText', borderRadius: 1 }}>
             <Typography variant="h6" fontWeight={700}>
-              Total: {formatCurrency(total, currency)}
+              Total: {fmt(total)}
             </Typography>
             <Typography variant="caption">
-              {effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''} × {formatCurrency(unitPrice, currency)}
+              {effectiveDuration} {dUnit}{effectiveDuration !== 1 ? 's' : ''} × {fmt(unitPrice)}
             </Typography>
           </Paper>
         </Stack>
@@ -1450,7 +1453,7 @@ function PendingOrdersTab({ branchId, currency }: { branchId: string; currency: 
   const [detailOrder, setDetailOrder] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -1607,7 +1610,7 @@ function PendingPaymentTab({ branchId, currency }: { branchId: string; currency:
   const [detailLoading, setDetailLoading] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -1751,7 +1754,7 @@ function OrderDetailDialog({
 }: {
   open: boolean; onClose: () => void; order: any; loading: boolean; currency: string;
 }) {
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   const handlePrint = () => {
     const el = document.getElementById('accom-order-detail-print');
@@ -2092,7 +2095,7 @@ function CreateRoomsTab({ branchId, currency }: { branchId: string; currency: st
   const [freeDialogPeople, setFreeDialogPeople] = useState(1);
   const [freeLoading, setFreeLoading] = useState(false);
 
-  const fmt = (n: number) => formatCurrency(n, currency);
+  const { fmt } = useCurrency();
 
   const fetchRooms = useCallback(async () => {
     try {
@@ -3065,6 +3068,7 @@ function AccomInternalStoreSubTab({ branchId }: { branchId: string }) {
 }
 
 function AccomStockView({ branchId }: { branchId: string }) {
+  const { fmt } = useCurrency();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
@@ -3128,8 +3132,8 @@ function AccomStockView({ branchId }: { branchId: string }) {
                     </Typography>
                   </TableCell>
                   <TableCell>{item.unit}</TableCell>
-                  <TableCell align="right"><Typography color="text.secondary">{item.cost_per_unit ? formatCurrency(item.cost_per_unit, 'USD') : '—'}</Typography></TableCell>
-                  <TableCell align="right"><Typography fontWeight={600} color="primary.main">{item.selling_price ? formatCurrency(item.selling_price, 'USD') : '—'}</Typography></TableCell>
+                  <TableCell align="right"><Typography color="text.secondary">{item.cost_per_unit ? fmt(item.cost_per_unit) : '—'}</Typography></TableCell>
+                  <TableCell align="right"><Typography fontWeight={600} color="primary.main">{item.selling_price ? fmt(item.selling_price) : '—'}</Typography></TableCell>
                   <TableCell>{item.barcode ?? '—'}</TableCell>
                   <TableCell><Typography variant="caption" color="text.secondary">{new Date(item.updated_at).toLocaleString()}</Typography></TableCell>
                 </TableRow>
@@ -3331,7 +3335,7 @@ function AccomMovementsView({ branchId }: { branchId: string }) {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function GuestsTab({ branchId, currency }: { branchId: string; currency: string }) {
-  const fmt = (v: number) => formatCurrency(v, currency);
+  const { fmt } = useCurrency();
   const [subTab, setSubTab] = useState<'checkin' | 'instay'>('checkin');
 
   return (

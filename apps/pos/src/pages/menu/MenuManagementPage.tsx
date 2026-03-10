@@ -16,6 +16,7 @@ import { formatCurrency, MEAL_AVAILABILITY_LABELS } from '@paxrest/shared-utils'
 import type { MealAvailability } from '@paxrest/shared-types';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api, supabase } from '@/lib/supabase';
 import BranchGuard from '@/components/BranchGuard';
 import toast from 'react-hot-toast';
@@ -36,7 +37,7 @@ export default function MenuManagementPage() {
 
 function MenuManagementContent() {
   const { activeBranchId, company, activeBranch } = useAuth();
-  const currency = activeBranch?.currency ?? company?.currency ?? 'USD';
+  const { fmt, currencyCode: currency } = useCurrency();
   const [tab, setTab] = useState(0);
 
   return (
@@ -75,6 +76,7 @@ interface ExtraRow {
    Main Menu Items Tab
    ═══════════════════════════════════════════════════════ */
 function MenuItemsTab({ branchId, currency }: { branchId: string; currency: string }) {
+  const { fmt } = useCurrency();
   const {
     items, total, loading, page, pageSize, sortBy, sortDir,
     setPage, setPageSize, onSortChange, setSearch, refetch,
@@ -346,7 +348,7 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
       const ingCost = (r.menu_item_ingredients ?? []).reduce((s: number, i: any) => s + (Number(i.cost_per_unit ?? i.price ?? 0)), 0);
       const extCost = (r.menu_item_extras ?? []).reduce((s: number, e: any) => s + (Number(e.price ?? 0)), 0);
       const total = (Number(r.base_price) || 0) + ingCost + extCost;
-      return formatCurrency(total, currency);
+      return fmt(total);
     }, width: 100, sortable: true },
     { id: 'station', label: 'Station', width: 90 },
     {
@@ -626,24 +628,24 @@ function MenuItemsTab({ branchId, currency }: { branchId: string; currency: stri
               <Stack spacing={0.5} sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
                 <Stack direction="row" justifyContent="space-between">
                   <Typography variant="body2" color="text.secondary">Base price</Typography>
-                  <Typography variant="body2">{formatCurrency(form.base_price, currency)}</Typography>
+                  <Typography variant="body2">{fmt(form.base_price)}</Typography>
                 </Stack>
                 {ingredientsCost > 0 && (
                   <Stack direction="row" justifyContent="space-between">
                     <Typography variant="body2" color="text.secondary">+ Ingredients</Typography>
-                    <Typography variant="body2">{formatCurrency(ingredientsCost, currency)}</Typography>
+                    <Typography variant="body2">{fmt(ingredientsCost)}</Typography>
                   </Stack>
                 )}
                 {extrasCost > 0 && (
                   <Stack direction="row" justifyContent="space-between">
                     <Typography variant="body2" color="text.secondary">+ Extras (all selected)</Typography>
-                    <Typography variant="body2">{formatCurrency(extrasCost, currency)}</Typography>
+                    <Typography variant="body2">{fmt(extrasCost)}</Typography>
                   </Stack>
                 )}
                 <Divider />
                 <Stack direction="row" justifyContent="space-between">
                   <Typography variant="subtitle1" fontWeight={700}>Total Menu Price</Typography>
-                  <Typography variant="subtitle1" fontWeight={700} color="primary">{formatCurrency(totalPrice, currency)}</Typography>
+                  <Typography variant="subtitle1" fontWeight={700} color="primary">{fmt(totalPrice)}</Typography>
                 </Stack>
               </Stack>
             </Grid>

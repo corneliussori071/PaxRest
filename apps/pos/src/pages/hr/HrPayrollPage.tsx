@@ -33,6 +33,7 @@ import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import { DataTable, type Column } from '@paxrest/ui';
 import { usePaginated, useApi } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { api } from '@/lib/supabase';
 import BranchGuard from '@/components/BranchGuard';
 import BranchSelector from '@/components/BranchSelector';
@@ -1507,8 +1508,8 @@ function PayrollTab({ fullAccess }: { fullAccess: boolean }) {
   useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
 
   const statusColor: Record<string, 'default' | 'warning' | 'info' | 'success'> = { draft: 'default', validated: 'info', pending_payout: 'warning', paid: 'success' };
-  const fmt = (v: any) => `$${Number(v || 0).toFixed(2)}`;
-
+const { fmt: fmtVal } = useCurrency();
+const fmt = (v: any) => fmtVal(Number(v || 0));
   const handleValidate = async (staffRow: any) => {
     try {
       await api('hr', 'validate-payroll', {
@@ -1802,7 +1803,8 @@ function PayslipDrawer({ staffId, staffName, periodStart, periodEnd, onClose, on
 
   useEffect(() => { fetchDetail(); }, [fetchDetail]);
 
-  const fmt = (v: any) => `$${Number(v || 0).toFixed(2)}`;
+  const { fmt: fmtVal } = useCurrency();
+  const fmt = (v: any) => fmtVal(Number(v || 0));
   const profile = detail?.profile;
   const breakdown = detail?.daily_breakdown ?? [];
   const adjustments = detail?.adjustments ?? [];
@@ -2025,7 +2027,8 @@ function PayrollDetailDrawer({ staffId, staffName, periodStart, periodEnd, onClo
 
   useEffect(() => { fetchDetail(); }, [fetchDetail]);
 
-  const fmt = (v: any) => `$${Number(v || 0).toFixed(2)}`;
+  const { fmt: fmtVal } = useCurrency();
+  const fmt = (v: any) => fmtVal(Number(v || 0));
   const profile = detail?.profile;
   const records = detail?.payroll_records ?? [];
   const pendingAmount = detail?.pending_amount ?? 0;
@@ -2304,7 +2307,8 @@ function MyPayrollView() {
 
   useEffect(() => { fetchMyPayroll(); }, [fetchMyPayroll]);
 
-  const fmt = (v: any) => `$${Number(v || 0).toFixed(2)}`;
+const { fmt: fmtVal } = useCurrency();
+const fmt = (v: any) => fmtVal(Number(v || 0));
 
   return (
     <Box>
